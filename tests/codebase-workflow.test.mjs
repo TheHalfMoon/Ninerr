@@ -102,28 +102,40 @@ test("connect a folder, bring a component in, edit it and write the edit back to
     await page.locator("#codebase-preview p").first().waitFor();
     const preview = await page.locator("#codebase-preview").textContent();
     assert.match(preview, /There is nothing to write back/u);
-    assert.match(preview, /Changed both here and in the file, so not written:text: changed both here and in the file/u);
+    // The conflict shows both values and offers both (#236).
+    assert.match(preview, /Changed both here and in the file, so not written:text: here “Teams”, in the file “Business” \(both changed from “Pro & Team”\)/u);
     assert.equal(await page.locator("#codebase-write").count(), 0);
     assert.match(readFileSync(cardPath, "utf8"), /<h2>Business<\/h2>/u, "the file's own change stays");
+    // Keeping Ninerr's shows it written over the file's change, and writes only when asked.
+    await page.locator("#codebase-preview button", { hasText: "Keep Ninerr's" }).click();
+    await page.locator("#codebase-diff").waitFor();
+    assert.match(await page.locator("#codebase-diff").textContent(), /\n-      <h2>Business<\/h2>\n\+      <h2>Teams<\/h2>\n/u);
+    assert.equal(await page.locator("#codebase-write").textContent(), "Write to file");
+    assert.match(readFileSync(cardPath, "utf8"), /<h2>Business<\/h2>/u, "reviewing writes nothing");
     await page.locator("#dialog[open] button", { hasText: "Close" }).last().click();
 
-    // Resolved by taking the file's text: nothing to write, and the field is marked as matching,
-    // so a later change to it is written rather than seen as a conflict again.
-    await page.locator(`[role=treeitem][data-node-id="${heading}"] > .row`).click();
-    await page.locator("#inspect-text").fill("Business");
-    await page.locator("#inspect-text").press("Tab");
-    await waitRevision(page, 7);
+    // Taking the file's text instead: one change sets the layer and settles the field, so a
+    // later change to it is written rather than seen as a conflict again.
     await page.locator(`[role=treeitem][data-node-id="${section}"] > .row`).click();
     await page.locator("#action-code").click();
     await page.locator("#codebase-review").click();
-    await page.locator("#codebase-preview p").first().waitFor();
-    assert.match(await page.locator("#codebase-preview").textContent(), /Nothing needs writing: 1 field has the same value here and in the file\. Mark it as matching/u);
-    assert.equal(await page.locator("#codebase-write").textContent(), "Mark as matching");
+    await page.locator("#codebase-preview button", { hasText: "Take the file's" }).click();
+    await waitRevision(page, 7);
+    await page.waitForFunction(() => /There is nothing to write back/u.test(document.getElementById("codebase-preview")?.textContent ?? "") && !/Changed both/u.test(document.getElementById("codebase-preview").textContent));
+    assert.equal(host.session.document.nodes[heading].props.text, "Business");
+    assert.equal(await page.locator("#history li").first().locator(".intent").textContent(), "Take text from PriceCard.jsx");
     const before = readFileSync(cardPath, "utf8");
-    await page.locator("#codebase-write").click();
+    assert.match(before, /<h2>Business<\/h2>/u, "taking the file's value writes nothing to it");
+    await page.locator("#dialog[open] button", { hasText: "Close" }).last().click();
+    await page.locator(`[role=treeitem][data-node-id="${heading}"] > .row`).click();
+    await page.locator("#inspect-text").fill("Business plus");
+    await page.locator("#inspect-text").press("Tab");
     await waitRevision(page, 8);
-    assert.equal(await page.locator("#status").textContent(), "Marked 1 field as matching PriceCard.jsx.");
-    assert.equal(readFileSync(cardPath, "utf8"), before, "marking writes nothing to the file");
+    await page.locator(`[role=treeitem][data-node-id="${section}"] > .row`).click();
+    await page.locator("#action-code").click();
+    await page.locator("#codebase-review").click();
+    await page.locator("#codebase-diff").waitFor();
+    assert.match(await page.locator("#codebase-diff").textContent(), /\n\+      <h2>Business plus<\/h2>\n/u);
     assert.deepEqual(editor.foreign, []);
     assert.deepEqual(editor.errors, []);
   } finally {
