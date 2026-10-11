@@ -28,6 +28,7 @@ export {
 export { PROJECT_MIGRATIONS, type ManifestMigration } from "./migrations.ts";
 // Pure encoders (no I/O), exported so hosts and tests can verify or construct journal lines.
 export { encodeJournalLine, genesisDigest } from "./journal.ts";
+export { canonicalJson } from "./canonical.ts";
 export {
   createProject,
   migrateLegacyProject,
