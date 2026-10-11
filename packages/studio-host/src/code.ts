@@ -76,6 +76,17 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   const exportedId = new Map<string, string>(); // layer → its id in the code
   const labelTarget = new Map<string, string>(); // label node → id in the code
   const taken = new Set<string>();
+  // An id unique in the export: as wanted, or with the next free suffix (email-2). The next
+  // suffix to try is kept per id, so many copies of one id cost linear time.
+  const nextSuffix = new Map<string, number>();
+  const unique = (wanted: string): string => {
+    let candidate = wanted;
+    let copy = nextSuffix.get(wanted) ?? 2;
+    while (taken.has(candidate)) candidate = `${wanted}-${copy++}`;
+    nextSuffix.set(wanted, copy);
+    taken.add(candidate);
+    return candidate;
+  };
   // Each id's positions in document order (ascending), so a label finds its control by
   // binary search: linear in the export, not labels × controls.
   const positionsOf = new Map<string, number[]>();
@@ -103,10 +114,7 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
     if (at < 0) return;
     const control = order[positions[at]];
     if (!exportedId.has(control)) {
-      let candidate = wanted;
-      for (let copy = 2; taken.has(candidate); copy += 1) candidate = `${wanted}-${copy}`;
-      taken.add(candidate);
-      exportedId.set(control, candidate);
+      exportedId.set(control, unique(wanted));
     }
     labelTarget.set(labelId, exportedId.get(control)!);
   });
@@ -115,10 +123,7 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   for (const id of order) {
     const wanted = attr(id, "id");
     if (wanted === null || exportedId.has(id)) continue;
-    let candidate = wanted;
-    for (let copy = 2; taken.has(candidate); copy += 1) candidate = `${wanted}-${copy}`;
-    taken.add(candidate);
-    exportedId.set(id, candidate);
+    exportedId.set(id, unique(wanted));
   }
   const convert = (id: string, depth: number): DesignDocNode => {
     if (depth > MAX_EXPORT_DEPTH) throw new StudioError(422, "export-too-deep", `layers nested more than ${MAX_EXPORT_DEPTH} deep cannot be exported`);
