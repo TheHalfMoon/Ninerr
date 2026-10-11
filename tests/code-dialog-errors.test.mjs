@@ -60,11 +60,9 @@ test("a conflict's choice that fails half-way leaves nothing to act on wrongly",
 
   // Keep, with its review held and then failed: the conflict's Take is disabled meanwhile,
   // and afterwards the field is not kept.
-  const reviews = [];
   let hold = null;
   let failNext = false;
   await page.route("**/api/codebase/preview", async (route) => {
-    reviews.push(route.request().postDataJSON());
     if (hold !== null) await hold;
     if (failNext) {
       failNext = false;
@@ -78,11 +76,14 @@ test("a conflict's choice that fails half-way leaves nothing to act on wrongly",
   await conflict("text").locator("button.keep-here").click();
   await page.waitForFunction(() => document.querySelector("#codebase-preview li button.keep-here")?.disabled === true);
   assert.equal(await conflict("text").locator("button.take-file").isDisabled(), true, "the other choice waits");
+  assert.equal(await conflict("title").locator("button.take-file").isDisabled(), true, "and so do the other conflicts'");
+  assert.equal(await page.locator("#codebase-review").isDisabled(), true, "and the review");
   hold = null;
   release();
   await page.locator("#dialog[open] .error[role=alert]", { hasText: "the review failed (test)" }).waitFor();
   assert.equal(await conflict("text").locator("button.take-file").isDisabled(), false);
   assert.equal(await conflict("text").locator("button.keep-here").isDisabled(), false);
+  assert.equal(await page.locator("#codebase-review").isDisabled(), false);
   const again = page.waitForRequest("**/api/codebase/preview");
   await page.locator("#codebase-review").click();
   assert.deepEqual((await again).postDataJSON().keep, [], "a Keep whose review failed is not kept");

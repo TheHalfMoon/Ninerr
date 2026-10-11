@@ -652,17 +652,20 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
       // A field changed in both places shows both values and lets the person pick one (#236).
       const conflictItem = (conflict) => {
         if (!conflict.overridable) return `${conflict.field}: ${conflict.reason}`;
-        // A conflict's buttons are disabled together at a click, so neither queues a second
-        // choice while one is under way (#291).
+        // While one choice is under way, Review and every button of the plan shown are
+        // disabled, so nothing is queued against a plan about to change (#291). After a failure
+        // those still shown come back.
         const buttons = [];
         const choose = (button, action) => button.addEventListener("click", () => {
           if (button.disabled) return;
-          for (const each of buttons) each.disabled = true;
+          const held = [review, ...preview.querySelectorAll("button")].filter((each) => !each.disabled);
+          for (const each of held) each.disabled = true;
           enqueue(async () => {
             try {
               await action();
+              review.disabled = false;
             } catch (failure) {
-              for (const each of buttons) each.disabled = false;
+              for (const each of held) if (each.isConnected) each.disabled = false;
               if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
             }
           });
