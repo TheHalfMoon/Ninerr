@@ -28,11 +28,15 @@ export function findBrowser() {
   return candidates.find((path) => typeof path === "string" && path !== "" && existsSync(path)) ?? null;
 }
 
-/** Options for node:test: skip locally when no browser exists; never skip in CI. */
-export function browserTestOptions() {
+/**
+ * Options for node:test: skip locally when no browser exists; never skip in CI. A browser test
+ * that waits without end fails, by its name, after `timeout` (10 minutes by default; the
+ * slowest takes about a minute here), not by silently using up the CI job (#305).
+ */
+export function browserTestOptions({ timeout = 600_000 } = {}) {
   const found = findBrowser();
   if (found === null && process.env.CI !== "true") return { skip: "no Chromium found (set NINERR_TEST_BROWSER)" };
-  return {};
+  return { timeout };
 }
 
 const TYPES = { ".mjs": "text/javascript", ".js": "text/javascript", ".html": "text/html", ".css": "text/css", ".json": "application/json" };
