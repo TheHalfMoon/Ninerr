@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { LocalCollaborationRoom, createAccessPolicy, createCollaborationState } from "@ninerr/collaboration";
 import { createDocument } from "@ninerr/document-model";
 import { createHistoryState } from "@ninerr/history";
-import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES, createProject, migrateLegacyProject, openProject, projectLayout, type ProjectStore, type RecoveryReport } from "@ninerr/persistence";
+import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES, createProject, migrateLegacyProject, openProject, projectLayout, type JournalSummary, type ProjectStore, type RecoveryReport } from "@ninerr/persistence";
 import { StudioError } from "./errors.ts";
 
 /** Who is acting. People act through the editor; agents act through MCP (PC5). */
@@ -68,9 +68,16 @@ const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 // Names Windows reserves for devices, with or without an extension.
 const RESERVED_NAME = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/iu;
 const MAX_UNDO = 200;
-// The history panel's log: the latest changes since the project was opened, without operations.
+// The history panel's log: the project's latest changes, earlier ones from its journal first, without operations.
 const MAX_LOG = 500;
 export const MAX_OPERATIONS_PER_EDIT = 5_000;
+
+/** An earlier change's author: this owner by name, an agent by id (the host names it from its registry), anyone else plainly. */
+function earlierActorName(summary: JournalSummary, owner: StudioActor): string {
+  if (summary.actor === owner.actorId) return owner.displayName;
+  if (summary.actorKind === "agent") return summary.actor;
+  return "Another person";
+}
 
 export function assertProjectName(name: unknown): string {
   if (typeof name !== "string" || !PROJECT_NAME.test(name) || name.includes("..") || name.endsWith(".") || RESERVED_NAME.test(name)) {
@@ -126,7 +133,7 @@ export class StudioSession {
       transactionId: summary.transactionId,
       actor: summary.actor,
       actorKind: summary.actorKind,
-      actorName: summary.actor === owner.actorId ? owner.displayName : summary.actor,
+      actorName: earlierActorName(summary, owner),
       intent: summary.intent,
       tool: summary.tool,
       affectedNodeIds: [],
@@ -211,7 +218,7 @@ export class StudioSession {
     return (this.#redo.get(actor.actorId)?.length ?? 0) > 0;
   }
 
-  /** The changes committed since the project was opened, newest last (at most 500). */
+  /** The project's latest changes, the journal's earlier ones first, newest last (at most 500). */
   get log(): ReadonlyArray<HistoryEntry> {
     return this.#log;
   }

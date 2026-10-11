@@ -270,10 +270,11 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       const current = requireSession();
       return { project: current.name, revision: current.revision, document: current.document };
     },
-    // An earlier change by an agent is named as the agents registry names it (#231).
+    // An earlier change by an agent is named as the agents registry names it (#231), or as a
+    // removed agent once it is no longer there.
     "GET /api/history": () => {
       const names = new Map(agents.list().map((agent) => [agent.agentId, agent.displayName]));
-      return { entries: requireSession().log.map((entry) => (entry.earlier && entry.actorKind === "agent" && names.has(entry.actor) ? { ...entry, actorName: names.get(entry.actor) } : entry)) };
+      return { entries: requireSession().log.map((entry) => (entry.earlier && entry.actorKind === "agent" ? { ...entry, actorName: names.get(entry.actor) ?? "Removed agent" } : entry)) };
     },
     "POST /api/edit": (body) => requireSession().edit(owner, body),
     "POST /api/undo": () => requireSession().undo(owner),

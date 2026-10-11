@@ -30,6 +30,11 @@ export function putObject(projectDir: string, bytes: Buffer): string {
   return digest;
 }
 
+/** The size of a stored object in bytes, without reading it. */
+export function objectSize(projectDir: string, digest: string): number {
+  return lstatSync(objectPath(projectDir, digest).file).size;
+}
+
 /** Read an object and verify its content against its id. */
 export function getObject(projectDir: string, digest: string): Buffer {
   const { directory, file } = objectPath(projectDir, digest);

@@ -27,7 +27,7 @@ import {
 import { assertJournalFormat, encodeJournalLine, encodeSegmentHeader, genesisDigest, parseJournal, type ParsedJournal } from "./journal.ts";
 import { LEGACY_PROJECT_DIRECTORY } from "./legacy.ts";
 import { PROJECT_MIGRATIONS, migrateManifest, withBuiltInMigrations, type ManifestMigration } from "./migrations.ts";
-import { getObject, putObject } from "./objects.ts";
+import { getObject, objectSize, putObject } from "./objects.ts";
 import {
   JOURNAL_GENESIS,
   JOURNAL_GENESIS_DOMAINS,
@@ -537,7 +537,7 @@ export function openProject(root: string, options: OpenProjectOptions): ProjectS
     const last = parsed.entries.at(-1);
     unchanged();
     return new ProjectStore(STORE_TOKEN, projectDir, manifest, document, {
-      history: parsed.entries.slice(-MAX_JOURNAL_SUMMARIES).map(({ entry }) => journalSummary(entry)).filter((summary): summary is JournalSummary => summary !== null),
+      history: journalHistory(projectDir, parsed, genesis),
       seq: last?.entry.seq ?? parsed.segment?.baseSeq ?? 0,
       digest: last?.digest ?? parsed.segment?.anchor ?? genesis,
       segmentBase: parsed.segment?.baseSeq ?? 0,
@@ -650,6 +650,43 @@ export function migrateLegacyProject(root: string, options: MigrateLegacyProject
 /** The most changes a store keeps a summary of from its journal at open (#231). */
 export const MAX_JOURNAL_SUMMARIES = 500;
 
+/**
+ * The most archived journal a store reads at open for the history (#231): the current segment
+ * may have just started (a rotation happens in the commit that crosses the segment size, #258),
+ * so the earlier changes are read back from the segments before it, newest first, until there
+ * are MAX_JOURNAL_SUMMARIES. A segment is normally about `journalSegmentBytes`.
+ */
+export const MAX_HISTORY_ARCHIVE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The summaries of the journal's latest changes, oldest first. The archives are only history:
+ * an archive that is missing, damaged, over the budget or does not end where the next segment
+ * starts ends the list there, and never stops the project from opening.
+ */
+function journalHistory(projectDir: string, parsed: ParsedJournal, genesis: string): JournalSummary[] {
+  const summarize = (entries: ParsedJournal["entries"]) => entries.map(({ entry }) => journalSummary(entry)).filter((summary): summary is JournalSummary => summary !== null);
+  let history = summarize(parsed.entries.slice(-MAX_JOURNAL_SUMMARIES));
+  let segment = parsed.segment;
+  let budget = MAX_HISTORY_ARCHIVE_BYTES;
+  while (segment !== null && history.length < MAX_JOURNAL_SUMMARIES) {
+    let previous: ParsedJournal;
+    try {
+      const size = segment.archive.reduce((total, piece) => total + objectSize(projectDir, piece), 0);
+      if (size > budget) break;
+      budget -= size;
+      previous = parseJournal(Buffer.concat(segment.archive.map((piece) => getObject(projectDir, piece))), genesis);
+    } catch {
+      break;
+    }
+    const last = previous.entries.at(-1);
+    const endDigest = last?.digest ?? previous.segment?.anchor ?? genesis;
+    if (previous.tornTailBytes > 0 || endDigest !== segment.anchor) break;
+    history = [...summarize(previous.entries.slice(-(MAX_JOURNAL_SUMMARIES - history.length))), ...history];
+    segment = previous.segment;
+  }
+  return history;
+}
+
 /** The summary of a journal entry's transaction, or null for one that lacks the fields. */
 function journalSummary(entry: { revision: number; transaction: Record<string, unknown> }): JournalSummary | null {
   const transaction = entry.transaction;
@@ -663,7 +700,6 @@ function journalSummary(entry: { revision: number; transaction: Record<string, u
     actorKind: metadata?.collaboration?.actorKind === "agent" ? "agent" : "user",
     intent: text(transaction.intent),
     tool: text(transaction.tool),
-    at: text(transaction.timestamp),
   };
 }
 

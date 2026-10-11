@@ -71,7 +71,6 @@ export interface JournalSummary {
   actorKind: "user" | "agent";
   intent: string | null;
   tool: string | null;
-  at: string | null;
 }
 
 export interface JournalEntry {

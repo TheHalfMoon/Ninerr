@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startStudioHost } from "../packages/studio-host/src/index.ts";
 import { MAX_JOURNAL_SUMMARIES } from "../packages/persistence/src/store.ts";
-import { openProject } from "../packages/persistence/src/index.ts";
+import { createDocument } from "../packages/document-model/src/index.mjs";
+import { PROJECT_FILES, createProject, openProject } from "../packages/persistence/src/index.ts";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
 import { hostPool, mcpClient, ok } from "./support/host-api.mjs";
@@ -88,6 +89,51 @@ test("the history kept from the journal is bounded", async (t) => {
   const { entries } = await ok(running.call("GET", "/api/history"), "history");
   assert.equal(entries.length, MAX_JOURNAL_SUMMARIES);
   assert.deepEqual([entries[0].revision, entries.at(-1).revision], [changes - MAX_JOURNAL_SUMMARIES + 1, changes]);
+});
+
+// A rotation (#258) happens in the commit that crosses the segment size, so a reopen right
+// after it finds a new, nearly empty segment: the earlier changes are read from the archives.
+function rotatedProject(t, commits, rotateJournalAt) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-history-rotated-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  createProject(root, { projectId: "rotated", document: createDocument({ id: "doc", nodes: [{ id: "node", type: "frame", props: { name: "Before" } }] }), createdAt: now() });
+  const store = openProject(root, { owner: "writer", at: now(), rotateJournalAt });
+  for (let revision = 0; revision < commits; revision += 1) {
+    store.commit({ id: `tx-${revision + 1}`, actor: "user-1", intent: `Rename ${revision + 1}`, baseRevision: revision, operations: [{ type: "set-props", nodeId: "node", set: { name: `Name ${revision + 1}` } }] });
+  }
+  store.close();
+  return root;
+}
+const reopened = (root) => {
+  const store = openProject(root, { owner: "reader", at: now() });
+  try {
+    return { revisions: store.history.map((summary) => summary.revision), revision: store.revision };
+  } finally {
+    store.close();
+  }
+};
+const range = (from, to) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
+
+test("after a journal rotation, the history is read back from the archived segments", (t) => {
+  // Every commit starts a segment: each change is in an archive of its own.
+  assert.deepEqual(reopened(rotatedProject(t, 30, 1)), { revisions: range(1, 30), revision: 30 });
+  // Many segments: the latest MAX_JOURNAL_SUMMARIES changes, in order, none twice.
+  const root = rotatedProject(t, MAX_JOURNAL_SUMMARIES + 100, 4096);
+  const header = JSON.parse(readFileSync(join(root, PROJECT_FILES.directory, PROJECT_FILES.journal), "utf8").split("\n")[0]);
+  assert.ok(header.segment.baseSeq > MAX_JOURNAL_SUMMARIES - 100, "the current segment alone does not hold the history");
+  assert.deepEqual(reopened(root), { revisions: range(101, MAX_JOURNAL_SUMMARIES + 100), revision: MAX_JOURNAL_SUMMARIES + 100 });
+});
+
+test("a missing archive shortens the history and does not stop the project opening", (t) => {
+  const root = rotatedProject(t, 6, 1);
+  const journal = join(root, PROJECT_FILES.directory, PROJECT_FILES.journal);
+  const object = (digest) => join(root, PROJECT_FILES.directory, PROJECT_FILES.objects, digest.slice(0, 2), digest.slice(2));
+  // The current segment is empty (the last commit started it); its archive holds change 6.
+  // The archive before that one is removed: the history stops there.
+  const [newest] = JSON.parse(readFileSync(journal, "utf8").split("\n")[0]).segment.archive;
+  const [older] = JSON.parse(readFileSync(object(newest), "utf8").split("\n")[0]).segment.archive;
+  rmSync(object(older));
+  assert.deepEqual(reopened(root), { revisions: [6], revision: 6 });
 });
 
 test("the editor shows the earlier changes after a reopen, without a Revert for them", browserTestOptions(), async (t) => {

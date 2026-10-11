@@ -1384,7 +1384,7 @@ function renderHistory() {
       ` · revision ${entry.revision}`,
       entry.earlier ? " · before this session" : null),
     entry.actorKind === "agent" && !entry.earlier ? el("button", { type: "button", class: "revert", "aria-label": `Revert ${entry.intent ?? "change"} by ${actorLabel(entry)}`, onclick: () => revert(entry) }, "Revert") : null)));
-  if (state.history.length === 0) list.replaceChildren(el("li", {}, el("span", { class: "who" }, "No changes yet.")));
+  if (state.history.length === 0) list.replaceChildren(el("li", {}, el("span", { class: "who" }, state.revision === 0 ? "No changes yet." : "No changes listed since this project was opened.")));
 }
 
 function renderToolbar() {
