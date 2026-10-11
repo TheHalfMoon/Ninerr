@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { LocalCollaborationRoom, createAccessPolicy, createCollaborationState } from "@ninerr/collaboration";
 import { createDocument } from "@ninerr/document-model";
 import { createHistoryState } from "@ninerr/history";
-import { MAX_FRAME_STYLESHEET_BYTES, cssLoadsOrExecutes } from "@ninerr/import-stack";
+import { MAX_FRAME_STYLESHEET_BYTES, cssClosesUnopenedBlock, cssLoadsOrExecutes } from "@ninerr/import-stack";
 import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES, canonicalJson, createProject, migrateLegacyProject, openProject, projectLayout, type JournalSummary, type ProjectStore, type RecoveryReport } from "@ninerr/persistence";
 import { StudioError } from "./errors.ts";
 
@@ -82,15 +82,21 @@ function earlierActorName(summary: JournalSummary, owner: StudioActor): string {
 
 /**
  * A layer's stylesheet (#283) is text, at most MAX_FRAME_STYLESHEET_BYTES, that loads and
- * executes nothing, whoever sets it: an import, the editor, an agent, an undo.
+ * executes nothing and closes no block it did not open, whoever sets it: an import, the
+ * editor, an agent. An undo, redo or revert that would bring back such a sheet (from a project
+ * written by hand) is refused as a conflict, under `conflictCode`.
  */
-function assertSafeStylesheets(operations: unknown[]): void {
+function assertSafeStylesheets(operations: unknown[], conflictCode?: string): void {
+  const refuse = (status: number, code: string, message: string) => {
+    throw conflictCode === undefined ? new StudioError(status, code, message) : new StudioError(409, conflictCode, `the change can no longer be applied: ${message}`);
+  };
   const check = (props: unknown) => {
     if (props === null || typeof props !== "object" || !Object.hasOwn(props, "stylesheet")) return;
     const sheet = (props as Record<string, unknown>).stylesheet;
-    if (typeof sheet !== "string" || Buffer.byteLength(sheet, "utf8") > MAX_FRAME_STYLESHEET_BYTES || cssLoadsOrExecutes(sheet)) {
-      throw new StudioError(400, "unsafe-stylesheet", "a stylesheet must be text of at most 1 MiB that loads and executes nothing (no url(), @import, image(), expression() or script URL)");
-    }
+    if (typeof sheet !== "string") refuse(400, "unsafe-stylesheet", "a stylesheet must be text");
+    else if (Buffer.byteLength(sheet, "utf8") > MAX_FRAME_STYLESHEET_BYTES) refuse(413, "stylesheet-too-large", `a stylesheet is limited to ${MAX_FRAME_STYLESHEET_BYTES / 1024 / 1024} MiB`);
+    else if (cssLoadsOrExecutes(sheet)) refuse(400, "unsafe-stylesheet", "a stylesheet must load and execute nothing (no url(), @import, image(), expression() or script URL)");
+    else if (cssClosesUnopenedBlock(sheet)) refuse(400, "unsafe-stylesheet", "a stylesheet must not close a block it did not open");
   };
   for (const operation of operations as any[]) {
     if (operation?.type === "insert-node") check(operation.node?.props);
@@ -350,7 +356,7 @@ export class StudioSession {
     let nextDocument: any;
     let inverse: unknown[];
     let affectedNodeIds: string[];
-    assertSafeStylesheets(input.operations);
+    assertSafeStylesheets(input.operations, conflictCode);
     try {
       // Collaboration authorizes the actor and attributes the transaction. The room is built
       // per commit from the session's grants: its fact log is not kept (attribution lives in

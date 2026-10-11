@@ -361,8 +361,13 @@ function openImportDialog() {
         let html = pasted.value;
         let name = "Pasted HTML";
         const files = [...(file.files ?? [])];
-        const chosen = files.find((entry) => /.html?$/iu.test(entry.name)) ?? null;
-        const sheets = files.filter((entry) => /.css$/iu.test(entry.name));
+        const pages = files.filter((entry) => /\.html?$/iu.test(entry.name));
+        if (pages.length > 1) {
+          error.textContent = "Choose one HTML page, with the stylesheet files it links to.";
+          return;
+        }
+        const chosen = pages[0] ?? null;
+        const sheets = files.filter((entry) => /\.css$/iu.test(entry.name));
         if (sheets.reduce((total, entry) => total + entry.size, 0) > MAX_IMPORT_BYTES) {
           error.textContent = "Those stylesheets are larger than 2 MiB in all, the most Ninerr imports at once.";
           return;

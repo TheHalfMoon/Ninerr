@@ -173,3 +173,68 @@ test("in the editor, a page imported with its stylesheet file is drawn styled", 
   assert.deepEqual(editor.foreign, []);
   assert.deepEqual(editor.errors, []);
 });
+
+// #298 review: a "}" a sheet did not open would end the frame's @scope on the canvas.
+test("a stylesheet that closes a block it did not open is refused, and left out of an import", async (t) => {
+  const running = await host(t);
+  const { event } = await imported(running);
+  for (const stylesheet of [".a{color:red}}[data-ninerr-root] *{visibility:hidden}", "}@scope ([data-ninerr-id=\"x\"]){*{display:none}}", "}"]) {
+    const refused = await running.call("POST", "/api/edit", { baseRevision: event.revision, intent: "Style", operations: [{ type: "set-props", nodeId: event.frameId, set: { stylesheet } }] });
+    assert.deepEqual([refused.status, refused.json?.error?.code], [400, "unsafe-stylesheet"], stylesheet);
+  }
+  // Braces inside strings, comments and url() are not structure.
+  await ok(running.call("POST", "/api/edit", { baseRevision: event.revision, intent: "Style", operations: [{ type: "set-props", nodeId: event.frameId, set: { stylesheet: ".a::after{content:\"}\"}/* } */" } }] }), "braces in a string and a comment");
+  const page = "<style>.a{color:red}}*{visibility:hidden}</style><style>.b{color:blue}</style><p class=\"a b\">x</p>";
+  const second = await imported(running, page);
+  const { document } = await ok(running.call("GET", "/api/document"), "document");
+  assert.equal(document.nodes[second.event.frameId].props.stylesheet, ".b{color:blue}");
+});
+
+test("an import near the CSS limit commits, though renaming its page selectors makes it longer", async (t) => {
+  const running = await host(t);
+  const rules = "body{color:red}".repeat(66_000);
+  // imported() commits it: the review was not blocked, and the frame's limit took it.
+  const { event } = await imported(running, `<style>${rules}</style><p>x</p>`);
+  const { document } = await ok(running.call("GET", "/api/document"), "document");
+  assert.ok(document.nodes[event.frameId].props.stylesheet.length > rules.length);
+});
+
+test("two chosen stylesheet files with the same name are refused", async (t) => {
+  const running = await host(t);
+  const refused = await running.call("POST", "/api/import", { html: LINKED, stylesheets: [{ name: "site.css", css: ".a{}" }, { name: "SITE.CSS", css: ".b{}" }] });
+  assert.deepEqual([refused.status, refused.json?.error?.code], [400, "invalid-import"]);
+  const review = await ok(running.call("POST", "/api/import", { html: LINKED, stylesheets: [{ name: "site.css", css: SITE_CSS }] }), "review");
+  assert.ok(review.notes.includes("1 linked resource is not fetched: imports work offline."), JSON.stringify(review.notes));
+});
+
+test("the canvas drops a stylesheet that would end its frame's scope, even one written by hand", browserTestOptions(), async () => {
+  const { readFileSync } = await import("node:fs");
+  const { chromium } = await import("playwright-core");
+  const { findBrowser } = await import("./support/browser.mjs");
+  const browser = await chromium.launch({ executablePath: findBrowser(), headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>");
+    const source = readFileSync(new URL("../packages/renderer/src/index.mjs", import.meta.url), "utf8");
+    await page.addScriptTag({ type: "module", content: `${source}\nwindow.renderForTest = (doc) => { const renderer = createRenderer(document.getElementById("root")); renderer.render(doc); return renderer.stats.dropped; };` });
+    await page.waitForFunction(() => typeof window.renderForTest === "function");
+    const result = await page.evaluate(() => {
+      const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "text", parentId, children, props, metadata: {} });
+      const doc = {
+        rootIds: ["a", "b"],
+        nodes: {
+          a: node("a", null, ["a-t"], { tag: "div", stylesheet: "}\n.t{color:rgb(255, 0, 0)}" }),
+          "a-t": node("a-t", "a", [], { tag: "p", text: "A", attributes: { class: "t" } }),
+          b: node("b", null, ["b-t"], { tag: "div", stylesheet: ".u{color:rgb(0, 0, 255)}" }),
+          "b-t": node("b-t", "b", [], { tag: "p", text: "B", attributes: { class: "t u" } }),
+        },
+      };
+      const dropped = window.renderForTest(doc);
+      const colour = (id) => getComputedStyle(document.querySelector(`[data-ninerr-id="${id}"]`)).color;
+      return { dropped, sheets: document.querySelectorAll("style[data-ninerr-sheet]").length, a: colour("a-t"), b: colour("b-t") };
+    });
+    assert.deepEqual(result, { dropped: 1, sheets: 1, a: "rgb(0, 0, 0)", b: "rgb(0, 0, 255)" });
+  } finally {
+    await browser.close();
+  }
+});

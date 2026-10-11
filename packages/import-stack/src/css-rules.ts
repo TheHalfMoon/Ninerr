@@ -240,8 +240,38 @@ export function sanitizeImportedStylesheet(css: string, maxBytes: number): Sanit
   return { cssText: cssText === "" ? null : cssText, unsafe: true, removedDeclarations: sanitizer.removedDeclarations, removedRules: sanitizer.removedRules };
 }
 
-/** The most CSS a frame's stylesheet holds (#283): an import holds at most maxCssBytes. */
-export const MAX_FRAME_STYLESHEET_BYTES = 1024 * 1024;
+/**
+ * The most CSS a frame's stylesheet holds (#283). An import holds at most maxCssBytes (1 MiB
+ * offline); renaming its page selectors to :scope and joining its sheets adds a little, so the
+ * frame's limit leaves room above that.
+ */
+export const MAX_FRAME_STYLESHEET_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Whether a "}" in `css` closes a block it did not open (outside strings, comments, escapes
+ * and unquoted url()s). The canvas wraps a frame's stylesheet in an @scope block: such a "}"
+ * would end that block, and the rest would style every frame (#298 review).
+ */
+export function cssClosesUnopenedBlock(css: string): boolean {
+  let depth = 0;
+  let index = 0;
+  while (index < css.length) {
+    const char = css[index];
+    if (char === "\\") index += 2;
+    else if (char === "\"" || char === "'") index = stringEnd(css, index);
+    else if (char === "/" && css[index + 1] === "*") index = commentEnd(css, index);
+    else if (urlAt(css, index) && unquotedUrlEnd(css, index) > 0) index = unquotedUrlEnd(css, index);
+    else {
+      if (char === "{") depth += 1;
+      if (char === "}") {
+        depth -= 1;
+        if (depth < 0) return true;
+      }
+      index += 1;
+    }
+  }
+  return false;
+}
 
 /** A selector list split at its top-level commas, each part exactly as written. */
 function selectors(prelude: string): string[] {
@@ -289,7 +319,8 @@ function scopedRules(css: string, depth: number): string {
  * already sanitized; a sheet whose structure is not followed here is kept as it is.
  */
 export function frameStylesheet(sheets: readonly string[]): string {
-  return sheets.map((css) => {
+  // A sheet with a "}" it did not open would end the frame's scope on the canvas: left out.
+  return sheets.filter((css) => !cssClosesUnopenedBlock(css)).map((css) => {
     try {
       return scopedRules(css, 0);
     } catch (error) {

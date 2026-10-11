@@ -131,10 +131,16 @@ function chosenStylesheets(value: unknown): ChosenStylesheet[] {
   if (!Array.isArray(value) || value.length > MAX_CHOSEN_STYLESHEETS || !value.every(valid)) {
     throw new StudioError(400, "invalid-import", `stylesheets must be a list of at most ${MAX_CHOSEN_STYLESHEETS} { name, css } files`);
   }
+  // Files are matched by name, case aside: two that differ only in case would be ambiguous.
+  if (new Set(value.map((entry) => entry.name.toLowerCase())).size !== value.length) {
+    throw new StudioError(400, "invalid-import", "two stylesheet files have the same name");
+  }
   return value as ChosenStylesheet[];
 }
 
 interface LinkedStylesheets {
+  /** How many links were read from a chosen file. */
+  readLinks: number;
   read: string[];
   missing: string[];
   overLimit: string[];
@@ -164,7 +170,7 @@ function fileName(uri: string): string {
  * import's CSS budget.
  */
 function linkStylesheets(proposal: ImportProposal, files: ChosenStylesheet[]): LinkedStylesheets {
-  const linked: LinkedStylesheets = { read: [], missing: [], overLimit: [] };
+  const linked: LinkedStylesheets = { readLinks: 0, read: [], missing: [], overLimit: [] };
   const byName = new Map(files.map((file) => [file.name.toLowerCase(), file]));
   let cssBytes = proposal.stylesheets.reduce((total, sheet) => total + Buffer.byteLength(sheet.cssText, "utf8"), 0);
   const sheets: ImportProposal["stylesheets"] = [];
@@ -190,7 +196,8 @@ function linkStylesheets(proposal: ImportProposal, files: ChosenStylesheet[]): L
       continue;
     }
     cssBytes += bytes;
-    linked.read.push(name);
+    linked.readLinks += 1;
+    if (!linked.read.includes(name)) linked.read.push(name);
     if (sanitized.unsafe) proposal.security.unsafeStylesRemoved += 1;
     sheets.push({ id: `import-style:linked-${createHash("sha256").update(`${proposal.proposalId}:${resource.uri}:${sheets.length}`).digest("hex").slice(0, 32)}`, cssText: sanitized.cssText, sourceBinding: { sourceUri: resource.uri, domPath: "linked-stylesheet" } });
   }
@@ -204,7 +211,9 @@ function summarize(proposalId: string, name: string, proposal: ImportProposal, r
   if (linked.missing.length > 0) notes.push(`Linked stylesheet${linked.missing.length === 1 ? "" : "s"} not chosen with the page, so not read: ${linked.missing.join(", ")}.`);
   if (linked.overLimit.length > 0) notes.push(`Linked stylesheet${linked.overLimit.length === 1 ? "" : "s"} left out, past the import's ${OFFLINE_POLICY.maxCssBytes / 1024 / 1024} MiB of CSS: ${linked.overLimit.join(", ")}.`);
   if (proposal.stylesheets.length > 0) notes.push(`${proposal.stylesheets.length} stylesheet${proposal.stylesheets.length === 1 ? " is" : "s are"} carried into the page frame, applied to it alone.`);
-  if (proposal.resources.length > 0) notes.push(`${proposal.resources.length} linked resource${proposal.resources.length === 1 ? " is" : "s are"} not fetched: imports work offline.`);
+  // The linked stylesheets read from chosen files are not among the resources left behind.
+  const unread = proposal.resources.length - linked.readLinks;
+  if (unread > 0) notes.push(`${unread} linked resource${unread === 1 ? " is" : "s are"} not fetched: imports work offline.`);
   return {
     proposalId,
     name,

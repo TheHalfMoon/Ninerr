@@ -222,6 +222,15 @@ export function createRenderer(root) {
       doc.head.append(element);
       sheets.set(nodeId, element);
     }
+    // The browser's parser is the final judge: the sheet must be exactly the one @scope rule,
+    // or something in it ended the scope and would style other frames (#298 review).
+    const rules = element.sheet?.cssRules;
+    const ScopeRule = doc.defaultView?.CSSScopeRule;
+    if (rules === undefined || rules.length !== 1 || ScopeRule === undefined || !(rules[0] instanceof ScopeRule)) {
+      element.remove();
+      sheets.delete(nodeId);
+      stats.dropped += 1;
+    }
   }
 
   function build(node) {
