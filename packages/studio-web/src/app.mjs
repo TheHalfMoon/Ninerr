@@ -1068,6 +1068,8 @@ function listenForChanges({ refreshOnOpen = false } = {}) {
   if (ended) return;
   const events = state.client.events();
   state.events = events;
+  // Resolved once the stream is open: from then on no change is missed (#302).
+  state.eventsOpen = new Promise((resolve) => events.addEventListener("open", resolve, { once: true }));
   let dropped = refreshOnOpen;
   events.addEventListener("change", (message) => {
     const received = performance.now();
@@ -1601,10 +1603,15 @@ async function main() {
     setStatus(describeError(error));
     return;
   }
-  listenForChanges();
+  // The copy was loaded before the stream opened: a change committed in between would be
+  // missed, so the first open refreshes it as a reconnect does (#302).
+  listenForChanges({ refreshOnOpen: true });
   state.client.get("/api/confirmations").then(({ pending }) => showConfirmations(pending), () => {});
   if (session.project === null) await openProjectsDialog();
   else setStatus(`Opened ${session.project}.`);
+  // Ready once changes reach this copy; a stream that cannot open does not hold the editor back.
+  await Promise.race([state.eventsOpen, new Promise((resolve) => setTimeout(resolve, 5_000))]);
+  await resyncing;
   document.documentElement.dataset.ready = "true";
 }
 

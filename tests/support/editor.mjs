@@ -3,7 +3,7 @@ import { findBrowser } from "./browser.mjs";
 // Open the Ninerr editor of a running studio host in Chromium, as a person would from its
 // launch link. Every request outside the host's origin is aborted and recorded, and page
 // errors are collected, so a test can assert the editor stayed local and clean.
-export async function openEditor(host) {
+export async function openEditor(host, { beforeOpen } = {}) {
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ executablePath: findBrowser(), headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -20,6 +20,8 @@ export async function openEditor(host) {
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
+  // A test may route the page first, for example to hold back the change stream.
+  if (beforeOpen !== undefined) await beforeOpen(page);
   await page.goto(host.launchUrl());
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
   return { browser, page, foreign, errors, close: () => browser.close() };
