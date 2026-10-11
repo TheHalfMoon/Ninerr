@@ -31,7 +31,10 @@ export function findBrowser() {
 /**
  * Options for node:test: skip locally when no browser exists; never skip in CI. A browser test
  * that waits without end fails, by its name, after `timeout` (10 minutes by default; the
- * slowest takes about a minute here), not by silently using up the CI job (#305).
+ * slowest takes about a minute in CI), so the log names it (#305). What the abandoned test left
+ * open (a browser, a host) can still hold the run until the job's limit: --test-force-exit would
+ * end it, but on Windows it crashes Node with a libuv assertion while handles are closing. A
+ * hang in a `t.after` hook is not bounded by this.
  */
 export function browserTestOptions({ timeout = 600_000 } = {}) {
   const found = findBrowser();
