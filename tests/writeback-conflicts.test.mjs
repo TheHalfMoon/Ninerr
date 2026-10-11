@@ -227,3 +227,32 @@ test("a prop named text is a field of its own, apart from the layer's text", asy
   await ok(call("POST", "/api/codebase/write", { nodeId: element, token: (await ok(call("POST", "/api/codebase/preview", { nodeId: element, keep }), "preview")).token, keep }), "write the attribute");
   assert.equal(readFileSync(file, "utf8"), NOTE.replace(">Hello<", ">Hey<").replace("text=\"a\"", "text=\"b\""));
 });
+
+// From the review of #291: a style is compared as its properties only when it says exactly
+// what they say. A change the parse cannot see (inside a data URL, behind !important) is a
+// change of the file's, never written over unseen nor kept or taken as the value shown.
+const ICON = `export function Icon() {
+  return <p style="color: green; background: url(data:image/png;base64,AAA)">i</p>;
+}
+`;
+
+test("a file's change inside a data URL is a conflict, not written over", async (t) => {
+  const { call, file, element, document, revision } = await broughtIn(t, ICON, "Icon");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { ...document.nodes[element].props.style, color: "blue" } } }] }), "edit");
+  writeFileSync(file, ICON.replace("AAA", "BBB"));
+  const plan = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual([plan.changes, plan.conflicts.map(({ field, file: value }) => [field, value])], [[], [["style", "color: green; background: url(data:image/png;base64,BBB)"]]]);
+});
+
+test("a style shown in a conflict is not the one kept or taken once the file changes unseen", async (t) => {
+  const { call, file, element, revision } = await broughtIn(t, BADGE, "Badge");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { color: "blue", padding: "4px" } } }] }), "edit");
+  writeFileSync(file, BADGE.replace("color: green", "color: red"));
+  const shown = "color: red; padding: 4px";
+  // Drawn purple now, though its last color is still red.
+  writeFileSync(file, BADGE.replace("color: green; padding: 4px", "color: purple !important; color: red; padding: 4px"));
+  const kept = await ok(call("POST", "/api/codebase/preview", { nodeId: element, keep: [{ nodeId: element, field: "style", file: shown }] }), "preview with keep");
+  assert.deepEqual([kept.changes, kept.conflicts.map((conflict) => conflict.field)], [[], ["style"]], "asked again");
+  const refused = await call("POST", "/api/codebase/resolve", { nodeId: element, field: "style", file: shown });
+  assert.deepEqual([refused.status, refused.json?.error?.code], [409, "no-conflict"]);
+});

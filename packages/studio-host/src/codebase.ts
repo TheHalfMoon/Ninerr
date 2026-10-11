@@ -360,11 +360,46 @@ const ATTRIBUTE_TEXT = "attribute text";
 const propField = (prop: string): string => (prop === "text" ? ATTRIBUTE_TEXT : prop);
 const fieldProp = (field: string): string => (field === ATTRIBUTE_TEXT ? "text" : field);
 
-/** Whether a field was kept against the file's value as it is now (a style, however formatted). */
+/** Whether a field was kept against the file's value as it is now (sameFileValue). */
 const keptAgainst = (keep: KeptFields, key: string, prop: string, fileValue: string): boolean => {
   const kept = keep.get(key);
-  return kept !== undefined && equalProp(prop, kept, fileValue);
+  return kept !== undefined && sameFileValue(prop, kept, fileValue);
 };
+
+/**
+ * Whether a style says exactly what its properties (styleProperties) say: every piece between
+ * semicolons is a declaration it keeps, no name repeats, and nothing it does not see is there:
+ * a comment, !important, an escape, or a semicolon inside quotes or parentheses (a data URL).
+ */
+function plainStyle(text: string): boolean {
+  if (/\/\*|!\s*important|\\/iu.test(text)) return false;
+  let depth = 0;
+  let quote: string | null = null;
+  for (const char of text) {
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else if (char === ";") return false;
+    } else if (char === "\"" || char === "'") quote = char;
+    else if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if (char === ";" && depth > 0) return false;
+    if (depth < 0) return false;
+  }
+  if (quote !== null || depth !== 0) return false;
+  return Object.keys(styleProperties({ cssText: text })).length === text.split(";").filter((piece) => piece.trim() !== "").length;
+}
+
+/**
+ * Whether two values of a field in the file are the same, for a decision about what the file
+ * holds: did it change, is it the value a person kept or took as shown. A style is compared
+ * as its properties only when both are plain (plainStyle); any other as written, so a change
+ * styleProperties cannot see (inside a data URL, behind a comment, an !important) is a
+ * change, never written over unseen (review of #291).
+ */
+function sameFileValue(prop: string, a: string, b: string): boolean {
+  if (prop === "style" && !(plainStyle(a) && plainStyle(b))) return a === b;
+  return equalProp(prop, a, b);
+}
 
 function equalProp(prop: string, a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
@@ -662,7 +697,7 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
         continue;
       }
       const unwritable = propUnwritable(prop, mine, exclude.has(`${node.id}:${field}`));
-      if (!equalProp(prop, fileValue, base) && (!keptAgainst(keep, `${node.id}:${field}`, prop, fileValue) || unwritable !== null)) {
+      if (!sameFileValue(prop, fileValue, base) && (!keptAgainst(keep, `${node.id}:${field}`, prop, fileValue) || unwritable !== null)) {
         conflicts.push({ nodeId: node.id, field, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
         continue;
       }
@@ -773,7 +808,7 @@ export function resolveWithFile(document: any, nodeId: unknown, field: unknown, 
   // The value taken is the one the person saw (a style, however formatted): a file changed
   // since is reviewed again.
   const prop = fieldProp(field);
-  if (conflict === undefined || conflict.file === undefined || !(field === "text" ? conflict.file === shown : equalProp(prop, conflict.file, shown))) throw new StudioError(409, "no-conflict", "that field is no longer changed in both places as shown; review the write-back again");
+  if (conflict === undefined || conflict.file === undefined || !(field === "text" ? conflict.file === shown : sameFileValue(prop, conflict.file, shown))) throw new StudioError(409, "no-conflict", "that field is no longer changed in both places as shown; review the write-back again");
   const node = document.nodes[nodeId];
   const source = node.props.codeSource as CodeSource;
   const value = conflict.file;
