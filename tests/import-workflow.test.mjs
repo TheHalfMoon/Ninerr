@@ -57,7 +57,7 @@ test("the host reviews an import, then commits it as one attributed, undoable tr
     assert.equal(review.security.eventHandlersRemoved, 1);
     assert.ok(review.security.dangerousUrlsRemoved >= 1);
     assert.equal(review.counts.stylesheets, 1);
-    assert.match(review.notes.join(" "), /stylesheet is not carried/u);
+    assert.match(review.notes.join(" "), /stylesheet is carried into the page frame, applied to it alone/u);
     assert.match(review.notes.join(" "), /not fetched/u);
     assert.equal(host.session.revision, 0, "a review changes nothing");
 
@@ -142,7 +142,7 @@ test("import, edit, save and reopen a page through the editor", browserTestOptio
       await page.locator("#import-review").waitFor();
       const review = await page.locator("#import-review li").allTextContents();
       assert.match(review.join(" | "), /For safety: 1 script removed, 1 event handler removed/u);
-      assert.match(review.join(" | "), /stylesheet is not carried/u);
+      assert.match(review.join(" | "), /stylesheet is carried into the page frame, applied to it alone/u);
       assert.match(await page.locator("#dialog-title").textContent(), /Review import: pricing/u);
       await page.locator("#dialog[open] button.primary", { hasText: "Import" }).click();
       await waitRevision(page, 1);

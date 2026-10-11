@@ -350,7 +350,8 @@ function openImportDialog() {
   const project = state.project;
   showDialog("Import HTML", (close) => {
     const error = el("p", { class: "error", role: "alert" });
-    const file = el("input", { id: "import-file", type: "file", accept: ".html,.htm,text/html" });
+    // The page, and the stylesheet files it links to (#283): nothing it links to is fetched.
+    const file = el("input", { id: "import-file", type: "file", multiple: true, accept: ".html,.htm,.css,text/html,text/css" });
     const pasted = el("textarea", { id: "import-html", rows: 6, spellcheck: "false", placeholder: "<main>…</main>" });
     const form = el("form", {
       novalidate: true,
@@ -359,7 +360,19 @@ function openImportDialog() {
         error.textContent = "";
         let html = pasted.value;
         let name = "Pasted HTML";
-        const chosen = file.files?.[0];
+        const files = [...(file.files ?? [])];
+        const pages = files.filter((entry) => /\.html?$/iu.test(entry.name));
+        if (pages.length > 1) {
+          error.textContent = "Choose one HTML page, with the stylesheet files it links to.";
+          return;
+        }
+        const chosen = pages[0] ?? null;
+        const sheets = files.filter((entry) => /\.css$/iu.test(entry.name));
+        if (sheets.reduce((total, entry) => total + entry.size, 0) > MAX_IMPORT_BYTES) {
+          error.textContent = "Those stylesheets are larger than 2 MiB in all, the most Ninerr imports at once.";
+          return;
+        }
+        const stylesheets = await Promise.all(sheets.map(async (entry) => ({ name: entry.name, css: await entry.text() })));
         if (chosen) {
           if (chosen.size > MAX_IMPORT_BYTES) {
             error.textContent = "That file is larger than 2 MiB, the most Ninerr imports at once.";
@@ -373,7 +386,7 @@ function openImportDialog() {
           return;
         }
         try {
-          const review = await state.client.post("/api/import", { html, name }, { project });
+          const review = await state.client.post("/api/import", { html, name, ...(stylesheets.length === 0 ? {} : { stylesheets }) }, { project });
           close();
           showImportReview(review, project);
         } catch (failure) {
@@ -382,7 +395,7 @@ function openImportDialog() {
       },
     },
     el("p", {}, "Ninerr reads the HTML on this computer and removes scripts, event handlers and unsafe links. Nothing it links to is fetched. You review the result before anything is added."),
-    el("label", { for: "import-file" }, "HTML file", file),
+    el("label", { for: "import-file" }, "HTML file, with the stylesheet files it links to", file),
     el("label", { for: "import-html" }, "Or paste HTML", pasted),
     el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Cancel"), el("button", { type: "submit", class: "primary" }, "Review import")));
     return [form, error];
@@ -490,6 +503,12 @@ async function openCodeDialog() {
             setStatus("Select the code and copy it.");
           }
         } }, "Copy code")),
+        // The stylesheet that applies to it (#283), which the canvas applies to its frame alone.
+        ...(typeof exported.stylesheet === "string" ? [(() => {
+          const sheet = el("textarea", { id: "code-export-css", rows: 6, readonly: true, spellcheck: "false" });
+          sheet.value = exported.stylesheet;
+          return el("label", { for: "code-export-css" }, "Its stylesheet (on the canvas, applied to its frame alone; :scope is the frame)", sheet);
+        })()] : []),
       ];
     const importForm = el("form", {
       novalidate: true,

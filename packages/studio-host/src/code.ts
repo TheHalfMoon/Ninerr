@@ -37,7 +37,21 @@ function bareText(node: any): string | null {
 }
 
 /** The JSX for a layer and everything inside it. */
-export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number } {
+/**
+ * The stylesheet that applies to a layer (#283): its own, or the nearest one above it, or
+ * null. The canvas applies it to that layer alone; exported code carries it beside the code.
+ */
+function appliedStylesheet(document: any, nodeId: string): string | null {
+  for (let id: string | null = nodeId, depth = 0; id !== null && depth <= MAX_EXPORT_DEPTH; depth += 1) {
+    const node = document.nodes[id];
+    if (node === undefined) return null;
+    if (typeof node.props?.stylesheet === "string") return node.props.stylesheet;
+    id = node.parentId;
+  }
+  return null;
+}
+
+export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; stylesheet: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   let layers = 0;
   // Labels and the controls they name (for → id). The canvas never renders ids, but the
@@ -125,7 +139,7 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   const componentName = pascal(typeof root.props?.name === "string" ? root.props.name : "", "Layer");
   const design: DesignDoc = { componentName, root: convert(nodeId, 1) };
   try {
-    return { componentName, code: designToCode(design), layers };
+    return { componentName, code: designToCode(design), layers, stylesheet: appliedStylesheet(document, nodeId) };
   } catch (error) {
     throw new StudioError(422, "export-refused", error instanceof Error ? error.message.slice(0, 300) : "this layer cannot be exported");
   }

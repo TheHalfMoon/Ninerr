@@ -86,7 +86,7 @@ test("hand-built hostile props are reduced to the allowlists", () => {
   assert.deepEqual(vector.attributes, { viewBox: "0 0 10 10" }, "SVG attributes keep the case the SVG DOM requires");
   const input = planElement({ id: "in", type: "element", props: { tag: "input", attributes: { type: "image", value: "v", formaction: "https://evil.example" } } });
   assert.deepEqual(input.attributes, { value: "v" });
-  assert.deepEqual(planElement({ id: "n", type: "frame", props: { name: "Hero", other: { a: 1 } } }), { tag: "div", namespace: "html", attributes: {}, style: {}, text: null, dropped: 0 });
+  assert.deepEqual(planElement({ id: "n", type: "frame", props: { name: "Hero", other: { a: 1 } } }), { tag: "div", namespace: "html", attributes: {}, style: {}, text: null, stylesheet: null, dropped: 0 });
 });
 
 test("the frame is sandboxed without scripts and has a no-network policy", () => {

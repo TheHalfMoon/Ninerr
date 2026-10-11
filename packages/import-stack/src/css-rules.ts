@@ -239,3 +239,95 @@ export function sanitizeImportedStylesheet(css: string, maxBytes: number): Sanit
   if (cssLoadsOrExecutes(cssText)) return { cssText: null, unsafe: true, removedDeclarations: 0, removedRules: 1 };
   return { cssText: cssText === "" ? null : cssText, unsafe: true, removedDeclarations: sanitizer.removedDeclarations, removedRules: sanitizer.removedRules };
 }
+
+/**
+ * The most CSS a frame's stylesheet holds (#283). An import holds at most maxCssBytes (1 MiB
+ * offline); renaming its page selectors to :scope and joining its sheets adds a little, so the
+ * frame's limit leaves room above that.
+ */
+export const MAX_FRAME_STYLESHEET_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Whether a "}" in `css` closes a block it did not open (outside strings, comments, escapes
+ * and unquoted url()s). The canvas wraps a frame's stylesheet in an @scope block: such a "}"
+ * would end that block, and the rest would style every frame (#298 review).
+ */
+export function cssClosesUnopenedBlock(input: string): boolean {
+  // As CSS reads it: CR LF, CR and FF are line breaks, which end a bad string (#298 review).
+  const css = input.replace(/\r\n|[\r\f]/gu, "\n");
+  let depth = 0;
+  let index = 0;
+  while (index < css.length) {
+    const char = css[index];
+    if (char === "\\") index += 2;
+    else if (char === "\"" || char === "'") index = stringEnd(css, index);
+    else if (char === "/" && css[index + 1] === "*") index = commentEnd(css, index);
+    else if (urlAt(css, index) && unquotedUrlEnd(css, index) > 0) index = unquotedUrlEnd(css, index);
+    else {
+      if (char === "{") depth += 1;
+      if (char === "}") {
+        depth -= 1;
+        if (depth < 0) return true;
+      }
+      index += 1;
+    }
+  }
+  return false;
+}
+
+/** A selector list split at its top-level commas, each part exactly as written. */
+function selectors(prelude: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  let parens = 0;
+  let index = 0;
+  while (index < prelude.length) {
+    const char = prelude[index];
+    if (char === "\\") index += 2;
+    else if (char === "\"" || char === "'") index = stringEnd(prelude, index);
+    else {
+      if (char === "(" || char === "[") parens += 1;
+      if (char === ")" || char === "]") parens = Math.max(0, parens - 1);
+      if (char === "," && parens === 0) {
+        out.push(prelude.slice(start, index));
+        start = index + 1;
+      }
+      index += 1;
+    }
+  }
+  out.push(prelude.slice(start));
+  return out;
+}
+
+// A selector's leading html, :root or body, or html body: the page, which in a frame is the
+// frame itself.
+const PAGE_ROOT = /^(\s*)(?:(?:html|:root)(?:\s*>\s*|\s+)body|html|:root|body)(?=$|[\s>+~.#[:,])/iu;
+
+/** A rule list with each selector that names the page renamed to the frame (:scope). */
+function scopedRules(css: string, depth: number): string {
+  if (depth > MAX_DEPTH) return css;
+  return items(css, false, depth === 0).map((item) => {
+    if (item.block === null) return item.prelude;
+    const name = item.atRule;
+    if (name !== null) return GROUP_RULES.has(name) ? `${item.prelude}{${scopedRules(item.block, depth + 1)}}` : `${item.prelude}{${item.block}}`;
+    return `${selectors(item.prelude).map((selector) => selector.replace(PAGE_ROOT, "$1:scope")).join(",")}{${item.block}}`;
+  }).join("");
+}
+
+/**
+ * An imported page's stylesheets as the stylesheet of the frame that holds the import (#283):
+ * in document order, with the selectors that name the page (html, :root, body) renamed to the
+ * frame, since the canvas applies a frame's stylesheet scoped to that frame. The sheets are
+ * already sanitized; a sheet whose structure is not followed here is kept as it is.
+ */
+export function frameStylesheet(sheets: readonly string[]): string {
+  // A sheet with a "}" it did not open would end the frame's scope on the canvas: left out.
+  return sheets.filter((css) => !cssClosesUnopenedBlock(css)).map((css) => {
+    try {
+      return scopedRules(css, 0);
+    } catch (error) {
+      if (error instanceof CssStructureError) return css;
+      throw error;
+    }
+  }).join("\n");
+}

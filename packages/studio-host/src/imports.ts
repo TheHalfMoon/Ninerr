@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, importHtmlSnapshot, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
+import { createHash, randomUUID } from "node:crypto";
+import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, frameStylesheet, importHtmlSnapshot, sanitizeImportedStylesheet, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
 import { inferSemantics, reviewImport } from "@ninerr/intake";
 import { StudioError } from "./errors.ts";
 
@@ -51,7 +51,8 @@ export class ImportDesk {
   #pending = new Map<string, Pending>();
 
   /** Parse and review `html`; the proposal waits for the person's decision. */
-  prepare(input: { html: unknown; name: unknown }, actorId: string, at: string): ImportReviewSummary {
+  prepare(input: { html: unknown; name: unknown; stylesheets?: unknown }, actorId: string, at: string): ImportReviewSummary {
+    const files = chosenStylesheets(input?.stylesheets);
     if (typeof input?.html !== "string" || input.html.trim() === "") throw new StudioError(400, "invalid-import", "html must be a non-empty string");
     if (Buffer.byteLength(input.html) > MAX_IMPORT_HTML_BYTES) throw new StudioError(413, "import-too-large", `an HTML import is limited to ${MAX_IMPORT_HTML_BYTES / 1024 / 1024} MiB`);
     const name = typeof input.name === "string" && NAME.test(input.name.trim()) ? input.name.trim() : "Imported page";
@@ -73,13 +74,14 @@ export class ImportDesk {
       const message = error instanceof Error ? error.message.slice(0, 300) : "the HTML could not be imported";
       throw new StudioError(422, "import-refused", message);
     }
+    const linked = linkStylesheets(proposal, files);
     const review = reviewImport(proposal);
     const { operation, provenance } = importOperation(proposal, name);
     const blocking = [...review.blockingReasons];
     const bytes = Buffer.byteLength(JSON.stringify(operation));
     if (bytes > MAX_IMPORT_CHANGE_BYTES) blocking.push(`the imported page is too large to add as one change (${(bytes / 1024 / 1024).toFixed(1)} MiB of layers; at most ${MAX_IMPORT_CHANGE_BYTES / 1024 / 1024} MiB)`);
     this.#pending.set(proposal.proposalId, { name, review, blocking, operation, provenance, expires: Date.now() + PENDING_TTL_MS });
-    return summarize(proposal.proposalId, name, proposal, review, blocking);
+    return summarize(proposal.proposalId, name, proposal, review, blocking, linked);
   }
 
   /**
@@ -114,10 +116,104 @@ export class ImportDesk {
   }
 }
 
-function summarize(proposalId: string, name: string, proposal: ImportProposal, review: ReturnType<typeof reviewImport>, blocking: string[]): ImportReviewSummary {
+/** The most stylesheet files an import takes with its page. */
+const MAX_CHOSEN_STYLESHEETS = 64;
+
+interface ChosenStylesheet {
+  name: string;
+  css: string;
+}
+
+/** The stylesheet files chosen with the page ({ name, css }), checked and bounded. */
+function chosenStylesheets(value: unknown): ChosenStylesheet[] {
+  if (value === undefined) return [];
+  const valid = (entry: any) => entry !== null && typeof entry === "object" && typeof entry.name === "string" && entry.name.length > 0 && entry.name.length <= 255 && typeof entry.css === "string";
+  if (!Array.isArray(value) || value.length > MAX_CHOSEN_STYLESHEETS || !value.every(valid)) {
+    throw new StudioError(400, "invalid-import", `stylesheets must be a list of at most ${MAX_CHOSEN_STYLESHEETS} { name, css } files`);
+  }
+  // Files are matched by name, case aside: two that differ only in case would be ambiguous.
+  if (new Set(value.map((entry) => entry.name.toLowerCase())).size !== value.length) {
+    throw new StudioError(400, "invalid-import", "two stylesheet files have the same name");
+  }
+  return value as ChosenStylesheet[];
+}
+
+interface LinkedStylesheets {
+  /** How many links were read from a chosen file. */
+  readLinks: number;
+  read: string[];
+  missing: string[];
+  overLimit: string[];
+}
+
+/** A linked stylesheet's file name: the last part of its address's path, decoded. */
+function fileName(uri: string): string {
+  let path: string;
+  try {
+    path = new URL(uri, "file:///").pathname;
+  } catch {
+    path = uri;
+  }
+  const last = path.split("/").filter((part) => part !== "").at(-1) ?? "";
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+/**
+ * The page's linked stylesheets, read from the files chosen with it (#283): each
+ * <link rel="stylesheet"> whose file name matches a chosen file (case aside, as on Windows and
+ * macOS) takes that file, sanitized rule by rule like an inline one. Nothing is fetched. The
+ * linked sheets come before the inline ones, as a page's head usually orders them, within the
+ * import's CSS budget.
+ */
+function linkStylesheets(proposal: ImportProposal, files: ChosenStylesheet[]): LinkedStylesheets {
+  const linked: LinkedStylesheets = { readLinks: 0, read: [], missing: [], overLimit: [] };
+  const byName = new Map(files.map((file) => [file.name.toLowerCase(), file]));
+  let cssBytes = proposal.stylesheets.reduce((total, sheet) => total + Buffer.byteLength(sheet.cssText, "utf8"), 0);
+  const sheets: ImportProposal["stylesheets"] = [];
+  for (const resource of proposal.resources) {
+    if (resource.kind !== "stylesheet") continue;
+    const name = fileName(resource.uri);
+    const file = byName.get(name.toLowerCase());
+    if (file === undefined) {
+      linked.missing.push(resource.uri.slice(0, 200));
+      continue;
+    }
+    let sanitized;
+    try {
+      sanitized = sanitizeImportedStylesheet(file.css, OFFLINE_POLICY.maxCssBytes);
+    } catch {
+      linked.overLimit.push(name);
+      continue;
+    }
+    if (sanitized.cssText === null) continue;
+    const bytes = Buffer.byteLength(sanitized.cssText, "utf8");
+    if (cssBytes + bytes > OFFLINE_POLICY.maxCssBytes || proposal.stylesheets.length + sheets.length >= OFFLINE_POLICY.maxAssets) {
+      linked.overLimit.push(name);
+      continue;
+    }
+    cssBytes += bytes;
+    linked.readLinks += 1;
+    if (!linked.read.includes(name)) linked.read.push(name);
+    if (sanitized.unsafe) proposal.security.unsafeStylesRemoved += 1;
+    sheets.push({ id: `import-style:linked-${createHash("sha256").update(`${proposal.proposalId}:${resource.uri}:${sheets.length}`).digest("hex").slice(0, 32)}`, cssText: sanitized.cssText, sourceBinding: { sourceUri: resource.uri, domPath: "linked-stylesheet" } });
+  }
+  proposal.stylesheets = [...sheets, ...proposal.stylesheets];
+  return linked;
+}
+
+function summarize(proposalId: string, name: string, proposal: ImportProposal, review: ReturnType<typeof reviewImport>, blocking: string[], linked: LinkedStylesheets): ImportReviewSummary {
   const notes: string[] = [];
-  if (proposal.stylesheets.length > 0) notes.push(`${proposal.stylesheets.length} stylesheet${proposal.stylesheets.length === 1 ? " is" : "s are"} not carried into the design; inline styles are.`);
-  if (proposal.resources.length > 0) notes.push(`${proposal.resources.length} linked resource${proposal.resources.length === 1 ? " is" : "s are"} not fetched: imports work offline.`);
+  if (linked.read.length > 0) notes.push(`Linked stylesheet${linked.read.length === 1 ? "" : "s"} read from the files chosen with the page: ${linked.read.join(", ")}.`);
+  if (linked.missing.length > 0) notes.push(`Linked stylesheet${linked.missing.length === 1 ? "" : "s"} not chosen with the page, so not read: ${linked.missing.join(", ")}.`);
+  if (linked.overLimit.length > 0) notes.push(`Linked stylesheet${linked.overLimit.length === 1 ? "" : "s"} left out, past the import's ${OFFLINE_POLICY.maxCssBytes / 1024 / 1024} MiB of CSS: ${linked.overLimit.join(", ")}.`);
+  if (proposal.stylesheets.length > 0) notes.push(`${proposal.stylesheets.length} stylesheet${proposal.stylesheets.length === 1 ? " is" : "s are"} carried into the page frame, applied to it alone.`);
+  // The linked stylesheets read from chosen files are not among the resources left behind.
+  const unread = proposal.resources.length - linked.readLinks;
+  if (unread > 0) notes.push(`${unread} linked resource${unread === 1 ? " is" : "s are"} not fetched: imports work offline.`);
   return {
     proposalId,
     name,
@@ -183,7 +279,13 @@ function importOperation(proposalInput: ImportProposal, name: string) {
     type: "frame",
     parentId: null,
     children: [...proposal.rootIds],
-    props: { tag: "div", name: name.slice(0, 200), style: { position: "relative", width: "1024px", "min-height": "640px", background: "#ffffff" } },
+    props: {
+      tag: "div",
+      name: name.slice(0, 200),
+      style: { position: "relative", width: "1024px", "min-height": "640px", background: "#ffffff" },
+      // The page's own stylesheets, sanitized, applied to this frame alone (#283).
+      ...(proposal.stylesheets.length === 0 ? {} : { stylesheet: frameStylesheet(proposal.stylesheets.map((sheet) => sheet.cssText)) }),
+    },
     metadata: {},
   };
   // Depth-first from each root, as collectProposalSubtree does, but validating once rather
