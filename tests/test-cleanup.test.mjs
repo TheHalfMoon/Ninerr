@@ -30,7 +30,7 @@ test("a test that hangs fails by its name, what it opened is closed, and the run
   assert.equal(signal, null, `the run was held until killed after ${elapsed} ms:\n${output.slice(-2000)}`);
   assert.equal(code, 1, output.slice(-2000));
   assert.match(output, /^not ok 1 - hangs with a host and a browser open$/mu);
-  assert.match(output, /test timed out after 3000ms/u);
+  assert.match(output, /test timed out after 10000ms/u);
   assert.match(output, /^ok 2 - a later test still runs$/mu);
   assert.doesNotMatch(output, /did not close/u);
 });

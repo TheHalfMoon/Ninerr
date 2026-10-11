@@ -32,10 +32,11 @@ export async function display() {
   });
   return {
     env: { DISPLAY: `:${number}` },
-    async stop() {
+    // Stopped after its test however that ends, a timeout included (#305).
+    stop: closeAfterTest(async () => {
       server.kill("SIGTERM");
       await new Promise((resolve) => (server.exitCode !== null ? resolve() : server.once("exit", resolve)));
-    },
+    }, "Xvfb"),
   };
 }
 

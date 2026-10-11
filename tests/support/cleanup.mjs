@@ -10,7 +10,10 @@ const BOUND_MS = 30_000;
 /**
  * Run `close` after the current test, at most once and within BOUND_MS, and return the
  * same once-only close for the test's own use: closing first in a `finally` and again here
- * is one close. Call it from inside the test that opened the thing.
+ * is one close. Call it from inside the test that opened the thing, never from a hook: in a
+ * `before` or `beforeEach` it would close right after that hook. A test's after hooks run
+ * in the order they were registered, and one that throws skips the rest, so a test's own
+ * `t.after` that removes a folder is registered after what uses the folder is opened.
  */
 export function closeAfterTest(close, what) {
   let closing = null;
@@ -28,6 +31,14 @@ export function closeAfterTest(close, what) {
     return Promise.race([once().catch(() => {}), late]).finally(() => clearTimeout(timer));
   });
   return once;
+}
+
+/** A listening server, closed after the current test (closeAfterTest), connections and all. */
+export function closeServerAfterTest(server) {
+  return closeAfterTest(() => new Promise((resolve) => {
+    server.close(() => resolve());
+    server.closeAllConnections?.();
+  }), "a test server");
 }
 
 /** startStudioHost, closed after the current test (closeAfterTest). */
