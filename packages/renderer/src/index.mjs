@@ -74,7 +74,7 @@ const UNSAFE_STYLE = /url\s*\(|image-set|expression\s*\(|javascript:|vbscript:|@
 // holds every function and at-rule the browser would see. The frame's policy loads nothing but
 // data: URLs in any case.
 const MAX_STYLESHEET = 1024 * 1024;
-const UNSAFE_STYLESHEET = /url\s*\(|image-set\s*\(|image\s*\(|(?:^|[^-\w])src\s*\(|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|<\/style/u;
+const UNSAFE_STYLESHEET = /url\s*\(|image-set\s*\(|image\s*\(|(?:^|[^-\w])src\(|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|<\/style/u;
 function safeStylesheet(css) {
   if (typeof css !== "string" || css.length > MAX_STYLESHEET) return false;
   const decoded = css

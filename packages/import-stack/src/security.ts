@@ -124,7 +124,8 @@ export function cssLoadsOrExecutes(css: string): boolean {
     || /-moz-binding\s*:/u.test(view)
     || /(?:^|[;{])\s*behavior\s*:/u.test(view)
     // CSS Values 4's src(), a url() by another name (#283 review).
-    || /(?:^|[^-\w])src\s*\(/u.test(view)
+    // (a function token: no space before its parenthesis, so a container named src is not one).
+    || /(?:^|[^-\w])src\(/u.test(view)
     // Text that would end a <style> element written out as HTML.
     || /<\/style/u.test(view)
   ));
