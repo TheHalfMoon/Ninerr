@@ -201,7 +201,7 @@ function linkStylesheets(proposal: ImportProposal, files: ChosenStylesheet[]): L
     }
     cssBytes += bytes;
     linked.readLinks += 1;
-    if (!linked.read.includes(name)) linked.read.push(name);
+    if (!linked.read.includes(file.name)) linked.read.push(file.name);
     // Matched by file name only: a link to another site is answered by the chosen file, and
     // the review says so, as it says a file that answers more than one link (#299).
     // Counted by the chosen file, which links name in any case. (A link without a scheme
