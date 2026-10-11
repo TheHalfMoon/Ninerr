@@ -351,6 +351,107 @@ function layerValue(node: any, prop: string): string | undefined {
   return typeof attributes[name] === "string" ? attributes[name] : undefined;
 }
 
+/**
+ * The write-back field of a literal prop: its name, but "attribute text" for a prop named
+ * text, which would otherwise share its field with the layer's text (#291). A JSX prop name
+ * has no space, so neither can stand for another prop.
+ */
+const ATTRIBUTE_TEXT = "attribute text";
+const propField = (prop: string): string => (prop === "text" ? ATTRIBUTE_TEXT : prop);
+const fieldProp = (field: string): string => (field === ATTRIBUTE_TEXT ? "text" : field);
+
+/** Whether a field was kept against the file's value as it is now (sameFileValue). */
+const keptAgainst = (keep: KeptFields, key: string, prop: string, fileValue: string): boolean => {
+  const kept = keep.get(key);
+  return kept !== undefined && sameFileValue(prop, kept, fileValue);
+};
+
+/**
+ * Whether a style says exactly what its properties (styleProperties) say: every piece between
+ * semicolons is a declaration it keeps, no name repeats, and nothing it does not see is there:
+ * a comment, !important, an escape, or a semicolon inside quotes or parentheses (a data URL).
+ */
+function plainStyle(text: string): boolean {
+  if (/\/\*|!\s*important|\\/iu.test(text)) return false;
+  let depth = 0;
+  let quote: string | null = null;
+  for (const char of text) {
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else if (char === ";") return false;
+    } else if (char === "\"" || char === "'") quote = char;
+    else if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    else if (char === ";" && depth > 0) return false;
+    if (depth < 0) return false;
+  }
+  if (quote !== null || depth !== 0) return false;
+  return Object.keys(styleProperties({ cssText: text })).length === text.split(";").filter((piece) => piece.trim() !== "").length;
+}
+
+/**
+ * Whether two values of a field in the file are the same, for a decision about what the file
+ * holds: did it change, is it the value a person kept or took as shown. A style is compared
+ * as its properties only when both are plain (plainStyle); any other as written, so a change
+ * styleProperties cannot see (inside a data URL, behind a comment, an !important) is a
+ * change, never written over unseen (review of #291).
+ */
+function sameFileValue(prop: string, a: string, b: string): boolean {
+  if (prop !== "style") return equalProp(prop, a, b);
+  if (!(plainStyle(a) && plainStyle(b))) return a === b;
+  return equalProp(prop, a, b) && sameOverlapOrder(Object.keys(styleProperties({ cssText: a })), Object.keys(styleProperties({ cssText: b })));
+}
+
+/**
+ * Whether the file's style already says what the layer's does: compared as properties when
+ * the file's is plain, in any order, since the layer keeps its properties sorted.
+ */
+function fileMatchesLayer(prop: string, fileValue: string, mine: string): boolean {
+  if (prop === "style" && !plainStyle(fileValue)) return false;
+  return equalProp(prop, fileValue, mine);
+}
+
+// Shorthands and what they set, beyond their own name followed by "-" (margin-top).
+const SHORTHANDS = new Set(["margin", "padding", "inset", "border", "border-top", "border-right", "border-bottom", "border-left", "border-block", "border-inline", "border-block-start", "border-block-end", "border-inline-start", "border-inline-end", "border-width", "border-style", "border-color", "border-radius", "border-image", "outline", "background", "font", "flex", "flex-flow", "grid", "grid-template", "grid-area", "grid-row", "grid-column", "gap", "grid-gap", "place-items", "place-content", "place-self", "text-decoration", "list-style", "overflow", "transition", "animation", "mask", "columns", "scroll-margin", "scroll-padding", "inset-block", "inset-inline", "margin-block", "margin-inline", "padding-block", "padding-inline", "all"]);
+const SETS: Record<string, string[]> = {
+  inset: ["top", "right", "bottom", "left"],
+  gap: ["row-gap", "column-gap", "grid-gap", "grid-row-gap", "grid-column-gap"],
+  "grid-gap": ["row-gap", "column-gap", "gap", "grid-row-gap", "grid-column-gap"],
+  font: ["line-height"],
+  "flex-flow": ["flex-direction", "flex-wrap"],
+  "place-items": ["align-items", "justify-items"],
+  "place-content": ["align-content", "justify-content"],
+  "place-self": ["align-self", "justify-self"],
+  "border-width": ["border-top-width", "border-right-width", "border-bottom-width", "border-left-width"],
+  "border-style": ["border-top-style", "border-right-style", "border-bottom-style", "border-left-style"],
+  "border-color": ["border-top-color", "border-right-color", "border-bottom-color", "border-left-color"],
+  "border-radius": ["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"],
+  columns: ["column-count", "column-width"],
+  "inset-block": ["top", "bottom"],
+  "inset-inline": ["left", "right"],
+  "margin-inline": ["margin-left", "margin-right"],
+  "margin-block": ["margin-top", "margin-bottom"],
+  "padding-inline": ["padding-left", "padding-right"],
+  "padding-block": ["padding-top", "padding-bottom"],
+};
+const sets = (shorthand: string, name: string): boolean => SHORTHANDS.has(shorthand) && (shorthand === "all" || name.startsWith(`${shorthand}-`) || (SETS[shorthand]?.includes(name) ?? false));
+const overlap = (x: string, y: string): boolean => sets(x, y) || sets(y, x);
+
+/**
+ * Whether two styles with the same properties write a shorthand and what it sets (margin and
+ * margin-top, inset and top) in the same order: swapped, the other one wins. Others may
+ * come in any order.
+ */
+function sameOverlapOrder(first: string[], second: string[]): boolean {
+  const at = new Map(second.map((name, index) => [name, index]));
+  for (let i = 0; i < first.length; i += 1) {
+    for (let j = i + 1; j < first.length; j += 1) {
+      if (overlap(first[i], first[j]) && at.get(first[i])! > at.get(first[j])!) return false;
+    }
+  }
+  return true;
+}
+
 function equalProp(prop: string, a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   if (prop === "style") {
@@ -612,7 +713,7 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
         const unwritable = textUnwritable(mine, read.content.slice(entry.range.startOffset, entry.range.endOffset), exclude.has(`${node.id}:text`));
         // Changed in the file too: written over it only when the person kept this layer's
         // value against exactly the file's value now, and it can be written (#236).
-        if (fileText !== source.base.text && (keep.get(`${node.id}:text`) !== fileText || unwritable !== null)) {
+        if (fileText !== source.base.text && (!keptAgainst(keep, `${node.id}:text`, "text", fileText) || unwritable !== null)) {
           conflicts.push({ nodeId: node.id, field: "text", reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileText, base: source.base.text, overridable: true, keepable: unwritable === null });
         } else if (unwritable !== null) notWritten.push({ nodeId: node.id, reason: unwritable });
         else {
@@ -627,10 +728,11 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
     }
     // Literal string props.
     for (const [prop, base] of Object.entries(source.base.props)) {
+      const field = propField(prop);
       const fileProp = symbol.props.find((candidate: any) => candidate.name === prop && typeof candidate.literal.value === "string");
       let mine = layerValue(node, prop);
       if (!fileProp) {
-        if (!equalProp(prop, mine, base)) conflicts.push({ nodeId: node.id, field: prop, reason: "no longer a literal string in the source" });
+        if (!equalProp(prop, mine, base)) conflicts.push({ nodeId: node.id, field, reason: "no longer a literal string in the source" });
         continue;
       }
       const fileValue: string = fileProp.literal.value;
@@ -640,14 +742,14 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
       }
       // Not changed here: the base stays, so a change made in the file is never undone.
       if (equalProp(prop, mine, base)) continue;
-      if (equalProp(prop, fileValue, mine)) {
+      if (fileMatchesLayer(prop, fileValue, mine)) {
         nextBase.props[prop] = fileValue;
-        matched.push({ nodeId: node.id, field: prop, value: fileValue });
+        matched.push({ nodeId: node.id, field, value: fileValue });
         continue;
       }
-      const unwritable = propUnwritable(prop, mine, exclude.has(`${node.id}:${prop}`));
-      if (!equalProp(prop, fileValue, base) && (keep.get(`${node.id}:${prop}`) !== fileValue || unwritable !== null)) {
-        conflicts.push({ nodeId: node.id, field: prop, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
+      const unwritable = propUnwritable(prop, mine, fileValue, base, exclude.has(`${node.id}:${field}`));
+      if (!sameFileValue(prop, fileValue, base) && (!keptAgainst(keep, `${node.id}:${field}`, prop, fileValue) || unwritable !== null)) {
+        conflicts.push({ nodeId: node.id, field, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
         continue;
       }
       if (unwritable !== null) {
@@ -657,8 +759,8 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
       if (prop === "style") mine = styleInSourceOrder(fileValue, node.props?.style ?? {});
       const range = fileProp.range;
       ops.push({ at: range.startOffset, op: { op: "update-prop", targetSymbolId: symbol.id, anchor: { range, expectedText: read.content.slice(range.startOffset, range.endOffset) }, replacement: `${prop}="${mine.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;")}"` } });
-      changes.push({ nodeId: node.id, field: prop, from: fileValue, to: mine });
-      checks.push({ nodeId: node.id, field: prop, path: source.path, expected: mine });
+      changes.push({ nodeId: node.id, field, from: fileValue, to: mine });
+      checks.push({ nodeId: node.id, field, path: source.path, expected: mine });
       nextBase.props[prop] = mine;
     }
     if (source.tag === "#fragment") {
@@ -740,8 +842,12 @@ function textUnwritable(mine: string, live: string, excluded: boolean): string |
 }
 
 /** Why a layer's prop value cannot be written into the source, or null. */
-function propUnwritable(prop: string, mine: string, excluded: boolean): string | null {
+function propUnwritable(prop: string, mine: string, fileValue: string, base: string, excluded: boolean): string | null {
   if (/[\r\n\u2028\u2029]/u.test(mine)) return `${prop} with a line break is not written`;
+  // A write rebuilds the style from the layer's, which is read from the file by
+  // styleProperties: a part it does not see would be lost, from the file as it is or, through
+  // the layer, from the file as it was brought in (reviews of #291).
+  if (prop === "style" && !(plainStyle(fileValue) && plainStyle(base))) return "a style Ninerr cannot read exactly (a comment, !important, an escape, a ; inside quotes or parentheses, or a declaration it does not keep) is not written back";
   if (excluded) return `${prop} would not read back as written, so it is not written`;
   return null;
 }
@@ -754,18 +860,20 @@ export function resolveWithFile(document: any, nodeId: unknown, field: unknown, 
   if (typeof nodeId !== "string" || typeof field !== "string" || typeof shown !== "string") throw new StudioError(400, "invalid-resolve", "name the layer, the field and the file's value as it was shown");
   const plan = planWriteBack(document, nodeId, folder);
   const conflict = plan.conflicts.find((entry) => entry.nodeId === nodeId && entry.field === field && entry.overridable);
-  // The value taken is the one the person saw: a file changed since is reviewed again.
-  if (conflict === undefined || conflict.file !== shown) throw new StudioError(409, "no-conflict", "that field is no longer changed in both places as shown; review the write-back again");
+  // The value taken is the one the person saw (a style, however formatted): a file changed
+  // since is reviewed again.
+  const prop = fieldProp(field);
+  if (conflict === undefined || conflict.file === undefined || !(field === "text" ? conflict.file === shown : sameFileValue(prop, conflict.file, shown))) throw new StudioError(409, "no-conflict", "that field is no longer changed in both places as shown; review the write-back again");
   const node = document.nodes[nodeId];
   const source = node.props.codeSource as CodeSource;
   const value = conflict.file;
   let set: Record<string, unknown>;
   if (field === "text") set = { text: value, codeSource: { ...source, base: { ...source.base, text: value } } };
   else {
-    const base = { ...source.base, props: { ...source.base.props, [field]: value } };
-    set = field === "style"
+    const base = { ...source.base, props: { ...source.base.props, [prop]: value } };
+    set = prop === "style"
       ? { style: styleProperties({ cssText: value }), codeSource: { ...source, base } }
-      : { attributes: { ...(node.props.attributes ?? {}), [layerName(field)]: value }, codeSource: { ...source, base } };
+      : { attributes: { ...(node.props.attributes ?? {}), [layerName(prop)]: value }, codeSource: { ...source, base } };
   }
   return { operations: [{ type: "set-props", nodeId, set }], file: plan.file, field };
 }
@@ -830,8 +938,9 @@ function readBackFailures(file: string, content: string, component: string, chec
       const entry = check.textIndex === undefined ? (symbol.children.length === 0 && symbol.texts.length === 1 ? symbol.texts[0] : undefined) : symbol.texts[check.textIndex];
       return entry?.value !== check.expected;
     }
-    const prop = symbol.props.find((candidate: any) => candidate.name === check.field && typeof candidate.literal.value === "string");
-    return !prop || !equalProp(check.field, prop.literal.value, check.expected);
+    const name = fieldProp(check.field);
+    const prop = symbol.props.find((candidate: any) => candidate.name === name && typeof candidate.literal.value === "string");
+    return !prop || !equalProp(name, prop.literal.value, check.expected);
   }).map((check) => `${check.nodeId}:${check.field}`);
 }
 
