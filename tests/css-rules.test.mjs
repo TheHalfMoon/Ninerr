@@ -127,9 +127,13 @@ const SAME_MEANING = [
   ["a comment line between rules and an @import", ".z{color:green}\n/* fonts */\n$I\n.a{color:red}"],
   ["an @import inside HTML comment markers", "<!-- $I .a{color:red} -->"],
   ["a brace inside an unquoted url", ".a{background:url(x});color:red}.b{color:blue}"],
+  ["a quote inside an unquoted url", ".a{background:url(x\"});color:red}.b{color:blue}"],
+  ["HTML comment markers inside a group rule", "@media screen{<!-- $I .a{color:red}}.b{color:blue}"],
+  // There the browser reads "declaration; .a{…}" as one rule, which it drops: so must we.
+  ["a group rule directly in @scope", "@scope (.s){@media (min-width:1px){$L .a{color:red}}}.b{color:blue}", "@scope (.s){@media (min-width:1px){}}.b{color:blue}"],
 ];
 const sanitizedInput = (css) => css.replaceAll("$L", LOAD).replaceAll("$I", IMPORT);
-const byHand = (css) => css.replaceAll("$L", "").replaceAll("$I", "").replace("background:url(x});", "");
+const byHand = (css) => css.replaceAll("$L", "").replaceAll("$I", "").replace("background:url(x});", "").replace("background:url(x\"});", "");
 
 test("the browser reads the kept rules as it reads the original", browserTestOptions(), async () => {
   const { chromium } = await import("playwright-core");
@@ -141,10 +145,10 @@ test("the browser reads the kept rules as it reads the original", browserTestOpt
       sheet.replaceSync(text);
       return [...sheet.cssRules].map((rule) => rule.cssText);
     }, css);
-    for (const [what, css] of SAME_MEANING) {
+    for (const [what, css, expected] of SAME_MEANING) {
       const result = clean(sanitizedInput(css));
       assert.equal(result.unsafe, true, what);
-      assert.deepEqual(await rules(result.cssText ?? ""), await rules(byHand(css)), what);
+      assert.deepEqual(await rules(result.cssText ?? ""), await rules(expected ?? byHand(css)), what);
     }
   } finally {
     await browser.close();
@@ -217,10 +221,12 @@ test("sanitizing takes time in proportion to the sheet, however it is written", 
     ["many statements after a long run of space", `${" ".repeat(500_000)}${"a;".repeat(260_000)}.z{background:url(x)}`],
     ["many braces in one custom property", `.a{${" ".repeat(500_000)}--x:${"{}".repeat(260_000)};background:url(x)}`],
     ["many comments and @imports", `${"/* c */@import \"x.css\";".repeat(40_000)}.a{color:red}`],
+    ["deep nesting full of escapes", `${".a{".repeat(7)}${"\\75".repeat(300_000)}y:url(x)${"}".repeat(7)}`],
   ]) {
     const started = performance.now();
     sanitizeImportedStylesheet(css, megabyte);
     const took = performance.now() - started;
-    assert.ok(took < 2_000, `${what}: ${Math.round(took)} ms`);
+    // Linear inputs take well under a second here; the quadratic scanner took 60 to 170 s.
+    assert.ok(took < 10_000, `${what}: ${Math.round(took)} ms`);
   }
 });

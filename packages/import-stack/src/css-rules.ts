@@ -32,8 +32,9 @@ const DECLARATION_RULES = new Set([
   "bottom-right", "bottom-right-corner", "left-top", "left-middle", "left-bottom", "right-top", "right-middle", "right-bottom",
   "stylistic", "styleset", "character-variant", "swash", "ornaments", "annotation", "historical-forms",
 ]);
-// Rules nest no deeper than this; deeper input is judged as a whole.
-const MAX_DEPTH = 32;
+// Rules nest no deeper than this; deeper input is judged as a whole. Each level judges its
+// whole subtree again, so the cost is about depth times size: real sheets nest a few levels.
+const MAX_DEPTH = 8;
 
 class CssStructureError extends Error {}
 
@@ -94,7 +95,10 @@ function unquotedUrlEnd(css: string, start: number): number {
 
 /** Whether `url(` (any case, not part of a longer name) starts at `index`. */
 function urlAt(css: string, index: number): boolean {
-  return (css[index] === "u" || css[index] === "U") && css.slice(index, index + 4).toLowerCase() === "url(" && !/[-\w\\]/u.test(css[index - 1] ?? "");
+  // Preceded by a name character (an ASCII one, an escape, or any non-ASCII character), it is
+  // part of a longer function name. An escaped spelling (u\72l) is not followed here: that only
+  // removes more, as the whole-sheet test still finds it.
+  return (css[index] === "u" || css[index] === "U") && css.slice(index, index + 4).toLowerCase() === "url(" && !/[-\w\\\u0080-\u{10ffff}]/u.test(css[index - 1] ?? "");
 }
 
 // An at-rule's name, matched where the item starts (sticky: no copy of the rest of the sheet).
@@ -184,6 +188,7 @@ class Sanitizer {
    * removed. Inside a style rule (`nested`), a group rule's block holds declarations.
    */
   rule(item: Item, depth: number, nested: boolean): string {
+    // (`nested` is false directly in an @scope body, where a group rule holds rules.)
     const whole = item.block === null ? item.prelude : `${item.prelude}{${item.block}}`;
     if (!cssLoadsOrExecutes(whole)) return whole;
     // Something in it loads: keep what can be kept.
@@ -193,17 +198,21 @@ class Sanitizer {
     }
     const name = item.atRule;
     if (name === null) return `${item.prelude}{${this.declarations(item.block, depth + 1)}}`;
-    if (name === "scope" || DECLARATION_RULES.has(name) || (nested && GROUP_RULES.has(name))) return `${item.prelude}{${this.declarations(item.block, depth + 1)}}`;
+    if (name === "scope") return `${item.prelude}{${this.declarations(item.block, depth + 1, true)}}`;
+    if (DECLARATION_RULES.has(name) || (nested && GROUP_RULES.has(name))) return `${item.prelude}{${this.declarations(item.block, depth + 1)}}`;
     if (GROUP_RULES.has(name) || KEYFRAMES.test(name)) return `${item.prelude}{${this.ruleList(item.block, depth + 1)}}`;
     this.removedRules += 1;
     return "";
   }
 
-  /** A declaration list, which may hold nested rules: its safe parts, as written. */
-  declarations(css: string, depth: number): string {
+  /**
+   * A declaration list, which may hold nested rules: its safe parts, as written. Directly in an
+   * @scope body (`scopeBody`), a group rule holds rules, as in a rule list.
+   */
+  declarations(css: string, depth: number, scopeBody = false): string {
     if (depth > MAX_DEPTH) throw new CssStructureError("rules nest too deeply");
     return items(css, true, false).map((item) => {
-      if (item.block !== null) return this.rule(item, depth, true);
+      if (item.block !== null) return this.rule(item, depth, !scopeBody);
       if (!cssLoadsOrExecutes(item.prelude)) return item.prelude;
       this.removedDeclarations += 1;
       return "";
