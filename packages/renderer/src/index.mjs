@@ -108,6 +108,54 @@ const VIEWPORT_SIZE = Object.freeze({
   min: Math.min(DESIGN_VIEWPORT.width, DESIGN_VIEWPORT.height),
   max: Math.max(DESIGN_VIEWPORT.width, DESIGN_VIEWPORT.height),
 });
+export const DRAWN_ID = "data-ninerr-html-id";
+const ESCAPE = /\\(?:[0-9a-f]{1,6}[ \t\n]?|[^\n0-9a-f]|$)/iuy;
+const ID_ATTRIBUTE = /\[\s*id\s*(?=\]|[~|^$*]?=)/iuy;
+
+/**
+ * A selector as the canvas draws it (#297): `#x` matches the drawn id as
+ * `:is([data-ninerr-html-id="x"],#x)`, whose `#x` matches nothing on the canvas but keeps
+ * an id's specificity, so the cascade is the page's own; `[id…]` names the drawn attribute.
+ * `selector` is the browser's serialization, with strings in double quotes.
+ */
+export function drawnSelector(selector) {
+  let drawn = "";
+  let index = 0;
+  const escapeAt = (at) => {
+    ESCAPE.lastIndex = at;
+    return ESCAPE.exec(selector)?.[0].length ?? 0;
+  };
+  while (index < selector.length) {
+    const char = selector[index];
+    if (char === "\"" || char === "'") {
+      let end = index + 1;
+      while (end < selector.length && selector[end] !== char) end += selector[end] === "\\" ? 2 : 1;
+      drawn += selector.slice(index, end + 1);
+      index = end + 1;
+    } else if (char === "\\") {
+      const length = Math.max(escapeAt(index), 1);
+      drawn += selector.slice(index, index + length);
+      index += length;
+    } else if (char === "#") {
+      let end = index + 1;
+      while (end < selector.length) {
+        if (selector[end] === "\\") end += Math.max(escapeAt(end), 1);
+        else if (/[-\w\u0080-\uffff]/u.test(selector[end])) end += 1;
+        else break;
+      }
+      const name = selector.slice(index + 1, end);
+      drawn += name === "" ? "#" : `:is([${DRAWN_ID}="${name}"],#${name})`;
+      index = end;
+    } else {
+      ID_ATTRIBUTE.lastIndex = index;
+      const attribute = char === "[" ? ID_ATTRIBUTE.exec(selector) : null;
+      drawn += attribute === null ? char : `[${DRAWN_ID}`;
+      index += attribute === null ? 1 : attribute[0].length;
+    }
+  }
+  return drawn;
+}
+
 /** A CSS value with its viewport lengths as pixels of DESIGN_VIEWPORT; strings are left as written. */
 export function designViewportLengths(value) {
   if (!/v(?:h|w|b|i|min|max)\b/iu.test(value)) return value;
@@ -146,6 +194,9 @@ export function planElement(node) {
       if (value === null) dropped += 1;
       // Links are rendered inert: the canvas is an editing surface, never a browser.
       else if (lower === "href") attributes["data-ninerr-href"] = value;
+      // An element's id is drawn under a name of ours (see drawnSelector): a real id would give
+      // the frame's document named access and clash across frames (#297).
+      else if (lower === "id") attributes[DRAWN_ID] = value;
       else attributes[namespace === "svg" ? SVG_ATTRIBUTES.get(lower) ?? lower : lower] = value;
     }
   }
@@ -173,7 +224,8 @@ function sanitizeAttribute(tag, namespace, name, rawValue) {
   const value = typeof rawValue === "number" || typeof rawValue === "boolean" ? String(rawValue) : rawValue;
   if (typeof value !== "string" || value.length > MAX_VALUE) return null;
   // Event handlers, inline styles (they go through `style`), and our own identity never pass.
-  if (name.startsWith("on") || name === "style" || name.startsWith("data-ninerr") || name.startsWith("data-lilac") || name === "id") return null;
+  if (name.startsWith("on") || name === "style" || name.startsWith("data-ninerr") || name.startsWith("data-lilac")) return null;
+  if (name === "id") return value;
   if (name.startsWith("aria-") && /^aria-[a-z]{1,32}$/u.test(name)) return value;
   if (/^data-[a-z0-9-]{1,64}$/u.test(name)) return value;
   if (namespace === "svg") return SVG_ATTRIBUTES.has(name) && !/javascript:|url\s*\(/iu.test(value) ? value : null;
@@ -276,9 +328,15 @@ export function createRenderer(root) {
       }
     };
     prune(rules[0]);
-    // Viewport lengths in its declarations, as in a layer's style (DESIGN_VIEWPORT).
+    // Viewport lengths in its declarations, as in a layer's style (DESIGN_VIEWPORT), and ids
+    // in its selectors as the canvas draws them (drawnSelector).
     const lengths = (group) => {
       for (const rule of group.cssRules) {
+        if (typeof rule.selectorText === "string") {
+          const written = rule.selectorText;
+          const drawn = drawnSelector(written);
+          if (drawn !== written) rule.selectorText = drawn;
+        }
         // The rule's declarations as written, rewritten at once: a shorthand that waits on
         // var() keeps its text only here, and writing properties one by one would reorder a
         // logical and physical pair, which changes which wins.
