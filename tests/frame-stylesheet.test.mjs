@@ -340,6 +340,9 @@ test("an id is drawn under the canvas's own name, and id selectors are drawn to 
     ['[ID^="a"]', '[data-ninerr-html-id^="a"]'],
     ['a[href="#x"]', 'a[href="#x"]'],
     ["[idx]", "[idx]"],
+    ['[*|id="a"]', '[data-ninerr-html-id="a"]'],
+    ["[*|idx]", "[*|idx]"],
+    ['[title="[*|id"]', '[title="[*|id"]'],
     [".plain > p", ".plain > p"],
   ]) assert.equal(drawnSelector(selector), drawn, selector);
   // The code carries no drawn id: a control a label names keeps its id, as before (review of #297).
@@ -447,6 +450,16 @@ test("a page's @scope with ids, and [*|id], apply on the canvas", browserTestOpt
       return { outer: style("outer").color, deep: style("outer").fontWeight, kept: style("kept").color, note: style("note").color, sheets: document.querySelectorAll("style[data-ninerr-sheet]").length, dropped: window.rendererForTest.stats.dropped };
     });
     assert.deepEqual(drawn, { outer: "rgb(255, 0, 0)", deep: "700", kept: "rgb(0, 0, 0)", note: "rgb(0, 128, 0)", sheets: 1, dropped: 0 });
+    // Each rebuild parses what the scope holds again, so only the first levels are rebuilt:
+    // a page nesting hundreds of id scopes around thousands of rules does not stall the canvas.
+    const elapsed = await page.evaluate(() => {
+      let sheet = Array.from({ length: 6000 }, (_, i) => `.c${i}{color:blue}`).join("");
+      for (let level = 0; level < 400; level += 1) sheet = `@scope (#s${level}) {${sheet}}`;
+      const started = performance.now();
+      window.rendererForTest.render({ rootIds: ["deep"], nodes: { deep: { id: "deep", type: "frame", parentId: null, children: [], props: { tag: "div", stylesheet: sheet }, metadata: {} } } });
+      return performance.now() - started;
+    });
+    assert.ok(elapsed < 5_000, `400 nested id scopes around 6,000 rules drawn in ${Math.round(elapsed)} ms`);
   } finally {
     await browser.close();
   }

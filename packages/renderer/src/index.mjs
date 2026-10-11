@@ -109,6 +109,8 @@ const VIEWPORT_SIZE = Object.freeze({
   max: Math.max(DESIGN_VIEWPORT.width, DESIGN_VIEWPORT.height),
 });
 export const DRAWN_ID = "data-ninerr-html-id";
+// How deep a page's nested @scope is drawn with its ids (the import keeps no deeper nesting).
+const MAX_SCOPE_DEPTH = 8;
 const ESCAPE = /\\(?:[0-9a-f]{1,6}[ \t\n]?|[^\n0-9a-f]|$)/iuy;
 const ID_ATTRIBUTE = /\[\s*(?:\*?\|)?id\s*(?=\]|[~|^$*]?=)/iuy;
 
@@ -334,13 +336,17 @@ export function createRenderer(root) {
     prune(rules[0]);
     // Viewport lengths in its declarations, as in a layer's style (DESIGN_VIEWPORT), and ids
     // in its selectors as the canvas draws them (drawnSelector).
-    const lengths = (group) => {
+    const lengths = (group, depth) => {
       for (let index = 0; index < group.cssRules.length; index += 1) {
         let rule = group.cssRules[index];
         // A nested @scope's start and limit are selectors too, but read-only: the rule is put
         // back in its place with them drawn (#310). insertRule adds one rule to this group, so
-        // nothing reaches past the frame's own @scope; a rule the browser refuses stays as it was.
-        if (rule instanceof ScopeRule && typeof rule.start === "string") {
+        // nothing reaches past the frame's own @scope; a rule the browser refuses stays as it was,
+        // and the rule put back is pruned again. Each rebuild parses what the rule holds again, so
+        // only scopes nested at most MAX_SCOPE_DEPTH deep are rebuilt (the import's own limit):
+        // deeper, their ids stay undrawn rather than the canvas stalling. A scope with no start
+        // ("@scope to (#x)") is left as written.
+        if (rule instanceof ScopeRule && typeof rule.start === "string" && depth < MAX_SCOPE_DEPTH) {
           const prelude = `@scope (${rule.start})${typeof rule.end === "string" ? ` to (${rule.end})` : ""}`;
           const drawnPrelude = `@scope (${drawnSelector(rule.start)})${typeof rule.end === "string" ? ` to (${drawnSelector(rule.end)})` : ""}`;
           if (drawnPrelude !== prelude && rule.cssText.startsWith(`${prelude} {`)) {
@@ -352,6 +358,7 @@ export function createRenderer(root) {
               group.insertRule(rule.cssText, index);
             }
             rule = group.cssRules[index];
+            prune(rule);
           }
         }
         if (typeof rule.selectorText === "string") {
@@ -367,10 +374,10 @@ export function createRenderer(root) {
           const drawn = designViewportLengths(written);
           if (drawn !== written) rule.style.cssText = drawn;
         }
-        if (rule.cssRules !== undefined) lengths(rule);
+        if (rule.cssRules !== undefined) lengths(rule, depth + 1);
       }
     };
-    lengths(rules[0]);
+    lengths(rules[0], 0);
   }
 
   function build(node) {
