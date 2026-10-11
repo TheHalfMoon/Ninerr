@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { buildCodeIr, designToCode, exportedComponents, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
-import { planElement } from "@ninerr/renderer";
+import { DRAWN_ID, planElement } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 import { styleProperties } from "./imports.ts";
 
@@ -54,10 +54,11 @@ function appliedStylesheet(document: any, nodeId: string): string | null {
 export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; stylesheet: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   let layers = 0;
-  // Labels and the controls they name (for → id). The canvas never renders ids, but the
-  // code needs them: each control a label in this export points to keeps an id, unique in
-  // the export (a second copy of a form gets email-2), and its label points to that id. A
-  // label names the next control with its id in document order, or else the last before.
+  // Labels and the controls they name (for → id). The canvas draws ids under a name of its
+  // own (DRAWN_ID), which the code never carries, but the code needs them: each control a
+  // label in this export points to keeps an id, unique in the export (a second copy of a
+  // form gets email-2), and its label points to that id. A label names the next control
+  // with its id in document order, or else the last before.
   const order: string[] = [];
   const walkOrder = (id: string, depth: number) => {
     if (depth > MAX_EXPORT_DEPTH || !document.nodes[id]) return;
@@ -117,6 +118,7 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
     const plan = planElement(node);
     const props: Record<string, string> = {};
     for (const [name, value] of Object.entries(plan.attributes as Record<string, string>)) {
+      if (name === DRAWN_ID) continue;
       if (name === "data-ninerr-href") props.href = value;
       else if (name === "class") props.className = value;
       else if (name === "for") props.htmlFor = value;

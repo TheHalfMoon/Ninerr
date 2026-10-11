@@ -71,10 +71,11 @@ test("hand-built hostile props are reduced to the allowlists", () => {
     },
   });
   assert.equal(plan.tag, "div", "an unknown or forbidden tag falls back to the node type's default");
-  assert.deepEqual(plan.attributes, { class: "card", "aria-label": "Card", "data-test": "1" });
+  // An id is drawn under the canvas's own name, never as a real id (#297).
+  assert.deepEqual(plan.attributes, { "data-ninerr-html-id": "spoof", class: "card", "aria-label": "Card", "data-test": "1" });
   assert.deepEqual(plan.style, { color: "red", "--brand": "#f00", padding: "4" });
   assert.equal(plan.text, "hello");
-  assert.ok(plan.dropped >= 12);
+  assert.ok(plan.dropped >= 11);
   const link = planElement({ id: "a", type: "element", props: { tag: "a", attributes: { href: " https://example.com/x ", target: "_top" } } });
   assert.deepEqual(link.attributes, { "data-ninerr-href": "https://example.com/x" }, "links are inert, and only _blank survives as a target");
   const image = planElement({ id: "i", type: "image", props: { attributes: { src: "https://evil.example/p.png", alt: "Chart" } } });
