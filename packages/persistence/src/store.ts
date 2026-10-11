@@ -915,7 +915,9 @@ export class ProjectStore {
     // The document the previous snapshot named is referenced by nothing now (the journal never
     // names objects, and archives are journal bytes): it is removed, so a project's objects do
     // not grow by a document per session (#244). After the new reference is durable, so a
-    // crash leaves at worst that one object behind. Removal is best effort.
+    // crash leaves at worst that one object behind. Removal is best effort. A snapshot
+    // reference restored on its own from an earlier session (not a crash: by a backup or sync
+    // tool) names a removed document, and the project is refused as missing it.
     const previous = this.#snapshotObject;
     this.#snapshotObject = documentObject;
     if (previous !== documentObject && !this.#stored.has(previous)) {
