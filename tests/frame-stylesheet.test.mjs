@@ -345,16 +345,21 @@ test("an id is drawn under the canvas's own name, and id selectors are drawn to 
     ['[title="[*|id"]', '[title="[*|id"]'],
     [".plain > p", ".plain > p"],
   ]) assert.equal(drawnSelector(selector), drawn, selector);
-  // The code carries no drawn id: a control a label names keeps its id, as before (review of #297).
+  // The code carries no drawn id (review of #297), but every id the page has, unique in the
+  // export, so the exported stylesheet's #id rules match it (#310): a control a label names, as
+  // before, and any other layer; a copy's gets a suffix.
   const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children, props, metadata: {} });
   const doc = { id: "doc", rootIds: ["wrapper"], nodes: {
-    wrapper: node("wrapper", null, ["label", "input"], { tag: "div", attributes: { id: "wrapper", class: "x" } }),
+    wrapper: node("wrapper", null, ["label", "input", "copy"], { tag: "div", attributes: { id: "wrapper", class: "x" } }),
     label: node("label", "wrapper", [], { tag: "label", text: "Email", attributes: { for: "email" } }),
     input: node("input", "wrapper", [], { tag: "input", attributes: { id: "email", type: "text" } }),
+    copy: node("copy", "wrapper", [], { tag: "p", text: "Again", attributes: { id: "wrapper" } }),
   } };
   const { code } = exportJsx(doc, "wrapper");
   assert.doesNotMatch(code, /data-ninerr/u, code);
   assert.match(code, /htmlFor="email"[\s\S]*id="email"/u, code);
+  assert.match(code, /<div className="x" id="wrapper">/u, code);
+  assert.match(code, /<p id="wrapper-2">Again<\/p>/u, code);
 });
 
 test("on the canvas, a page's id rules apply with an id's specificity, nested and after edits", browserTestOptions(), async () => {
