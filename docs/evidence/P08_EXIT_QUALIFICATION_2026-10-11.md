@@ -2,11 +2,11 @@
 
 Issue: #230 (P08 umbrella). Date: 2026-10-11.
 
-**Status: P08 is not closed.** Its engineering exit criteria are met, except #283, with the limits and deviations stated in the table. Two decisions are the founder's:
-- accepting, changing or rejecting the P08-G4 stress budgets, and where gate 13's budgets are judged (#275);
-- ratifying, or rejecting, the proposal to move #283 (imported stylesheets) out of P08.
+**Status: P08 is not closed.** Every engineering exit criterion is met, with the limits and deviations stated in the table. One decision is the founder's: accepting, changing or rejecting the P08-G4 stress budgets, and where gate 13's budgets are judged (#275).
 
-P09 does not start before these decisions. v1.0.0 is not authorized.
+P09 does not start before that decision. v1.0.0 is not authorized.
+
+*Updated after #283 was fixed (#296, #298, #301; main `6309cf9`). It had been proposed for the founder to move out of P08. That proposal is withdrawn.*
 
 ## The exit criteria (founder, #230)
 
@@ -21,14 +21,14 @@ P09 does not start before these decisions. v1.0.0 is not authorized.
 | Stress budgets accepted | **founder decision** | The P08-G4 budgets are proposed (`docs/evidence/P08_G4_SCALE_2026-10-10.md`) and not yet accepted. Gate 13's existing budgets are unchanged; #275 asks where they are judged, and its comment proposes a reference-hardware protocol. See below. |
 | Security qualification green | met | P08-G9 (`docs/evidence/P08_G9_SECURITY_2026-10-10.md`). The dogfooding's journey F held on every project. The open security items are scoped deviations (below). |
 | Real dogfooding completed | met | Seven public projects; every journey that applies passes, and every run is complete (`docs/evidence/P08_G11_DOGFOODING_2026-10-11.md`). |
-| Major functional workflow gaps fixed | met, except #283, **for the founder to ratify** | Fixed: codebase import of real components (#282, by #284, #285 and #287), conflict values (#236: #289), history after a reopen (#231: #288), selection after an insert (#274: #286). #283 stays open; see below. |
+| Major functional workflow gaps fixed | met | Fixed: codebase import of real components (#282, by #284, #285 and #287), conflict values (#236: #289), history after a reopen (#231: #288), selection after an insert (#274: #286), imported stylesheets (#283: #296, #298, #301). |
 
 ## The founder's decisions
 **1. The P08-G4 stress budgets.** Accept, change or reject them. Two points the proposals table no longer reflects:
 - **Disk.** "The object store bounded by a few snapshots of the document" read "no: #244" in G4. Since #290, the object store holds one snapshot document plus the journal's archived segments. The segments are the project's history, about 1 MiB each, and are kept on purpose.
 - **Edits.** The proposal for an edit at 10,000 layers is p95 ≤ 300 ms now, and ≤ 100 ms after #252. #252 stays open.
   - The dogfooded documents held 24 to 1,857 layers.
-  - At 1,857 layers, a repeated text edit in the editor took p50 288 ms and p95 382 ms. That p95 is above the 300 ms proposed for 10,000 layers. It is a different measure, though: the editor's whole step, including selecting the layer in the tree, where G4 measured the edit through the host's API.
+  - At 1,857 layers, a repeated text edit in the editor took p50 268 ms and p95 330 ms (run at `6309cf9`, with its stylesheets). That p95 is above the 300 ms proposed for 10,000 layers. It is a different measure, though: the editor's whole step, including selecting the layer in the tree, where G4 measured the edit through the host's API.
   - On the other six projects, the same step's p50 was 81–126 ms.
   - #252's full fix (copy-on-write nodes, incremental validation; also #108) is a performance grain the founder may place before or after P09.
 
@@ -37,7 +37,7 @@ P09 does not start before these decisions. v1.0.0 is not authorized.
 - stated reference hardware, by the protocol proposed in #275;
 - the runner's own measured speed.
 
-The budgets are unchanged. On 2026-10-11, four exact-head runs failed gate 13 on shared runners:
+The budgets are unchanged. On 2026-10-11, these exact-head runs failed gate 13 on shared runners:
 
 | Run | Runner | Measure | Result (budget 750 ms) | What followed |
 |---|---|---|---|---|
@@ -45,19 +45,19 @@ The budgets are unchanged. On 2026-10-11, four exact-head runs failed gate 13 on
 | #288 at 1218886 | windows-latest | end-to-end edit p95 | 1,060 ms | not re-run; the next head that ran CI, 41dacf1 (a code change and a merge of main), passed |
 | #289 at 3b39fab | macos-latest | deleting a layer, p95 | 1,013 ms | not re-run; the next head, bf6b516 (a merge of main), passed |
 | #290 at 74bd26b | macos-latest | deleting a layer, p95 | 803 ms | passed on re-run |
+| #296 at 50bb2c6 | macos-latest | deleting a layer, p95 | 798 ms | not re-run; the next head, a1c18ee, passed |
+| #295 at a3d705b (docs only) | macos-latest | deleting a layer, p95 | 843 ms | passed on re-run |
+| main 46b58b1, after #298 | macos-latest | deleting a layer, p95 | 838 ms | passed on re-run; locally 358 and 410 ms |
 
 Locally, the same test passes with wide margins.
-
-**3. #283, imported stylesheets: a proposal to move it out of P08.** It was classified, when found, as a fidelity gap "to be designed as its own grain before the P08 exit". This record proposes moving it to P09 or P10 instead. The founder may accept or reject that.
-- **What it is.** A real site imports unstyled. An import is one HTML file, and its linked stylesheets are not read. An inline stylesheet is dropped whole for a single `url()`, because the CSS sanitizer is all or nothing. Code imports of utility-class projects (five of the seven dogfooding projects use Tailwind) also come in unstyled, since their classes have no stylesheet behind them.
-- **Why it is not a P08 fix.** The design model has no stylesheets: every layer carries only its inline style. So sanitizing per rule alone would change nothing on the canvas. Closing the gap needs stylesheets in the design (scoped per frame, with persistence, history, export, agents and a migration), or the cascade resolved into inline styles at import.
-- **The risk.** It is a design-model change, not a defect fix, and it is not data loss: nothing is written to the source, and the import review says that stylesheets are not carried.
-- **If the founder keeps it in P08,** it is the next grain, and P08 closes after it.
 
 ## Open issues, classified
 | Issue | Class | Disposition |
 |---|---|---|
-| #283 imported stylesheets | fidelity, design-model change | the founder's decision (above) |
+| #297 `#id` selectors in imported stylesheets do not apply (the canvas draws no element ids) | fidelity | P09/P10 |
+| #299 frame stylesheet follow-ups (global names, file matching, export, budget) | fidelity, limits | P09/P10 |
+| #302 the editor is ready before its change stream connects | race | P09/P10. The likely cause of #300. |
+| #300 editor reload tests time out now and then locally | test flake, tracking | with #302 |
 | #252 edit cost grows with the document; #108 the same structural-sharing design | performance | the founder places it (above). Halved by #273. |
 | #275 gate 13 on shared runners | gate decision | the founder (above) |
 | #235 HTML and code imports keep text in different places | coherence | P09 |
@@ -77,4 +77,4 @@ Locally, the same test passes with wide margins.
 - The inspector cannot edit an element's classes.
 
 ## What P09 needs
-The master plan sets the order P08, then P09 (Ninerr UI and UX), then P10 (release candidate hardening), then the founder release gate. P08 closes on the founder's decisions above. The founder's directive of 2026-10-10 (the message recorded in `docs/provenance/FOUNDER_AUTHORIZATION_2026-10-10_DOGFOODING.md`) says: "Do not assume P09 is authorized merely because G11 is finished."
+The master plan sets the order P08, then P09 (Ninerr UI and UX), then P10 (release candidate hardening), then the founder release gate. P08 closes on the founder's decision above. The founder's directive of 2026-10-10 (the message recorded in `docs/provenance/FOUNDER_AUTHORIZATION_2026-10-10_DOGFOODING.md`) says: "Do not assume P09 is authorized merely because G11 is finished."
