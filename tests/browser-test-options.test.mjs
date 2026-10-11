@@ -50,10 +50,13 @@ test("a load that times out names its step and what was still loading", browserT
   t.after(() => browser.close());
   const page = await browser.newPage();
   const pending = watchRequests(page);
-  const failure = await step("opening the page", pending, () => page.goto(`http://127.0.0.1:${server.address().port}/page?ticket=secret`, { timeout: 1_500 })).then(() => null, (error) => error);
+  const failure = await step("opening the page", pending, () => page.goto(`http://127.0.0.1:${server.address().port}/page?ticket=secret`, { timeout: 5_000 })).then(() => null, (error) => error);
   assert.match(failure?.message ?? "", /^opening the page timed out; still loading: GET \/never \(image, \d+ s\)$/u);
   assert.doesNotMatch(failure.message, /secret/u);
   assert.equal(failure.cause?.name, "TimeoutError");
+  // A step with no watch names itself and nothing more.
+  const unwatched = await step("waiting for the title", null, () => page.waitForFunction(() => document.title === "never", null, { timeout: 200 })).then(() => null, (error) => error);
+  assert.equal(unwatched?.message, "waiting for the title timed out");
   // Other failures pass through as they are.
   const other = await step("a step", pending, () => Promise.reject(new TypeError("not a timeout"))).then(() => null, (error) => error);
   assert.equal(other?.message, "not a timeout");

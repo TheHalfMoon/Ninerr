@@ -73,8 +73,10 @@ export async function step(what, pending, action) {
     return await action();
   } catch (error) {
     if (error?.name !== "TimeoutError") throw error;
-    const open = pending?.() ?? [];
-    throw new Error(`${what} timed out; still loading: ${open.length === 0 ? "nothing" : open.join(", ")}`, { cause: error });
+    // Without a watch, what was loading is not known, and is not said.
+    const open = pending?.() ?? null;
+    const loading = open === null ? "" : `; still loading: ${open.length === 0 ? "nothing" : open.join(", ")}`;
+    throw new Error(`${what} timed out${loading}`, { cause: error });
   }
 }
 
