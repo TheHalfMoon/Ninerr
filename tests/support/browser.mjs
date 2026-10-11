@@ -7,6 +7,8 @@ import { homedir } from "node:os";
 import { extname, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { closeAfterTest } from "./cleanup.mjs";
+
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 export const TEST_ORIGIN = "http://ninerr.test";
 
@@ -31,15 +33,23 @@ export function findBrowser() {
 /**
  * Options for node:test: skip locally when no browser exists; never skip in CI. A browser test
  * that waits without end fails, by its name, after `timeout` (10 minutes by default; the
- * slowest takes about a minute in CI), so the log names it (#305). What the abandoned test left
- * open (a browser, a host) can still hold the run until the job's limit: --test-force-exit would
- * end it, but on Windows it crashes Node with a libuv assertion while handles are closing. A
- * hang in a `t.after` hook is not bounded by this.
+ * slowest takes about a minute in CI), so the log names it (#305). What it opened is closed
+ * after it however it ends, when opened with launchBrowser or startTestHost (cleanup.mjs).
+ * (--test-force-exit would end the run instead, but on Windows it crashes Node with a libuv
+ * assertion while handles are closing.)
  */
 export function browserTestOptions({ timeout = 600_000 } = {}) {
   const found = findBrowser();
   if (found === null && process.env.CI !== "true") return { skip: "no Chromium found (set NINERR_TEST_BROWSER)" };
   return { timeout };
+}
+
+/** chromium.launch, the browser closed after the current test (closeAfterTest). */
+export async function launchBrowser(options) {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch(options);
+  browser.close = closeAfterTest(browser.close.bind(browser), "a browser");
+  return browser;
 }
 
 const TYPES = { ".mjs": "text/javascript", ".js": "text/javascript", ".html": "text/html", ".css": "text/css", ".json": "application/json" };
@@ -51,8 +61,7 @@ const TYPES = { ".mjs": "text/javascript", ".js": "text/javascript", ".html": "t
 export async function launchPage({ extraRoutes = {} } = {}) {
   const executablePath = findBrowser();
   if (executablePath === null) throw new Error("no Chromium found for the browser test (set NINERR_TEST_BROWSER)");
-  const { chromium } = await import("playwright-core");
-  const browser = await chromium.launch({ executablePath, headless: true, args: ["--no-sandbox"] });
+  const browser = await launchBrowser({ executablePath, headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext();
   const requests = [];
   await context.route("**/*", async (route) => {

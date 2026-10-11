@@ -1,11 +1,10 @@
-import { findBrowser } from "./browser.mjs";
+import { findBrowser, launchBrowser } from "./browser.mjs";
 
 // Open the Ninerr editor of a running studio host in Chromium, as a person would from its
 // launch link. Every request outside the host's origin is aborted and recorded, and page
 // errors are collected, so a test can assert the editor stayed local and clean.
 export async function openEditor(host, { beforeOpen } = {}) {
-  const { chromium } = await import("playwright-core");
-  const browser = await chromium.launch({ executablePath: findBrowser(), headless: true, args: ["--no-sandbox"] });
+  const browser = await launchBrowser({ executablePath: findBrowser(), headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const foreign = [];
   const errors = [];

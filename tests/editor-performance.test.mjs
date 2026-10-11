@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startStudioHost } from "../packages/studio-host/src/index.ts";
+import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
 
