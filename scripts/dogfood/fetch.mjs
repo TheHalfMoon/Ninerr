@@ -20,14 +20,15 @@ const { projects } = JSON.parse(readFileSync(new URL("./projects.json", import.m
 // Hooks off, no credential helper, no prompt, and no symbolic links checked out (a link could
 // lead a later write out of the copy): a public clone needs none of them.
 const git = (cwd, ...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", "-c", "core.askPass=", "-c", "core.symlinks=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).trim();
-// The license text each declared license must carry.
-const LICENSE_TEXT = { MIT: /Permission is hereby granted, free of charge/u };
+// Two sentences of each declared license's text, which a similar license (MIT-0, BSL-1.0) lacks.
+const LICENSE_TEXT = { MIT: [/Permission is hereby granted, free of charge, to any person obtaining a copy/u, /The above copyright notice and this permission notice shall be included/u] };
 /** The project's license file is there and carries its declared license's text. */
 function checkLicense(project, folder) {
   const file = join(folder, project.licenseFile);
   if (!existsSync(file)) throw new Error(`${project.name}: ${project.licenseFile} is missing`);
   const expected = LICENSE_TEXT[project.license];
-  if (expected === undefined || !expected.test(readFileSync(file, "utf8"))) throw new Error(`${project.name}: ${project.licenseFile} is not the ${project.license} license text`);
+  const text = readFileSync(file, "utf8").replace(/\s+/gu, " ");
+  if (expected === undefined || !expected.every((sentence) => sentence.test(text))) throw new Error(`${project.name}: ${project.licenseFile} is not the ${project.license} license text`);
 }
 mkdirSync(target, { recursive: true });
 for (const project of projects) {

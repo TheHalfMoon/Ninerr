@@ -39,8 +39,8 @@ Do not ask me to nominate the seven projects.
 ```
 
 ## How Ninerr applies it
-- The seven projects are public and MIT-licensed, each pinned to a commit in `scripts/dogfood/projects.json`. `scripts/dogfood/fetch.mjs` checks each license file for the MIT text.
+- The seven projects are public and MIT-licensed, each pinned to a commit in `scripts/dogfood/projects.json`. `scripts/dogfood/fetch.mjs` checks each license file for the MIT license text (two of its sentences).
 - They are registered in `docs/provenance/LICENSE_REGISTER.json` as kind `dogfood-subject` (category B: their own license governs them) and listed in `THIRD_PARTY_NOTICES.md`.
 - None of their files are committed to this repository or shipped in a release. The local working copies keep their license files.
 - The founder's statement of broad permission is not relied on for any redistribution: nothing of the projects is redistributed.
-- Their names and the testing results are published in `docs/evidence/P08_G11_DOGFOODING_2026-10-11.md`.
+- Their names and the testing results are published in `docs/evidence/P08_G11_DOGFOODING_2026-10-11.md`, which lands in the PR after the harness.

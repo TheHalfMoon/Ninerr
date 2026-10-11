@@ -29,7 +29,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startStudioHost } from "../../packages/studio-host/src/index.ts";
@@ -60,7 +60,12 @@ const result = {
   findings: [],
   timings: {},
 };
-const journey = (key) => (result.journeys[key] ??= { checks: [], status: "pass" });
+// The journey last recorded into: the one running when an error stops the run.
+let lastJourney = null;
+const journey = (key) => {
+  lastJourney = key;
+  return (result.journeys[key] ??= { checks: [], status: "pass" });
+};
 /** A check: passed or not, with what was expected and seen. A failure fails its journey. */
 function check(key, what, passed, detail = undefined) {
   const entry = journey(key);
@@ -102,18 +107,29 @@ const base = join(work, project.name);
 // nor lie inside it.
 const inside = (outer, inner) => {
   const path = relative(outer, inner);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 };
 const realFetched = realpathSync(fetched);
-const resolvedBase = resolve(base);
+// Through links: the real path of the nearest folder of base that exists, then the rest.
+const realOf = (path) => {
+  const missing = [];
+  let at = resolve(path);
+  while (!existsSync(at)) {
+    missing.unshift(basename(at));
+    at = dirname(at);
+  }
+  return join(realpathSync(at), ...missing);
+};
+const resolvedBase = realOf(base);
 if (inside(resolvedBase, realFetched) || inside(realFetched, resolvedBase)) throw new Error(`the work folder ${base} must be apart from the fetched project ${fetched}`);
-// The fetched folder as it was: a clone already dirty is not blamed on Ninerr.
-const fetchedStatus = git(fetched, "status", "--porcelain");
+// The fetched folder must be clean, so "not written" below means it.
+if (git(fetched, "status", "--porcelain", "--ignored") !== "") throw new Error(`${fetched} has changes or untracked files: fetch it again`);
 rmSync(base, { recursive: true, force: true });
 mkdirSync(base, { recursive: true });
 const source = join(base, "source");
 // A local clone: write-backs land in it, never in the fetched folder.
-git(base, "clone", "-q", "--no-hardlinks", fetched, source);
+// No symbolic links checked out: a write-back through one could land outside the copy.
+git(base, "-c", "core.symlinks=false", "clone", "-q", "--no-hardlinks", "--config", "core.symlinks=false", fetched, source);
 const projectsRoot = join(base, "projects");
 mkdirSync(projectsRoot);
 const shots = join(base, "screenshots");
@@ -761,15 +777,17 @@ try {
   }
 
   // ---- F: security and privacy ----
-  check("F", `no request left the host (${requests} requests)`, foreign.length === 0, foreign.slice(0, 5));
+  check("F", `no request from the editor left the host (${requests} requests)`, foreign.length === 0, foreign.slice(0, 5));
   check("F", "the editor raised no errors", pageErrors.length === 0, { errors: pageErrors.slice(0, 5), failedResponses: failedResponses.slice(0, 10) });
   result.failedResponses = failedResponses;
   const sandbox = await page.evaluate(() => document.querySelector("iframe")?.getAttribute("sandbox"));
   check("F", "the canvas frame is sandboxed without scripts", typeof sandbox === "string" && !sandbox.includes("allow-scripts"), { sandbox });
   const scripts = await page.evaluate(() => document.querySelector("iframe")?.contentDocument?.querySelectorAll("script").length ?? -1);
   check("F", "no script element reached the canvas", scripts === 0, { scripts });
-  check("F", "the fetched project was not written", git(fetched, "status", "--porcelain") === fetchedStatus);
+  check("F", "the fetched project was not written", git(fetched, "status", "--porcelain", "--ignored") === "");
 } catch (error) {
+  // The journey it stopped in did not finish: it is not a pass.
+  if (lastJourney !== null && result.journeys[lastJourney].status !== "fail") result.journeys[lastJourney].status = "stopped";
   result.error = error instanceof Error ? `${error.message}\n${error.stack?.split("\n").slice(1, 4).join("\n")}` : String(error);
   process.stdout.write(`ERROR ${result.error}\n`);
   await shot(page, "error").catch(() => {});
