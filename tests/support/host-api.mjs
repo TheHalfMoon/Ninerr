@@ -4,10 +4,23 @@ import assert from "node:assert/strict";
 
 import { startStudioHost } from "../../packages/studio-host/src/index.ts";
 
+/**
+ * fetch, but a request that fails before any answer names itself and its cause (the socket
+ * error, such as ECONNRESET), which a bare "fetch failed" does not (#306).
+ */
+async function request(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const cause = error?.cause;
+    throw new Error(`${init.method} ${new URL(url).pathname} failed before an answer: ${[cause?.code, cause?.message ?? error?.message].filter(Boolean).join(" ")}`, { cause: error });
+  }
+}
+
 /** `call(method, path, body)` against the host at `base`, as the holder of `token`. */
 export function client(base, token) {
   return async (method, path, body) => {
-    const response = await fetch(`${base}${path}`, {
+    const response = await request(`${base}${path}`, {
       method,
       headers: { authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "content-type": "application/json" }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -21,7 +34,7 @@ export function client(base, token) {
 export function mcpClient(mcpUrl, token) {
   let id = 0;
   const rpc = async (method, params) => {
-    const response = await fetch(mcpUrl, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }) });
+    const response = await request(mcpUrl, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }) });
     return (await response.json()).result;
   };
   return { rpc, tool: (name, args) => rpc("tools/call", { name, arguments: args }) };
