@@ -104,7 +104,17 @@ export function sanitizeImportedCssText(
   if (Buffer.byteLength(css, "utf8") > maxBytes) {
     throw new ImportSecurityError("imported stylesheet exceeds maxCssBytes");
   }
-  const unsafe = cssSecurityViews(css).some((view) => (
+  const unsafe = cssLoadsOrExecutes(css);
+  return { cssText: unsafe ? null : css.trim(), unsafe };
+}
+
+/**
+ * Whether untrusted CSS could fetch or execute anything: an @import, a loading function
+ * (url, image, image-set, src), a script URL, an expression, a binding, or text that ends a
+ * <style> element, in any view of it.
+ */
+export function cssLoadsOrExecutes(css: string): boolean {
+  return cssSecurityViews(css).some((view) => (
     /@import\b/u.test(view)
     || /expression\s*\(/u.test(view)
     || /url\s*\(/u.test(view)
@@ -113,9 +123,14 @@ export function sanitizeImportedCssText(
     || /(?:javascript|vbscript):/u.test(view)
     || /-moz-binding\s*:/u.test(view)
     || /(?:^|[;{])\s*behavior\s*:/u.test(view)
+    // CSS Values 4's src(), a url() by another name (#283 review).
+    // (a function token: no space before its parenthesis, so a container named src is not one).
+    || /(?:^|[^-\w])src\(/u.test(view)
+    // Text that would end a <style> element written out as HTML.
+    || /<\/style/u.test(view)
   ));
-  return { cssText: unsafe ? null : css.trim(), unsafe };
 }
+
 
 export function isForbiddenImportTag(tag: string): boolean {
   const normalized = tag.toLowerCase();
