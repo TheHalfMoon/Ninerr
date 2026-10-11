@@ -452,14 +452,16 @@ test("a page's @scope with ids, and [*|id], apply on the canvas", browserTestOpt
     assert.deepEqual(drawn, { outer: "rgb(255, 0, 0)", deep: "700", kept: "rgb(0, 0, 0)", note: "rgb(0, 128, 0)", sheets: 1, dropped: 0 });
     // Each rebuild parses what the scope holds again, so only the first levels are rebuilt:
     // a page nesting hundreds of id scopes around thousands of rules does not stall the canvas.
-    const elapsed = await page.evaluate(() => {
+    const deep = await page.evaluate(() => {
       let sheet = Array.from({ length: 6000 }, (_, i) => `.c${i}{color:blue}`).join("");
       for (let level = 0; level < 400; level += 1) sheet = `@scope (#s${level}) {${sheet}}`;
       const started = performance.now();
+      const dropped = window.rendererForTest.stats.dropped;
       window.rendererForTest.render({ rootIds: ["deep"], nodes: { deep: { id: "deep", type: "frame", parentId: null, children: [], props: { tag: "div", stylesheet: sheet }, metadata: {} } } });
-      return performance.now() - started;
+      return { elapsed: performance.now() - started, kept: document.querySelector('style[data-ninerr-sheet="deep"]') !== null, dropped: window.rendererForTest.stats.dropped - dropped };
     });
-    assert.ok(elapsed < 5_000, `400 nested id scopes around 6,000 rules drawn in ${Math.round(elapsed)} ms`);
+    assert.deepEqual([deep.kept, deep.dropped], [true, 0], "the sheet is drawn, not dropped");
+    assert.ok(deep.elapsed < 5_000, `400 nested id scopes around 6,000 rules drawn in ${Math.round(deep.elapsed)} ms`);
   } finally {
     await browser.close();
   }

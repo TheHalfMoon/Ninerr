@@ -109,7 +109,8 @@ const VIEWPORT_SIZE = Object.freeze({
   max: Math.max(DESIGN_VIEWPORT.width, DESIGN_VIEWPORT.height),
 });
 export const DRAWN_ID = "data-ninerr-html-id";
-// How deep a page's nested @scope is drawn with its ids (the import keeps no deeper nesting).
+// How deep a page's nested @scope is rebuilt with its ids drawn: the import sanitizer's own
+// nesting limit. Deeper ones are kept with their ids undrawn.
 const MAX_SCOPE_DEPTH = 8;
 const ESCAPE = /\\(?:[0-9a-f]{1,6}[ \t\n]?|[^\n0-9a-f]|$)/iuy;
 const ID_ATTRIBUTE = /\[\s*(?:\*?\|)?id\s*(?=\]|[~|^$*]?=)/iuy;
@@ -343,10 +344,10 @@ export function createRenderer(root) {
         // back in its place with them drawn (#310). insertRule adds one rule to this group, so
         // nothing reaches past the frame's own @scope; a rule the browser refuses stays as it was,
         // and the rule put back is pruned again. Each rebuild parses what the rule holds again, so
-        // only scopes nested at most MAX_SCOPE_DEPTH deep are rebuilt (the import's own limit):
-        // deeper, their ids stay undrawn rather than the canvas stalling. A scope with no start
-        // ("@scope to (#x)") is left as written.
-        if (rule instanceof ScopeRule && typeof rule.start === "string" && depth < MAX_SCOPE_DEPTH) {
+        // only scopes nested at most MAX_SCOPE_DEPTH deep are rebuilt: deeper, their ids stay
+        // undrawn rather than the canvas stalling. A scope with no start ("@scope to (#x)") is
+        // left as written.
+        if (rule instanceof ScopeRule && typeof rule.start === "string" && depth <= MAX_SCOPE_DEPTH) {
           const prelude = `@scope (${rule.start})${typeof rule.end === "string" ? ` to (${rule.end})` : ""}`;
           const drawnPrelude = `@scope (${drawnSelector(rule.start)})${typeof rule.end === "string" ? ` to (${drawnSelector(rule.end)})` : ""}`;
           if (drawnPrelude !== prelude && rule.cssText.startsWith(`${prelude} {`)) {
