@@ -21,11 +21,20 @@ Status: **P08 ACTIVE.** Every engineering exit criterion is met, with stated lim
 
 P08 tests complete end-to-end journeys repeatedly and adds property and state-machine coverage, before any final UI design (P09). Its grains G1 to G11 are merged, each with its own P08 record under docs/evidence. G11 dogfooded Ninerr on seven public open-source projects (`docs/evidence/P08_G11_DOGFOODING_2026-10-11.md`).
 
+Since the exit record, independent P08 follow-ups have landed, each with a regression test that failed first, fresh-context review and exact-head CI:
+- the editor is ready only after its change stream has caught up (#302, PR #304);
+- a hung browser test fails by its name, and what it opened is closed after it, so the run ends (#305, PRs #307 and #311);
+- a page's `#id` rules apply on the canvas (#297, PR #309);
+- the import review says when a chosen stylesheet file answers a web address or several links, and an undo or revert that would bring back an unsafe stylesheet is refused (#299, PRs #308 and #313);
+- write-back no longer writes over a file style it cannot read exactly, a data-loss fix found in review (#291, PR #312).
+
+One more decision is recorded: whether Ninerr may start Windows system tools to read a projects folder's access list, which its no-process rule forbids today (#268). Until then it stays the stated platform deviation.
+
 ## Canonical main
 
-`6309cf905ef31b25365ab9baf18b7878cc4df2a2`
+`cba135192bc63c2b073cff2e18d8c16eef0f33f0`
 
-This is the normal merge commit for PR #301 (#283, viewport lengths drawn against a design viewport). It is the latest commit whose post-merge run was verified when this page was updated. The CI and Desktop workflows completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three.
+This is the normal merge commit for PR #313 (#299, the import review's notes on linked stylesheets). It is the latest commit whose post-merge run was verified when this page was updated. The CI and Desktop workflows completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three.
 
 ## Before the v1 tag
 1. **License.** Resolved: Ninerr is Apache-2.0 (`LICENSE`), after the A/B source-rights audit (`docs/evidence/N0_G7A_LICENSE_2026-10-09.md`).
