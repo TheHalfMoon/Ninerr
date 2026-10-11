@@ -2,7 +2,7 @@
 
 Issue: #230 (P08 umbrella). Date: 2026-10-11.
 
-**Status: P08 is not closed. Its engineering exit criteria are met, with two caveats stated below, and two decisions are the founder's:**
+**Status: P08 is not closed.** Its engineering exit criteria are met, except #283, with the limits and deviations stated in the table. Two decisions are the founder's:
 - accepting, changing or rejecting the P08-G4 stress budgets, and where gate 13's budgets are judged (#275);
 - ratifying, or rejecting, the proposal to move #283 (imported stylesheets) out of P08.
 
@@ -13,7 +13,7 @@ P09 does not start before these decisions. v1.0.0 is not authorized.
 | Criterion | State | Evidence |
 |---|---|---|
 | No known critical correctness defect | met | No open issue is a critical correctness defect. The open correctness issues are minor and none loses data: #294 (style shorthand order), #291 (write-back conflict follow-ups), #235 (HTML and code imports keep text in different places). #172 (live and reloaded drawing differed) is fixed by #293. |
-| No unresolved data-loss risk | met, with stated limits | The data-loss findings of P08 are fixed and their issues closed: #239 (a journal cut between whole lines, fixed by #243), #258 (a journal that reached its cap and refused edits, #262), #260 (an edit landing in another project, #263) and #261 (two hosts on one projects folder losing records, #264). Storage growth (#244) is fixed by #290. The limits, recorded where they were decided: after a crash, whole journal lines lost since the last checkpoint still cannot be told from changes never made (#239, `docs/MIGRATION.md`); a snapshot reference restored on its own from an earlier session no longer opens, and objects from sessions before #290 are not swept (#290). |
+| No unresolved data-loss risk | met, with stated limits | The data-loss findings of P08 are fixed and their issues closed: #239 (a journal cut between whole lines, fixed by #243), #258 (a journal that reached its cap and refused edits, #262), #260 (an edit landing in another project, #263) and #261 (two hosts on one projects folder losing records, #264). Storage growth (#244) is fixed by #290. The limits, recorded where they were decided: after a crash, or a close that cannot write, whole journal lines lost since the last checkpoint still cannot be told from changes never made (#239, `docs/MIGRATION.md`); a snapshot reference restored on its own from an earlier session no longer opens, and objects from sessions before #290 are not swept (#290). |
 | #185 resolved with evidence | met | Done in N0 (#198). |
 | End-to-end journeys green | met | P08-G1 (`docs/evidence/P08_G1_JOURNEYS_2026-10-09.md`); `tests/journeys.test.mjs` in CI on Linux, macOS and Windows; and the seven-project dogfooding, journeys A–F (`docs/evidence/P08_G11_DOGFOODING_2026-10-11.md`). |
 | Cross-platform evidence green | met, with recorded deviations | P08-G7 (`docs/evidence/P08_G7_CROSS_PLATFORM_2026-10-10.md`). Every PR's exact-head CI runs the suite on ubuntu-latest, macos-latest and windows-latest. Windows skips 6 tests, each with its reason stated where it runs. Gate-13 timing budgets fail now and then on shared runners (#275). |
@@ -42,8 +42,8 @@ The budgets are unchanged. On 2026-10-11, four exact-head runs failed gate 13 on
 | Run | Runner | Measure | Result (budget 750 ms) | What followed |
 |---|---|---|---|---|
 | main 6390ee6, after #287 | windows-latest | end-to-end edit p95 | 1,297 ms | passed on re-run |
-| #288 at 1218886 | windows-latest | end-to-end edit p95 | 1,060 ms | the next head passed |
-| #289 at 3b39fab | macos-latest | deleting a layer, p95 | 1,013 ms | the next head passed |
+| #288 at 1218886 | windows-latest | end-to-end edit p95 | 1,060 ms | not re-run; the next head that ran CI, 41dacf1 (a code change and a merge of main), passed |
+| #289 at 3b39fab | macos-latest | deleting a layer, p95 | 1,013 ms | not re-run; the next head, bf6b516 (a merge of main), passed |
 | #290 at 74bd26b | macos-latest | deleting a layer, p95 | 803 ms | passed on re-run |
 
 Locally, the same test passes with wide margins.
@@ -68,7 +68,7 @@ Locally, the same test passes with wide margins.
 | #270 evidence-store edge cases | hardening | recorded |
 | #176 intermittent desktop-shell CI failure | flake, tracking | cause unknown; not reproduced locally |
 | #139 release umbrella | release | the founder release gate, after P10 |
-| #78, #79 | parity gaps from P05 (component states bound to source; token drift) | not re-qualified in P08; for P10's parity disposition |
+| #78, #79 | parity gaps from P05 (component states bound to source; token drift) | not re-qualified in P08; proposed for the parity disposition the completion definition requires (`docs/MASTER_PLAN.md`) |
 | #135, #132, #94, #89, #64 | earlier-phase follow-ups | non-blocking, as each issue records |
 
 **UX for P09, from the dogfooding:**

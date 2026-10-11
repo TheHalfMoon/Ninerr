@@ -23,9 +23,9 @@ P08 tests complete end-to-end journeys repeatedly and adds property and state-ma
 
 ## Canonical main
 
-`1f0ee8e7f2edc45ed65bdf13bf39753e3d0da5c3`
+`2b630f4c99a5b9bad9b9b9db6d917cc1e98f4102`
 
-This is the normal merge commit for PR #293 (#172). It is the latest commit whose post-merge run was verified when this page was updated. The CI and Desktop workflows completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three. The harness merge that followed, PR #292, changes only `scripts/dogfood/`, the license register, the notices, a founder-authorization record (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-10_DOGFOODING.md`) and the identity census.
+This is the normal merge commit for PR #292, the P08-G11 dogfooding harness. It is the latest commit whose post-merge run was verified when this page was updated. The CI and Desktop workflows completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three. #292 changes only `scripts/dogfood/`, the license register, the notices, a founder-authorization record (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-10_DOGFOODING.md`) and the identity census. The merge before it, #293 (#172), changed the edit path.
 
 ## Before the v1 tag
 1. **License.** Resolved: Ninerr is Apache-2.0 (`LICENSE`), after the A/B source-rights audit (`docs/evidence/N0_G7A_LICENSE_2026-10-09.md`).
