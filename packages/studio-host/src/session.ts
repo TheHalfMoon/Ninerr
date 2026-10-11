@@ -366,7 +366,9 @@ export class StudioSession {
       this.#base = null;
       throw this.#storeFailure(error);
     }
-    // The room applied the same transaction to the same document the store holds.
+    // The room applied the same transaction to the same document the store holds, equal to the
+    // store's up to key order (the store sorts keys, #172): it is only the next commit's base,
+    // and nothing draws or exports it.
     this.#base = { document: nextDocument, past: [], future: [] };
     const event: ChangeEvent = {
       type: "transaction",
