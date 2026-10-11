@@ -155,6 +155,19 @@ test("a page's linked stylesheets are read from the files chosen with it, and no
   }
 });
 
+// #299 item 2: a link is matched to a chosen file by name only, so a link to another site is
+// answered by the file, and two links with one name by the same file: the review says both.
+test("the review says when a chosen file answers a link to another site, or more than one link", async (t) => {
+  const running = await host(t);
+  const html = '<link rel="stylesheet" href="https://cdn.example/x/site.css"><link rel="stylesheet" href="css/site.css"><link rel="stylesheet" href="theme.css"><p class="lead">Hi</p>';
+  const review = await ok(running.call("POST", "/api/import", { html, name: "Page", stylesheets: [{ name: "site.css", css: SITE_CSS }, { name: "theme.css", css: ".lead{font-weight:700}" }] }), "review");
+  assert.ok(review.notes.includes("Read in place of a stylesheet on another site, which is never fetched: site.css for https://cdn.example/x/site.css."), JSON.stringify(review.notes));
+  assert.ok(review.notes.includes("One chosen file read for more than one link: site.css (2 links)."), JSON.stringify(review.notes));
+  // A local link answered once by its own file is said as before, and nothing more.
+  const plain = await ok(running.call("POST", "/api/import", { html: '<link rel="stylesheet" href="theme.css"><p>Hi</p>', name: "Plain", stylesheets: [{ name: "theme.css", css: ".lead{font-weight:700}" }] }), "review");
+  assert.ok(!plain.notes.some((note) => /in place of|more than one link/u.test(note)), JSON.stringify(plain.notes));
+});
+
 test("in the editor, a page imported with its stylesheet file is drawn styled", browserTestOptions(), async (t) => {
   const running = await host(t);
   const editor = await openEditor(running.host);
