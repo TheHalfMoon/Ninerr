@@ -20,20 +20,21 @@
 //   D  source-linked editing: write back, an external change elsewhere, and a conflict
 //   E  an MCP agent: inspect, edit, the person's undo and redo, a delete approved in the
 //      editor, and a refusal for another project
-//   F  security and privacy: no request leaves the host; imported scripts never run
+//   F  security and privacy: no request from the editor leaves the host (the browser's
+//      requests are watched; the host process's own are not); imported scripts never run
 //   G  timings of each step (median, 95th percentile, maximum and sample count)
 //
-// The result is written to <work folder>/<name>/result.json, with screenshots beside it.
+// The result is written to <work folder>/<name>/result.json, with screenshots beside it. The
+// exit code is 1 when a check failed or the run stopped on an error.
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import { join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startStudioHost } from "../../packages/studio-host/src/index.ts";
 import { serializeDocument } from "../../packages/document-model/src/index.mjs";
 import { PROJECT_FILES } from "../../packages/persistence/src/index.ts";
-import { buildCodeIr } from "../../packages/code-ir/src/index.ts";
 import { findBrowser } from "../../tests/support/browser.mjs";
 
 const args = process.argv.slice(2);
@@ -53,7 +54,7 @@ if (!sources || !work || !project || !Number.isInteger(SAMPLES) || SAMPLES < 1) 
 const git = (cwd, ...rest) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...rest], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 const result = {
   project: { name: project.name, repository: project.repository, commit: project.commit, license: project.license, category: project.category },
-  ninerr: { commit: git(REPO, "rev-parse", "HEAD"), dirty: git(REPO, "status", "--porcelain", "--untracked-files=no") !== "" },
+  ninerr: { commit: git(REPO, "rev-parse", "HEAD"), dirty: git(REPO, "status", "--porcelain") !== "" },
   machine: { platform: process.platform, arch: process.arch, cpu: cpus()[0]?.model ?? "unknown", cores: cpus().length, memoryGiB: Math.round(totalmem() / 2 ** 30), node: process.version },
   journeys: {},
   findings: [],
@@ -64,7 +65,7 @@ const journey = (key) => (result.journeys[key] ??= { checks: [], status: "pass" 
 function check(key, what, passed, detail = undefined) {
   const entry = journey(key);
   entry.checks.push({ what, passed: Boolean(passed), ...(detail === undefined ? {} : { detail }) });
-  if (!passed && entry.status === "pass") entry.status = "fail";
+  if (!passed) entry.status = "fail";
   process.stdout.write(`${passed ? "ok  " : "FAIL"} ${key} ${what}${detail === undefined || passed ? "" : `: ${JSON.stringify(detail).slice(0, 300)}`}\n`);
   return Boolean(passed);
 }
@@ -97,6 +98,17 @@ function summarize(samples) {
 const fetched = join(sources, project.name);
 if (git(fetched, "rev-parse", "HEAD") !== project.commit) throw new Error(`${fetched} is not at ${project.commit}`);
 const base = join(work, project.name);
+// The work folder is removed and rebuilt: it must be neither the fetched folder nor hold it,
+// nor lie inside it.
+const inside = (outer, inner) => {
+  const path = relative(outer, inner);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+};
+const realFetched = realpathSync(fetched);
+const resolvedBase = resolve(base);
+if (inside(resolvedBase, realFetched) || inside(realFetched, resolvedBase)) throw new Error(`the work folder ${base} must be apart from the fetched project ${fetched}`);
+// The fetched folder as it was: a clone already dirty is not blamed on Ninerr.
+const fetchedStatus = git(fetched, "status", "--porcelain");
 rmSync(base, { recursive: true, force: true });
 mkdirSync(base, { recursive: true });
 const source = join(base, "source");
@@ -113,7 +125,7 @@ const folder = project.kind === "codebase" ? join(source, ...project.folder.spli
 const executablePath = findBrowser();
 if (executablePath === null) throw new Error("no Chromium or Edge found (set NINERR_TEST_BROWSER)");
 const { chromium } = await import("playwright-core");
-const browser = await chromium.launch({ executablePath, headless: true, args: ["--no-sandbox"] });
+const browser = await chromium.launch({ executablePath, headless: true });
 const foreign = [];
 const pageErrors = [];
 // Every answer of 400 or more the editor received, by path and status: the console only says
@@ -214,6 +226,8 @@ let editor = await timed("editor open", () => openEditor(host));
 let { page } = editor;
 const doc = () => host.session.document;
 let imported = []; // { frameId, layers, label }
+// The host process journey C kills; stopped in the finally below whatever happens.
+let child = null;
 
 try {
   // ---- A: import and inspect ----
@@ -289,9 +303,8 @@ try {
       check("A", `${component}: ${bound.length} bound layers, every source text drawn (${texts.length} texts)`, mismatched.length === 0 && bound.length === layers, { layers, bound: bound.length, mismatched: mismatched.slice(0, 3) });
       // Its provenance: the file and component, and a source path for every element.
       check("A", `${component}: each layer names its file, component and position in the source`, bound.every((node) => typeof node.props.codeSource.path === "string"));
-      // And the source still parses to the same text values (Ninerr read it, it did not change it).
-      const ir = buildCodeIr([{ path: file, content: readFileSync(join(folder, ...file.split("/")), "utf8") }]);
-      check("A", `${component}: the file is unchanged by bringing it in`, git(source, "status", "--porcelain") === "" && ir.rootIds.length > 0);
+      // Ninerr read the file; it did not change it.
+      check("A", `${component}: the file is unchanged by bringing it in`, git(source, "status", "--porcelain") === "");
     }
   } else {
     for (const pageFile of project.pages) {
@@ -438,7 +451,7 @@ try {
         if (moved) {
           revision += 1;
           after = doc().nodes[boxId].props.style;
-          check("B", "a drag moves the box, and only it", after.left !== before.left || after.top !== before.top, { before, after });
+          check("B", "a drag moves the box", after.left !== before.left || after.top !== before.top, { before, after });
         } else {
           check("B", "a drag on the box moves it", false, { drawnOnTop: onTop, box: boxId, selectedAfter: await selectedIds(page), revision: await revisionOf(page) });
           // The buttons move it without dragging.
@@ -512,7 +525,7 @@ try {
         await waitRevision(page, revision + 1);
         revision += 1;
         check("B", "Delete removes the selected box and nothing else", doc().nodes[boxId] === undefined && doc().nodes[parentId] !== undefined);
-      }
+      } else unsupported("B", "delete the box from the keyboard", "the box could not be selected in the layers tree");
       result.target = { frame: target.label, textNode: textNode.id };
     }
 
@@ -548,7 +561,7 @@ try {
     await api(host, "POST", "/api/projects/close");
     await editor.close();
     await host.close();
-    const child = spawn(process.execPath, [join(REPO, "tests", "support", "host-child.mjs"), projectsRoot], { stdio: ["ignore", "pipe", "inherit"] });
+    child = spawn(process.execPath, [join(REPO, "tests", "support", "host-child.mjs"), projectsRoot], { stdio: ["ignore", "pipe", "inherit"] });
     const line = await new Promise((resolve, reject) => {
       let buffer = "";
       child.stdout.on("data", (chunk) => { buffer += chunk; if (buffer.includes("\n")) resolve(buffer.split("\n")[0]); });
@@ -651,9 +664,9 @@ try {
         check("D", "a text changed in both places is a conflict, and the file keeps its change", conflict.conflicts?.some((entry) => entry.nodeId === second.id) && conflict.changes?.length === 0 && readFileSync(absolute, "utf8").includes("(file)"), { conflicts: conflict.conflicts, changes: conflict.changes });
         // The conflict carries both values for the person to choose (#236).
         const shown = await review(second.id);
-        if (!shown.includes("(file)") || !shown.includes("(Ninerr)")) finding("workflow", "a write-back conflict does not show the two values, so the person cannot see what to choose (#236)", { preview: shown.slice(0, 300) });
-        else {
-          check("D", "the conflict shows Ninerr's value and the file's", true);
+        const showsBoth = shown.includes("(file)") && shown.includes("(Ninerr)");
+        check("D", "the conflict shows Ninerr's value and the file's (#236)", showsBoth, { preview: shown.slice(0, 300) });
+        if (showsBoth) {
           // The person takes the file's: the layer gets it and the field is settled, nothing written.
           const fileBefore = readFileSync(absolute, "utf8");
           const revision = await revisionOf(page);
@@ -678,14 +691,15 @@ try {
     let rpcId = 0;
     const rpc = async (method, params) => {
       const response = await fetch(host.mcpUrl, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }) });
-      return (await response.json()).result;
+      const answer = await response.json().catch(() => ({}));
+      return answer.result ?? { isError: true, content: [{ type: "text", text: JSON.stringify(answer.error ?? { status: response.status }) }] };
     };
     const tool = (toolName, toolArgs) => timed(`mcp ${toolName}`, () => rpc("tools/call", { name: toolName, arguments: toolArgs }));
     await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "dogfood", version: "1" } });
     const info = await tool("project_info", {});
-    check("E", "the agent sees the open project", info?.structuredContent?.project === PROJECT || JSON.stringify(info).includes(PROJECT), info?.structuredContent ?? info);
+    check("E", "the agent sees the open project", info.isError !== true && info.structuredContent?.project === PROJECT, info.structuredContent ?? info);
     const tree = await tool("layer_tree", { nodeId: target.frameId, depth: 3 });
-    check("E", "the agent reads the imported layers", tree?.isError === undefined, tree?.content?.[0]?.text?.slice(0, 200));
+    check("E", "the agent reads the imported layers", tree.isError !== true && tree.content !== undefined, tree.content?.[0]?.text?.slice(0, 200));
     const searchFor = Object.values(doc().nodes).find((node) => typeof node.props?.text === "string" && /\w{4,}/u.test(node.props.text))?.props.text.match(/\w{4,}/u)?.[0];
     const found = searchFor ? await tool("find_layers", { query: searchFor }) : null;
     const foundIds = found?.structuredContent?.layers?.map((layer) => layer.id) ?? found?.structuredContent?.nodes?.map((layer) => layer.id) ?? [];
@@ -718,10 +732,11 @@ try {
       const before = await revisionOf(page);
       const deleting = tool("delete_layers", { nodeIds: [agentTarget] });
       await page.waitForFunction(() => /asks for your approval/u.test(document.getElementById("dialog-title")?.textContent ?? ""));
+      const keptWhileAsking = doc().nodes[agentTarget] !== undefined;
       await page.locator("#dialog[open] button:not([disabled])", { hasText: "Approve" }).click();
       const deleted = await deleting;
       await waitRevision(page, before + 1);
-      check("E", "a delete is applied only after the person approves it", deleted?.isError === undefined && doc().nodes[agentTarget] === undefined);
+      check("E", "a delete is applied only after the person approves it", keptWhileAsking && deleted.isError !== true && doc().nodes[agentTarget] === undefined, { keptWhileAsking });
       // The agent may not change a project it has not read: the person opens another one.
       await api(host, "POST", "/api/projects/create", { name: "other" });
       const refused = await tool("set_text", { nodeId: agentTarget, text: "wrong project" });
@@ -753,16 +768,18 @@ try {
   check("F", "the canvas frame is sandboxed without scripts", typeof sandbox === "string" && !sandbox.includes("allow-scripts"), { sandbox });
   const scripts = await page.evaluate(() => document.querySelector("iframe")?.contentDocument?.querySelectorAll("script").length ?? -1);
   check("F", "no script element reached the canvas", scripts === 0, { scripts });
-  check("F", "the fetched project was not written", git(fetched, "status", "--porcelain") === "");
+  check("F", "the fetched project was not written", git(fetched, "status", "--porcelain") === fetchedStatus);
 } catch (error) {
   result.error = error instanceof Error ? `${error.message}\n${error.stack?.split("\n").slice(1, 4).join("\n")}` : String(error);
   process.stdout.write(`ERROR ${result.error}\n`);
   await shot(page, "error").catch(() => {});
 } finally {
+  if (child !== null && child.exitCode === null) child.kill("SIGKILL");
   await editor.close().catch(() => {});
   await host.close().catch(() => {});
   await browser.close();
   result.timings = Object.fromEntries(Object.entries(result.timings).map(([label, samples]) => [label, summarize(samples)]));
   writeFileSync(join(base, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+  if (result.error !== undefined || Object.values(result.journeys).some((entry) => entry.status === "fail")) process.exitCode = 1;
   process.stdout.write(`${JSON.stringify(result.timings)}\n`);
 }

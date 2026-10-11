@@ -22,11 +22,11 @@ const line = (text = "") => out.push(text);
 const cell = (text) => String(text).replace(/\|/gu, "\\|").replace(/\n/gu, " ");
 
 // Each journey: its status, and its checks passed out of those that apply.
-line("| Project | Ninerr commit | " + JOURNEYS.join(" | ") + " | Findings |");
-line("|---|---|" + JOURNEYS.map(() => "---").join("|") + "|---:|");
+line("| Project | Ninerr commit | " + JOURNEYS.join(" | ") + " | Findings | Run |");
+line("|---|---|" + JOURNEYS.map(() => "---").join("|") + "|---:|---|");
 for (const { project, result } of results) {
   if (result === null) {
-    line(`| ${project.name} | not run |${JOURNEYS.map(() => " ").join("|")}| |`);
+    line(`| ${project.name} | not run |${JOURNEYS.map(() => " ").join("|")}| | no result |`);
     continue;
   }
   const cells = JOURNEYS.map((key) => {
@@ -37,7 +37,8 @@ for (const { project, result } of results) {
     const notApplicable = journey.checks.length - applied.length;
     return `${journey.status} ${passed}/${applied.length}${notApplicable > 0 ? ` (${notApplicable} n/a)` : ""}`;
   });
-  line(`| ${project.name} | \`${result.ninerr.commit.slice(0, 7)}\`${result.ninerr.dirty ? " (dirty)" : ""} | ${cells.join(" | ")} | ${result.findings.length} |`);
+  // A run that stopped on an error says so: the journeys after it did not run.
+  line(`| ${project.name} | \`${result.ninerr.commit.slice(0, 7)}\`${result.ninerr.dirty ? " (dirty)" : ""} | ${cells.join(" | ")} | ${result.findings.length} | ${result.error === undefined ? "complete" : `**stopped: ${cell(result.error.split("\n")[0])}**`} |`);
 }
 line();
 

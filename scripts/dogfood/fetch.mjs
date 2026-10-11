@@ -17,14 +17,25 @@ if (typeof target !== "string" || target === "") {
   process.exit(2);
 }
 const { projects } = JSON.parse(readFileSync(new URL("./projects.json", import.meta.url), "utf8"));
-// Hooks off and no credential helper: a public clone needs neither.
-const git = (cwd, ...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+// Hooks off, no credential helper, no prompt, and no symbolic links checked out (a link could
+// lead a later write out of the copy): a public clone needs none of them.
+const git = (cwd, ...args) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "credential.helper=", "-c", "core.askPass=", "-c", "core.symlinks=false", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).trim();
+// The license text each declared license must carry.
+const LICENSE_TEXT = { MIT: /Permission is hereby granted, free of charge/u };
+/** The project's license file is there and carries its declared license's text. */
+function checkLicense(project, folder) {
+  const file = join(folder, project.licenseFile);
+  if (!existsSync(file)) throw new Error(`${project.name}: ${project.licenseFile} is missing`);
+  const expected = LICENSE_TEXT[project.license];
+  if (expected === undefined || !expected.test(readFileSync(file, "utf8"))) throw new Error(`${project.name}: ${project.licenseFile} is not the ${project.license} license text`);
+}
 mkdirSync(target, { recursive: true });
 for (const project of projects) {
   const folder = join(target, project.name);
   if (existsSync(join(folder, ".git"))) {
     const head = git(folder, "rev-parse", "HEAD");
     if (head === project.commit) {
+      checkLicense(project, folder);
       process.stdout.write(`${project.name}: already at ${head}\n`);
       continue;
     }
@@ -36,6 +47,6 @@ for (const project of projects) {
   git(folder, "checkout", "-q", "--detach", "FETCH_HEAD");
   const head = git(folder, "rev-parse", "HEAD");
   if (head !== project.commit) throw new Error(`${project.name}: fetched ${head}, expected ${project.commit}`);
-  if (!existsSync(join(folder, project.licenseFile))) throw new Error(`${project.name}: ${project.licenseFile} is missing`);
+  checkLicense(project, folder);
   process.stdout.write(`${project.name}: ${head}\n`);
 }
