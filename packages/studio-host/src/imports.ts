@@ -144,6 +144,10 @@ interface LinkedStylesheets {
   read: string[];
   missing: string[];
   overLimit: string[];
+  /** "file for address", for each link to another site a chosen file answered. */
+  inPlaceOf: string[];
+  /** How many links each chosen file answered. */
+  uses: Map<string, number>;
 }
 
 /** A linked stylesheet's file name: the last part of its address's path, decoded. */
@@ -170,7 +174,7 @@ function fileName(uri: string): string {
  * import's CSS budget.
  */
 function linkStylesheets(proposal: ImportProposal, files: ChosenStylesheet[]): LinkedStylesheets {
-  const linked: LinkedStylesheets = { readLinks: 0, read: [], missing: [], overLimit: [] };
+  const linked: LinkedStylesheets = { readLinks: 0, read: [], missing: [], overLimit: [], inPlaceOf: [], uses: new Map() };
   const byName = new Map(files.map((file) => [file.name.toLowerCase(), file]));
   let cssBytes = proposal.stylesheets.reduce((total, sheet) => total + Buffer.byteLength(sheet.cssText, "utf8"), 0);
   const sheets: ImportProposal["stylesheets"] = [];
@@ -197,7 +201,14 @@ function linkStylesheets(proposal: ImportProposal, files: ChosenStylesheet[]): L
     }
     cssBytes += bytes;
     linked.readLinks += 1;
-    if (!linked.read.includes(name)) linked.read.push(name);
+    if (!linked.read.includes(file.name)) linked.read.push(file.name);
+    // Matched by file name only: a link to another site is answered by the chosen file, and
+    // the review says so, as it says a file that answers more than one link (#299).
+    // Counted by the chosen file, which links name in any case. (A link without a scheme
+    // that starts with // never gets here: the import refuses it without a base address.)
+    const address = resource.uri.length > 200 ? `${resource.uri.slice(0, 200)}…` : resource.uri;
+    if (/^[a-z][a-z0-9+.-]*:/iu.test(resource.uri.trim())) linked.inPlaceOf.push(`${file.name} for ${address}`);
+    linked.uses.set(file.name, (linked.uses.get(file.name) ?? 0) + 1);
     if (sanitized.unsafe) proposal.security.unsafeStylesRemoved += 1;
     sheets.push({ id: `import-style:linked-${createHash("sha256").update(`${proposal.proposalId}:${resource.uri}:${sheets.length}`).digest("hex").slice(0, 32)}`, cssText: sanitized.cssText, sourceBinding: { sourceUri: resource.uri, domPath: "linked-stylesheet" } });
   }
@@ -208,6 +219,9 @@ function linkStylesheets(proposal: ImportProposal, files: ChosenStylesheet[]): L
 function summarize(proposalId: string, name: string, proposal: ImportProposal, review: ReturnType<typeof reviewImport>, blocking: string[], linked: LinkedStylesheets): ImportReviewSummary {
   const notes: string[] = [];
   if (linked.read.length > 0) notes.push(`Linked stylesheet${linked.read.length === 1 ? "" : "s"} read from the files chosen with the page: ${linked.read.join(", ")}.`);
+  if (linked.inPlaceOf.length > 0) notes.push(`Read in place of a stylesheet at a web address, which is never fetched: ${linked.inPlaceOf.join(", ")}.`);
+  const shared = [...linked.uses].filter(([, count]) => count > 1).map(([file, count]) => `${file} (${count} links)`);
+  if (shared.length > 0) notes.push(`Chosen file${shared.length === 1 ? "" : "s"} read for more than one link: ${shared.join(", ")}.`);
   if (linked.missing.length > 0) notes.push(`Linked stylesheet${linked.missing.length === 1 ? "" : "s"} not chosen with the page, so not read: ${linked.missing.join(", ")}.`);
   if (linked.overLimit.length > 0) notes.push(`Linked stylesheet${linked.overLimit.length === 1 ? "" : "s"} left out, past the import's ${OFFLINE_POLICY.maxCssBytes / 1024 / 1024} MiB of CSS: ${linked.overLimit.join(", ")}.`);
   if (proposal.stylesheets.length > 0) notes.push(`${proposal.stylesheets.length} stylesheet${proposal.stylesheets.length === 1 ? " is" : "s are"} carried into the page frame, applied to it alone.`);

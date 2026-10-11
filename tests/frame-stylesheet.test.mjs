@@ -142,7 +142,7 @@ const SITE_CSS = "body{color:rgb(1, 2, 3)}.title{color:rgb(78, 115, 223)}.lead{b
 test("a page's linked stylesheets are read from the files chosen with it, and nothing is fetched", async (t) => {
   const running = await host(t);
   const review = await ok(running.call("POST", "/api/import", { html: LINKED, name: "Dashboard", stylesheets: [{ name: "SITE.css", css: SITE_CSS }, { name: "unused.css", css: ".x{color:red}" }] }), "review");
-  assert.ok(review.notes.includes("Linked stylesheet read from the files chosen with the page: site.css."), JSON.stringify(review.notes));
+  assert.ok(review.notes.includes("Linked stylesheet read from the files chosen with the page: SITE.css."), JSON.stringify(review.notes));
   assert.ok(review.notes.includes("Linked stylesheet not chosen with the page, so not read: https://fonts.example/css?family=Nunito."), JSON.stringify(review.notes));
   assert.ok(review.notes.some((note) => /2 stylesheets are carried into the page frame/u.test(note)), JSON.stringify(review.notes));
   const event = await ok(running.call("POST", "/api/import/commit", { proposalId: review.proposalId }), "commit");
@@ -153,6 +153,21 @@ test("a page's linked stylesheets are read from the files chosen with it, and no
     const refused = await running.call("POST", "/api/import", { html: LINKED, stylesheets });
     assert.deepEqual([refused.status, refused.json?.error?.code], [400, "invalid-import"], JSON.stringify(stylesheets).slice(0, 40));
   }
+});
+
+// #299 item 2: a link is matched to a chosen file by name only, so a link to another site is
+// answered by the file, and two links with one name by the same file: the review says both.
+test("the review says when a chosen file answers a link at a web address, or more than one link", async (t) => {
+  const running = await host(t);
+  const html = '<link rel="stylesheet" href="HTTPS://CDN.Example/x/Site.css"><link rel="stylesheet" href="css/site.css"><link rel="stylesheet" href="theme.css"><p class="lead">Hi</p>';
+  const review = await ok(running.call("POST", "/api/import", { html, name: "Page", stylesheets: [{ name: "site.css", css: SITE_CSS }, { name: "theme.css", css: ".lead{font-weight:700}" }] }), "review");
+  assert.ok(review.notes.includes("Read in place of a stylesheet at a web address, which is never fetched: site.css for https://cdn.example/x/Site.css."), JSON.stringify(review.notes));
+  assert.ok(review.notes.includes("Chosen file read for more than one link: site.css (2 links)."), JSON.stringify(review.notes));
+  // Each chosen file is named once, as chosen, however its links spell it.
+  assert.ok(review.notes.includes("Linked stylesheets read from the files chosen with the page: site.css, theme.css."), JSON.stringify(review.notes));
+  // A local link answered once by its own file is said as before, and nothing more.
+  const plain = await ok(running.call("POST", "/api/import", { html: '<link rel="stylesheet" href="theme.css"><p>Hi</p>', name: "Plain", stylesheets: [{ name: "theme.css", css: ".lead{font-weight:700}" }] }), "review");
+  assert.ok(!plain.notes.some((note) => /in place of|more than one link/u.test(note)), JSON.stringify(plain.notes));
 });
 
 test("in the editor, a page imported with its stylesheet file is drawn styled", browserTestOptions(), async (t) => {
