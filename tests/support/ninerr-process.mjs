@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { findBrowser } from "./browser.mjs";
+import { findBrowser, launchBrowser } from "./browser.mjs";
+import { closeAfterTest } from "./cleanup.mjs";
 
 // Run Ninerr the way a person does (npm start, scripts/ninerr.mjs), under the no-network
 // preload, and open its links in Chromium with every request outside Ninerr recorded.
@@ -16,6 +17,11 @@ export function run(args, env = {}) {
     output.stderr += chunk;
   });
   const exited = new Promise((resolve) => child.on("close", (code, signal) => resolve(signal ?? code)));
+  // One still running when its test ends, a timeout included, is killed (#305).
+  closeAfterTest(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    return exited;
+  }, "a Ninerr process");
   return { child, output, exited };
 }
 
@@ -62,8 +68,7 @@ export async function startNinerr(projects) {
 }
 
 export async function browse() {
-  const { chromium } = await import("playwright-core");
-  return chromium.launch({ executablePath: findBrowser(), headless: true, args: ["--no-sandbox"] });
+  return launchBrowser({ executablePath: findBrowser(), headless: true, args: ["--no-sandbox"] });
 }
 
 export async function openTab(browser, origin, link, { ready = true } = {}) {

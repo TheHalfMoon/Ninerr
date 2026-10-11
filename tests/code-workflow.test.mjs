@@ -6,7 +6,8 @@ import { join } from "node:path";
 
 import { buildCodeIr, codeToDesign } from "../packages/code-ir/src/index.ts";
 import { createDocument } from "../packages/document-model/src/index.mjs";
-import { exportJsx, importJsx, startStudioHost } from "../packages/studio-host/src/index.ts";
+import { exportJsx, importJsx } from "../packages/studio-host/src/index.ts";
+import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
 import { browserTestOptions } from "./support/browser.mjs";
 import { layerCount, openEditor, rendered, waitRevision } from "./support/editor.mjs";
 
