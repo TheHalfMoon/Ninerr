@@ -113,6 +113,7 @@ async function refusedAcrossProjects(host, call, code) {
     ["/api/codebase/import", { file: "Card.jsx", component: "Card" }],
     ["/api/codebase/preview", { nodeId: section.id }],
     ["/api/codebase/write", { nodeId: section.id, token: preview.token }],
+    ["/api/codebase/resolve", { nodeId: p.id, field: "text", file: "x" }],
     ["/api/import/discard", { proposalId: review.proposalId }],
   ]) {
     const refused = await alpha("POST", path, body);
