@@ -41,7 +41,7 @@ const ROUTES = [
   "GET /api/nowhere", "POST /api/document", "DELETE /api/edit", "PUT /api/projects/open",
 ];
 // The keys and words the routes read, so generated bodies reach past the first check.
-const KEYS = ["name", "title", "baseRevision", "operations", "intent", "nodeId", "nodeIds", "transactionId", "token", "folder", "file", "component", "proposalId", "html", "code", "id", "approve", "breakStaleLock", "reason", "agentId", "type", "node", "parentId", "index", "set", "unset", "keep", "field"];
+const KEYS = ["name", "title", "baseRevision", "operations", "intent", "nodeId", "nodeIds", "transactionId", "token", "folder", "file", "component", "proposalId", "html", "code", "id", "approve", "breakStaleLock", "reason", "agentId", "type", "node", "parentId", "index", "set", "unset", "keep", "field", "stylesheets"];
 const WORDS = ["insert-node", "set-props", "remove-node", "move-node", "restore-subtree", "frame", "text", "fuzz"];
 const TOOLS = ["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "guide", "finish_task", "create_frame", "set_text", "rename_layers", "set_styles", "move_layers", "duplicate_layers", "delete_layers", "no_such_tool"];
 const TOOL_KEYS = ["nodeId", "nodeIds", "text", "name", "width", "height", "renames", "updates", "moves", "styles", "parentId", "index", "query", "depth"];

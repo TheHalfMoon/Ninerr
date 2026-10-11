@@ -129,3 +129,47 @@ test("the canvas applies an imported page's stylesheet to its frame alone, live 
   assert.deepEqual(editor.foreign, []);
   assert.deepEqual(editor.errors, []);
 });
+
+// #283 step 3: the page's linked stylesheets are read from the files chosen with it.
+const LINKED = `<!doctype html><html><head>
+<link rel="stylesheet" href="css/site.css">
+<link rel="stylesheet" href="https://fonts.example/css?family=Nunito">
+<style>.title{font-weight:800}</style>
+</head><body><h1 class="title">Dashboard</h1><p class="lead">Welcome</p></body></html>`;
+const SITE_CSS = "body{color:rgb(1, 2, 3)}.title{color:rgb(78, 115, 223)}.lead{background:url(lead.png);color:rgb(5, 6, 7)}";
+
+test("a page's linked stylesheets are read from the files chosen with it, and nothing is fetched", async (t) => {
+  const running = await host(t);
+  const review = await ok(running.call("POST", "/api/import", { html: LINKED, name: "Dashboard", stylesheets: [{ name: "SITE.css", css: SITE_CSS }, { name: "unused.css", css: ".x{color:red}" }] }), "review");
+  assert.ok(review.notes.includes("Linked stylesheet read from the files chosen with the page: site.css."), JSON.stringify(review.notes));
+  assert.ok(review.notes.includes("Linked stylesheet not chosen with the page, so not read: https://fonts.example/css?family=Nunito."), JSON.stringify(review.notes));
+  assert.ok(review.notes.some((note) => /2 stylesheets are carried into the page frame/u.test(note)), JSON.stringify(review.notes));
+  const event = await ok(running.call("POST", "/api/import/commit", { proposalId: review.proposalId }), "commit");
+  const { document } = await ok(running.call("GET", "/api/document"), "document");
+  // The linked sheet first (sanitized, its page selector renamed), then the inline one.
+  assert.equal(document.nodes[event.frameId].props.stylesheet, ":scope{color:rgb(1, 2, 3)}.title{color:rgb(78, 115, 223)}.lead{color:rgb(5, 6, 7)}\n.title{font-weight:800}");
+  for (const stylesheets of ["site.css", [{ name: "", css: "" }], [{ name: "a.css", css: 1 }], Array.from({ length: 65 }, (_, index) => ({ name: `${index}.css`, css: "" }))]) {
+    const refused = await running.call("POST", "/api/import", { html: LINKED, stylesheets });
+    assert.deepEqual([refused.status, refused.json?.error?.code], [400, "invalid-import"], JSON.stringify(stylesheets).slice(0, 40));
+  }
+});
+
+test("in the editor, a page imported with its stylesheet file is drawn styled", browserTestOptions(), async (t) => {
+  const running = await host(t);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await page.locator("#action-import").click();
+  await page.locator("#import-file").setInputFiles([
+    { name: "index.html", mimeType: "text/html", buffer: Buffer.from(LINKED) },
+    { name: "site.css", mimeType: "text/css", buffer: Buffer.from(SITE_CSS) },
+  ]);
+  await page.locator("#dialog[open] button[type=submit]").click();
+  await page.locator("#dialog[open]", { hasText: "read from the files chosen with the page: site.css" }).waitFor();
+  await page.locator("#dialog[open] button.primary").click();
+  await waitRevision(page, 1);
+  const colour = await page.evaluate(() => getComputedStyle(document.querySelector("iframe").contentDocument.querySelector(".title")).color);
+  assert.equal(colour, "rgb(78, 115, 223)");
+  assert.deepEqual(editor.foreign, []);
+  assert.deepEqual(editor.errors, []);
+});
