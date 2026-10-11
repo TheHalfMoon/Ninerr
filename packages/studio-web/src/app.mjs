@@ -1063,6 +1063,17 @@ function save() {
 // The event stream reconnects with a growing delay (1 s to 30 s, reset once it opens), and
 // refreshes the copy on reopening, since changes may have been missed while it was down.
 let streamDelay = 1000;
+// Settled once, when the first stream is open and the copy has caught up, or when it was
+// refused (#302): the editor is ready from then on.
+let settleStream = null;
+const streamSettled = new Promise((resolve) => {
+  settleStream = resolve;
+});
+/**
+ * Start the change stream. The copy was loaded before the stream opened, so a change committed
+ * in between would never arrive: the host's first message on a stream names the project and its
+ * revision, and a copy behind it is refreshed then (#302).
+ */
 function listenForChanges({ refreshOnOpen = false } = {}) {
   state.events?.close();
   if (ended) return;
@@ -1094,22 +1105,29 @@ function listenForChanges({ refreshOnOpen = false } = {}) {
     } catch {
       return;
     }
+    let caughtUp = Promise.resolve();
     if (info.failure && info.project === state.project) showReopen(info.failure);
     else if (info.project !== state.project) {
       // The copy belongs to the old project: stop applying to it until the new one is loaded.
       state.project = info.project;
       state.document = null;
       renderAll();
-      requestLoad().catch((error) => {
+      caughtUp = requestLoad().catch((error) => {
         if (!handleSessionEnded(error)) setStatus(describeError(error));
       });
-    }
+    } else if (state.document !== null && Number.isInteger(info.revision) && info.revision > state.revision) {
+      // Changes were committed before this stream subscribed: fetch them (#302).
+      caughtUp = requestResync();
+    } else if (loading !== null) caughtUp = loading.catch(() => undefined);
+    // The first stream's first message: the editor is ready once its copy caught up.
+    caughtUp.finally(() => settleStream());
   });
   events.addEventListener("error", () => {
     dropped = true;
     // A closed stream is not retried by the browser: find out whether the session ended,
     // and otherwise open a new one after a delay.
     if (events.readyState === 2 && state.events === events) {
+      settleStream();
       const delay = streamDelay;
       streamDelay = Math.min(30_000, streamDelay * 2);
       state.client.get("/api/session").then(
@@ -1605,6 +1623,9 @@ async function main() {
   state.client.get("/api/confirmations").then(({ pending }) => showConfirmations(pending), () => {});
   if (session.project === null) await openProjectsDialog();
   else setStatus(`Opened ${session.project}.`);
+  // Ready once changes reach this copy (#302): the stream is open and the copy caught up, or
+  // the stream was refused. A stream that never answers does not hold the editor back.
+  await Promise.race([streamSettled, new Promise((resolve) => setTimeout(resolve, 5_000))]);
   document.documentElement.dataset.ready = "true";
 }
 
