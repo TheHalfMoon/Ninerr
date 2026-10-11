@@ -252,7 +252,9 @@ export const MAX_FRAME_STYLESHEET_BYTES = 2 * 1024 * 1024;
  * and unquoted url()s). The canvas wraps a frame's stylesheet in an @scope block: such a "}"
  * would end that block, and the rest would style every frame (#298 review).
  */
-export function cssClosesUnopenedBlock(css: string): boolean {
+export function cssClosesUnopenedBlock(input: string): boolean {
+  // As CSS reads it: CR LF, CR and FF are line breaks, which end a bad string (#298 review).
+  const css = input.replace(/\r\n|[\r\f]/gu, "\n");
   let depth = 0;
   let index = 0;
   while (index < css.length) {

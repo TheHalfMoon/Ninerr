@@ -178,7 +178,7 @@ test("in the editor, a page imported with its stylesheet file is drawn styled", 
 test("a stylesheet that closes a block it did not open is refused, and left out of an import", async (t) => {
   const running = await host(t);
   const { event } = await imported(running);
-  for (const stylesheet of [".a{color:red}}[data-ninerr-root] *{visibility:hidden}", "}@scope ([data-ninerr-id=\"x\"]){*{display:none}}", "}"]) {
+  for (const stylesheet of [".a{color:red}}[data-ninerr-root] *{visibility:hidden}", "}@scope ([data-ninerr-id=\"x\"]){*{display:none}}", "}", ".t{}\"\f}\n.u{color:red}", ".t{}\"\r}\n.u{color:red}", ".t{}\"\\\r\n{\"}\n.u{color:red}"]) {
     const refused = await running.call("POST", "/api/edit", { baseRevision: event.revision, intent: "Style", operations: [{ type: "set-props", nodeId: event.frameId, set: { stylesheet } }] });
     assert.deepEqual([refused.status, refused.json?.error?.code], [400, "unsafe-stylesheet"], stylesheet);
   }
@@ -197,6 +197,8 @@ test("an import near the CSS limit commits, though renaming its page selectors m
   const { event } = await imported(running, `<style>${rules}</style><p>x</p>`);
   const { document } = await ok(running.call("GET", "/api/document"), "document");
   assert.ok(document.nodes[event.frameId].props.stylesheet.length > rules.length);
+  // And the canvas draws it.
+  assert.equal(planElement(document.nodes[event.frameId]).stylesheet, document.nodes[event.frameId].props.stylesheet);
 });
 
 test("two chosen stylesheet files with the same name are refused", async (t) => {
@@ -221,11 +223,13 @@ test("the canvas drops a stylesheet that would end its frame's scope, even one w
     const result = await page.evaluate(() => {
       const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "text", parentId, children, props, metadata: {} });
       const doc = {
-        rootIds: ["a", "b"],
+        rootIds: ["a", "b", "c"],
         nodes: {
           a: node("a", null, ["a-t"], { tag: "div", stylesheet: "}\n.t{color:rgb(255, 0, 0)}" }),
           "a-t": node("a-t", "a", [], { tag: "p", text: "A", attributes: { class: "t" } }),
-          b: node("b", null, ["b-t"], { tag: "div", stylesheet: ".u{color:rgb(0, 0, 255)}" }),
+          b: node("b", null, ["b-t"], { tag: "div", stylesheet: ":scope{--c:rgb(0, 0, 255)} .u{color:var(--c)}" }),
+          // Global even inside @scope: it would turn b's --c red.
+          c: node("c", null, [], { tag: "div", stylesheet: "@property --c{syntax:\"<color>\";inherits:false;initial-value:rgb(255, 0, 0)}.x{color:red}" }),
           "b-t": node("b-t", "b", [], { tag: "p", text: "B", attributes: { class: "t u" } }),
         },
       };
@@ -233,7 +237,8 @@ test("the canvas drops a stylesheet that would end its frame's scope, even one w
       const colour = (id) => getComputedStyle(document.querySelector(`[data-ninerr-id="${id}"]`)).color;
       return { dropped, sheets: document.querySelectorAll("style[data-ninerr-sheet]").length, a: colour("a-t"), b: colour("b-t") };
     });
-    assert.deepEqual(result, { dropped: 1, sheets: 1, a: "rgb(0, 0, 0)", b: "rgb(0, 0, 255)" });
+    // a's sheet is removed; c's @property rule is removed, c's own rule kept.
+    assert.deepEqual(result, { dropped: 2, sheets: 2, a: "rgb(0, 0, 0)", b: "rgb(0, 0, 255)" });
   } finally {
     await browser.close();
   }

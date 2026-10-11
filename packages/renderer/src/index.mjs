@@ -73,7 +73,8 @@ const UNSAFE_STYLE = /url\s*\(|image-set|expression\s*\(|javascript:|vbscript:|@
 // decoded: a comment can hide a url( from a browser but never create one, so this raw view
 // holds every function and at-rule the browser would see. The frame's policy loads nothing but
 // data: URLs in any case.
-const MAX_STYLESHEET = 1024 * 1024;
+// The host takes a stylesheet of up to 2 MiB in UTF-8, which is at most this many characters.
+const MAX_STYLESHEET = 2 * 1024 * 1024;
 const UNSAFE_STYLESHEET = /url\s*\(|image-set\s*\(|image\s*\(|(?:^|[^-\w])src\(|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|<\/style/u;
 function safeStylesheet(css) {
   if (typeof css !== "string" || css.length > MAX_STYLESHEET) return false;
@@ -225,12 +226,27 @@ export function createRenderer(root) {
     // The browser's parser is the final judge: the sheet must be exactly the one @scope rule,
     // or something in it ended the scope and would style other frames (#298 review).
     const rules = element.sheet?.cssRules;
-    const ScopeRule = doc.defaultView?.CSSScopeRule;
+    const view = doc.defaultView;
+    const ScopeRule = view?.CSSScopeRule;
     if (rules === undefined || rules.length !== 1 || ScopeRule === undefined || !(rules[0] instanceof ScopeRule)) {
       element.remove();
       sheets.delete(nodeId);
       stats.dropped += 1;
+      return;
     }
+    // Rules that are global even inside @scope (@property, @font-face, @keyframes, @layer
+    // order, @page, …) would act on every frame: they are removed, the rest is kept.
+    const kept = [view.CSSStyleRule, view.CSSMediaRule, view.CSSSupportsRule, view.CSSContainerRule, ScopeRule, view.CSSLayerBlockRule, view.CSSStartingStyleRule, view.CSSNestedDeclarations].filter((type) => type !== undefined);
+    const prune = (group) => {
+      for (let index = group.cssRules.length - 1; index >= 0; index -= 1) {
+        const rule = group.cssRules[index];
+        if (!kept.some((type) => rule instanceof type)) {
+          group.deleteRule(index);
+          stats.dropped += 1;
+        } else if (rule.cssRules !== undefined) prune(rule);
+      }
+    };
+    prune(rules[0]);
   }
 
   function build(node) {
