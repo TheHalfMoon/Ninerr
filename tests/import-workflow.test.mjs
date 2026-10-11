@@ -4,7 +4,8 @@ import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeF
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MAX_IMPORT_HTML_BYTES, MAX_IMPORT_NODES, startStudioHost, styleProperties } from "../packages/studio-host/src/index.ts";
+import { MAX_IMPORT_HTML_BYTES, MAX_IMPORT_NODES, styleProperties } from "../packages/studio-host/src/index.ts";
+import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
 import { browserTestOptions } from "./support/browser.mjs";
 import { layerCount, openEditor, rendered, waitRevision } from "./support/editor.mjs";
 import { PROJECT_FILES } from "../packages/persistence/src/index.ts";

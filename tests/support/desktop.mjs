@@ -5,6 +5,7 @@
 // or without the runtime they are skipped; in CI (CI=true) they fail instead.
 import { spawn } from "node:child_process";
 import { findElectron } from "../../scripts/desktop/electron.mjs";
+import { closeAfterTest } from "./cleanup.mjs";
 
 export function desktopTestOptions() {
   const reason = findElectron() === null
@@ -47,6 +48,9 @@ export async function launchDesktop({ env = {}, args = [] } = {}) {
     env: { ...process.env, ...env },
     timeout: 30_000,
   });
+  // Closed after its test however that ends, a timeout included (#305).
+  const close = app.close.bind(app);
+  app.close = closeAfterTest(() => close().catch(() => app.process().kill("SIGKILL")), "the desktop app");
   const errors = [];
   // The app's own output (Electron's and Ninerr's), for a launch that fails.
   let output = "";

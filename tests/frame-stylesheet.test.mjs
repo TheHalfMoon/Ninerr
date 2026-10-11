@@ -211,9 +211,8 @@ test("two chosen stylesheet files with the same name are refused", async (t) => 
 
 test("the canvas drops a stylesheet that would end its frame's scope, even one written by hand", browserTestOptions(), async () => {
   const { readFileSync } = await import("node:fs");
-  const { chromium } = await import("playwright-core");
-  const { findBrowser } = await import("./support/browser.mjs");
-  const browser = await chromium.launch({ executablePath: findBrowser(), headless: true });
+  const { findBrowser, launchBrowser } = await import("./support/browser.mjs");
+  const browser = await launchBrowser({ executablePath: findBrowser(), headless: true });
   try {
     const page = await browser.newPage();
     await page.setContent("<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>");
