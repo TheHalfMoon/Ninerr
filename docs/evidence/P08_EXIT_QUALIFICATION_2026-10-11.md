@@ -28,7 +28,7 @@ P09 does not start before that decision. v1.0.0 is not authorized.
 - **Disk.** "The object store bounded by a few snapshots of the document" read "no: #244" in G4. Since #290, the object store holds one snapshot document plus the journal's archived segments. The segments are the project's history, about 1 MiB each, and are kept on purpose.
 - **Edits.** The proposal for an edit at 10,000 layers is p95 ≤ 300 ms now, and ≤ 100 ms after #252. #252 stays open.
   - The dogfooded documents held 24 to 1,857 layers.
-  - At 1,857 layers, a repeated text edit in the editor took p50 288 ms and p95 382 ms. That p95 is above the 300 ms proposed for 10,000 layers. It is a different measure, though: the editor's whole step, including selecting the layer in the tree, where G4 measured the edit through the host's API.
+  - At 1,857 layers, a repeated text edit in the editor took p50 268 ms and p95 330 ms (run at `6309cf9`, with its stylesheets). That p95 is above the 300 ms proposed for 10,000 layers. It is a different measure, though: the editor's whole step, including selecting the layer in the tree, where G4 measured the edit through the host's API.
   - On the other six projects, the same step's p50 was 81–126 ms.
   - #252's full fix (copy-on-write nodes, incremental validation; also #108) is a performance grain the founder may place before or after P09.
 
@@ -45,6 +45,7 @@ The budgets are unchanged. On 2026-10-11, these exact-head runs failed gate 13 o
 | #288 at 1218886 | windows-latest | end-to-end edit p95 | 1,060 ms | not re-run; the next head that ran CI, 41dacf1 (a code change and a merge of main), passed |
 | #289 at 3b39fab | macos-latest | deleting a layer, p95 | 1,013 ms | not re-run; the next head, bf6b516 (a merge of main), passed |
 | #290 at 74bd26b | macos-latest | deleting a layer, p95 | 803 ms | passed on re-run |
+| #296 at 50bb2c6 | macos-latest | deleting a layer, p95 | 798 ms | not re-run; the next head, a1c18ee, passed |
 | #295 at a3d705b (docs only) | macos-latest | deleting a layer, p95 | 843 ms | passed on re-run |
 | main 46b58b1, after #298 | macos-latest | deleting a layer, p95 | 838 ms | passed on re-run; locally 358 and 410 ms |
 
