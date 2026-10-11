@@ -89,6 +89,33 @@ function safeStylesheet(css) {
   return !UNSAFE_STYLESHEET.test(decoded);
 }
 
+/**
+ * The viewport a design is drawn for (#283, found dogfooding sb-admin-2). In the canvas frame a
+ * viewport length would be the frame's, and the canvas sizes its frame to the content: a
+ * `min-height: 100vh` then grew with every resize and the page always outgrew its frame, out
+ * of reach. So the renderer draws viewport lengths (vh, vw, vb, vi, vmin, vmax, and their d, s
+ * and l forms) as pixels of this viewport, in a layer's style and in its stylesheet's
+ * declarations. The document keeps what was written, so code export and the inspector show it.
+ * Media queries are left as they are, and container units (cq*) too.
+ */
+export const DESIGN_VIEWPORT = Object.freeze({ width: 1024, height: 768 });
+const VIEWPORT_LENGTH = /(?<![\w-])([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)[dsl]?v(h|w|b|i|min|max)\b/giu;
+const VIEWPORT_SIZE = Object.freeze({
+  h: DESIGN_VIEWPORT.height,
+  b: DESIGN_VIEWPORT.height,
+  w: DESIGN_VIEWPORT.width,
+  i: DESIGN_VIEWPORT.width,
+  min: Math.min(DESIGN_VIEWPORT.width, DESIGN_VIEWPORT.height),
+  max: Math.max(DESIGN_VIEWPORT.width, DESIGN_VIEWPORT.height),
+});
+/** A CSS value with its viewport lengths as pixels of DESIGN_VIEWPORT; strings are left as written. */
+export function designViewportLengths(value) {
+  if (!/v(?:h|w|b|i|min|max)\b/iu.test(value)) return value;
+  return value.split(/("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')/u).map((part, index) => (index % 2 === 1
+    ? part
+    : part.replace(VIEWPORT_LENGTH, (_match, amount, unit) => `${Math.round(Number(amount) * VIEWPORT_SIZE[unit.toLowerCase()] * 100) / 10_000}px`))).join("");
+}
+
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const own = (record, key) => (isRecord(record) && Object.hasOwn(record, key) ? record[key] : undefined);
 
@@ -247,6 +274,21 @@ export function createRenderer(root) {
       }
     };
     prune(rules[0]);
+    // Viewport lengths in its declarations, as in a layer's style (DESIGN_VIEWPORT).
+    const lengths = (group) => {
+      for (const rule of group.cssRules) {
+        if (rule.style !== undefined) {
+          for (let index = 0; index < rule.style.length; index += 1) {
+            const name = rule.style.item(index);
+            const value = rule.style.getPropertyValue(name);
+            const drawn = designViewportLengths(value);
+            if (drawn !== value) rule.style.setProperty(name, drawn, rule.style.getPropertyPriority(name));
+          }
+        }
+        if (rule.cssRules !== undefined) lengths(rule);
+      }
+    };
+    lengths(rules[0]);
   }
 
   function build(node) {
@@ -271,7 +313,7 @@ export function createRenderer(root) {
     for (const [name, raw] of Object.entries(plan.style)) {
       const important = /\s*!important$/iu.test(raw);
       const value = important ? raw.replace(/\s*!important$/iu, "") : raw;
-      element.style.setProperty(name, value, important ? "important" : "");
+      element.style.setProperty(name, designViewportLengths(value), important ? "important" : "");
       // The browser's CSS parser is the final judge; count what it refused.
       if (element.style.getPropertyValue(name) === "") rejected += 1;
     }

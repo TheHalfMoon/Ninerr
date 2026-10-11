@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { frameStylesheet } from "../packages/import-stack/src/index.ts";
-import { planElement } from "../packages/renderer/src/index.mjs";
+import { designViewportLengths, planElement } from "../packages/renderer/src/index.mjs";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
 import { hostPool, ok } from "./support/host-api.mjs";
@@ -246,13 +246,20 @@ test("the canvas drops a stylesheet that would end its frame's scope, even one w
 
 // Found dogfooding sb-admin-2 with #283: on the canvas, 100vh is the canvas frame's height,
 // which the canvas sets to fit the content: a page with min-height:100vh outgrew the frame on
-// every resize, and what lay below was out of reach. Viewport lengths in an import are taken
-// against the design viewport (1024 × 768) instead.
-test("an import's viewport lengths are pixels of the design viewport", () => {
-  assert.equal(
-    frameStylesheet([".s{min-height:100vh;width:50vw;margin:-10dvh 0}.h-100vh{height:1px}.a{width:calc(100vw - 2rem)}"]),
-    ".s{min-height:768px;width:512px;margin:-76.8px 0}.h-100vh{height:1px}.a{width:calc(1024px - 2rem)}",
-  );
+// every resize, and what lay below was out of reach. The renderer draws viewport lengths as
+// pixels of the design viewport (1024 × 768); the document keeps what was written.
+test("viewport lengths are drawn as pixels of the design viewport, strings and names aside", () => {
+  for (const [value, drawn] of [
+    ["100vh", "768px"],
+    ["calc(100vh - 2*10vw)", "calc(768px - 2*102.4px)"],
+    ["-10dvh 0", "-76.8px 0"],
+    ["10vb 5VI", "76.8px 51.2px"],
+    ["10vmin 10vmax", "76.8px 102.4px"],
+    ["1e2vh", "768px"],
+    ["\"100vh tall\" 10vh", "\"100vh tall\" 76.8px"],
+    ["10vhx", "10vhx"],
+    ["var(--h-100vh)", "var(--h-100vh)"],
+  ]) assert.equal(designViewportLengths(value), drawn, value);
 });
 
 test("a page using viewport heights fits on the canvas, and stays fitted after an edit", browserTestOptions(), async (t) => {
@@ -260,7 +267,7 @@ test("a page using viewport heights fits on the canvas, and stays fitted after a
   const editor = await openEditor(running.host);
   t.after(() => editor.close());
   const { page } = editor;
-  const html = `<style>.side{min-height:100vh;background:#4e73df}</style><div class="side">Menu</div><p style="height:50vh">Tall</p>${"<p>Row</p>".repeat(30)}<p class="last">The end</p>`;
+  const html = `<style>.side{min-height:100vh;background:#4e73df}@scope (.side){.inner{height:10vb}}.card{&:hover{color:red}.body{height:10vh}}</style><div class="side">Menu<span class="inner">x</span></div><p style="height:50vh">Tall</p><div class="card"><p class="body">b</p></div>${"<p>Row</p>".repeat(30)}<p class="last">The end</p>`;
   const { event } = await imported(running, html);
   await waitRevision(page, event.revision);
   const fit = () => page.evaluate(() => {
@@ -271,7 +278,17 @@ test("a page using viewport heights fits on the canvas, and stays fitted after a
   const first = await fit();
   assert.equal(first.side, 768);
   assert.ok(first.lastBottom <= first.frame, JSON.stringify(first));
-  await ok(running.call("POST", "/api/edit", { baseRevision: event.revision, intent: "Rename", operations: [{ type: "set-props", nodeId: event.frameId, set: { name: "Renamed" } }] }), "edit");
+  // The document keeps what was written.
+  const { document } = await ok(running.call("GET", "/api/document"), "document");
+  assert.match(document.nodes[event.frameId].props.stylesheet, /min-height:100vh/u);
+  // A layer styled with a viewport height after the import fits too, and nothing grows again.
+  await ok(running.call("POST", "/api/edit", { baseRevision: event.revision, intent: "Taller", operations: [{ type: "set-props", nodeId: event.frameId, set: { style: { ...document.nodes[event.frameId].props.style, "min-height": "100vh" } } }] }), "edit");
   await waitRevision(page, event.revision + 1);
   assert.deepEqual(await fit(), first, "the frame does not grow again");
+  const nested = await page.evaluate(() => {
+    const frame = document.querySelector("iframe").contentDocument;
+    return [frame.querySelector(".inner"), frame.querySelector(".body")].map((element) => getComputedStyle(element).height);
+  });
+  // 10vh and 10vb of 768px, to the browser's layout precision.
+  assert.ok(nested.every((height) => Math.abs(Number.parseFloat(height) - 76.8) < 0.1), `inside @scope and in a nested rule too: ${nested}`);
 });
