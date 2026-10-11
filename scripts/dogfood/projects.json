@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "note": "P08-G11 (#230): the seven public projects Ninerr is dogfooded on, each pinned to the commit tested. scripts/dogfood/fetch.mjs clones them; scripts/dogfood/run.mjs runs the journeys.",
+  "projects": [
+    {
+      "name": "starter-blog",
+      "repository": "https://github.com/timlrx/tailwind-nextjs-starter-blog",
+      "commit": "b45bef66b40c63b6f57c15ee8cd090682238df4c",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "category": "compact React/TypeScript application (Next.js blog starter, Tailwind)",
+      "kind": "codebase",
+      "folder": "."
+    },
+    {
+      "name": "commerce",
+      "repository": "https://github.com/vercel/commerce",
+      "commit": "3761e52e60df9c6a316e067dbfd7032e494d3634",
+      "license": "MIT",
+      "licenseFile": "license.md",
+      "category": "larger Next.js application (storefront, React Server Components, Tailwind)",
+      "kind": "codebase",
+      "folder": "."
+    },
+    {
+      "name": "shadcn-ui",
+      "repository": "https://github.com/shadcn-ui/ui",
+      "commit": "c2a67849be260701852b0977ba15eb5f3a0ce2a4",
+      "license": "MIT",
+      "licenseFile": "LICENSE.md",
+      "category": "component library and design system (Radix primitives, Tailwind variants)",
+      "kind": "codebase",
+      "folder": "apps/v4/registry/new-york-v4/ui"
+    },
+    {
+      "name": "sb-admin-2",
+      "repository": "https://github.com/StartBootstrap/startbootstrap-sb-admin-2",
+      "commit": "f0309881ef82794a1bd6257cd321801bc38a0f3d",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "category": "HTML/CSS-heavy site (Bootstrap 4 admin template, 14 static pages)",
+      "kind": "html",
+      "pages": ["index.html", "tables.html", "cards.html", "login.html"]
+    },
+    {
+      "name": "excalidraw",
+      "repository": "https://github.com/excalidraw/excalidraw",
+      "commit": "4c00f31ddcc20086bac1020428819fe0b9a30bce",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "category": "SVG- and asset-heavy interface (whiteboard; hundreds of inline SVG icons), large monorepo",
+      "kind": "codebase",
+      "folder": "packages/excalidraw/components"
+    },
+    {
+      "name": "taxonomy",
+      "repository": "https://github.com/shadcn-ui/taxonomy",
+      "commit": "298a8857c7128a0d121e7f699dfd729f23b3966d",
+      "license": "MIT",
+      "licenseFile": "LICENSE.md",
+      "category": "multi-page application with nested components (Next.js app router: marketing, docs, dashboard)",
+      "kind": "codebase",
+      "folder": "."
+    },
+    {
+      "name": "bulletproof-react",
+      "repository": "https://github.com/alan2207/bulletproof-react",
+      "commit": "9506629ed003a561c6627735480cce4994244bb4",
+      "license": "MIT",
+      "licenseFile": "LICENSE",
+      "category": "monorepo of three applications (Vite, Next.js app and pages routers) sharing a component structure",
+      "kind": "codebase",
+      "folder": "apps/react-vite/src"
+    }
+  ]
+}

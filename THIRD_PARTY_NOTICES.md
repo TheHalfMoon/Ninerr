@@ -164,4 +164,16 @@ These are used to build and review Ninerr, and are not part of the product.
 - `phthomas/pstack` at `faa4e9f` (MIT, Copyright (c) 2026 Philip (@phthomas)): vendored skills in `.claude/skills/ps-*`, with the license in `.claude/skills/PSTACK-LICENSE`.
 - `@alibaba-group/open-code-review` (Apache-2.0) and GitHub Actions (`github-actions`, MIT) run in CI only and are not vendored.
 
+## Projects Ninerr was dogfooded on
+
+P08-G11 exercised Ninerr on local copies of these public projects, each at a pinned commit (`scripts/dogfood/projects.json`). None of their files are in this repository or in a release. The local copies keep their license files.
+
+- `timlrx/tailwind-nextjs-starter-blog` at `b45bef6` (MIT)
+- `vercel/commerce` at `3761e52` (MIT)
+- `shadcn-ui/ui` at `c2a6784` (MIT)
+- `StartBootstrap/startbootstrap-sb-admin-2` at `f030988` (MIT)
+- `excalidraw/excalidraw` at `4c00f31` (MIT)
+- `shadcn-ui/taxonomy` at `298a885` (MIT)
+- `alan2207/bulletproof-react` at `9506629` (MIT)
+
 Ninerr itself is licensed under Apache-2.0 (`LICENSE`). Founder-authorized projects that Ninerr studied without copying anything are recorded in the register and the packages' provenance, not here (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-08.md`). The complete audited register, with evidence for each entry, is `docs/provenance/LICENSE_REGISTER.json`.
