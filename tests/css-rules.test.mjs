@@ -19,7 +19,6 @@ const MAX = 1024 * 1024;
 const clean = (css) => sanitizeImportedStylesheet(css, MAX);
 // One loading declaration, so the rule-by-rule path is taken.
 const LOADS = ".zz{color:red;background:url(x.png)}";
-const LOADS_REMOVED = ".zz{color:red;}";
 
 test("a stylesheet keeps everything as written except what loads or executes", () => {
   const css = [
@@ -106,21 +105,31 @@ test("whatever the input, nothing kept loads or executes (generated)", () => {
 });
 
 // What the browser reads from the sanitized sheet must be what it reads from the original
-// with only the loading declaration removed by hand.
+// with only the loading parts removed by hand. Each case holds its loading part ("$L", a
+// declaration; "$I", an @import) inside the structure it tests, so that structure is cut
+// through, not kept whole.
+const LOAD = "background:url(x.png);";
+const IMPORT = "@import \"f.css\";";
 const SAME_MEANING = [
-  ["escaped whitespace in a selector", ".a\\ {color:red}.b{color:blue}"],
-  ["escaped whitespace in a value", ".a{font-family:Foo\\ ;color:blue}"],
-  ["a bad string", ".a{content:\"abc\n;color:red}.b{color:blue}"],
-  ["a comment between tokens", ".a{margin:1px/**/2px}a/**/b{color:red}"],
-  ["a custom property holding a block", ".a{--x:{a:b};color:blue}"],
-  ["a group rule nested in a style rule", ".a{color:red;@media (min-width:1px){color:blue}}"],
-  ["@scope with bare declarations", "@scope (.card){color:red}"],
-  ["@page margin rules", "@page{margin:1cm;@top-center{content:\"x\"}}"],
-  ["@font-feature-values blocks", "@font-feature-values Font{@styleset{nice:1}}"],
-  ["a stray semicolon in a selector", ".b;c{color:blue}.d{color:green}"],
-  ["a stray closing brace", "}.d{color:green}"],
-  ["HTML comment markers", "<!-- .a{color:red} -->"],
+  ["escaped whitespace in a selector", ".a\\ {$Lcolor:red}.b{color:blue}"],
+  ["escaped whitespace in a value", ".a{$Lfont-family:Foo\\ ;color:blue}"],
+  ["a bad string", ".a{$Lcontent:\"abc\n;color:red}.b{color:blue}"],
+  ["a comment between tokens", ".a{$Lmargin:1px/**/2px}a/**/b{$Lcolor:red}"],
+  ["a custom property holding a block", ".a{--x:{a:b};$Lcolor:blue}"],
+  ["a group rule nested in a style rule", ".a{color:red;@media (min-width:1px){$Lcolor:blue}}"],
+  ["@scope with bare declarations", "@scope (.card){$Lcolor:red}"],
+  ["@page margin rules", "@page{margin:1cm;@top-center{$Lcontent:\"x\"}}"],
+  ["@font-feature-values blocks", "@font-feature-values Font{@styleset{nice:1}}.a{$Lcolor:red}"],
+  ["a stray semicolon in a selector", ".b;c{$Lcolor:blue}.d{color:green}"],
+  ["a stray closing brace", "}.d{$Lcolor:green}"],
+  ["HTML comment markers", "<!-- .a{$Lcolor:red} -->.b{color:blue}"],
+  ["a comment before an @import", "/* fonts */$I\n.a{color:red}"],
+  ["a comment line between rules and an @import", ".z{color:green}\n/* fonts */\n$I\n.a{color:red}"],
+  ["an @import inside HTML comment markers", "<!-- $I .a{color:red} -->"],
+  ["a brace inside an unquoted url", ".a{background:url(x});color:red}.b{color:blue}"],
 ];
+const sanitizedInput = (css) => css.replaceAll("$L", LOAD).replaceAll("$I", IMPORT);
+const byHand = (css) => css.replaceAll("$L", "").replaceAll("$I", "").replace("background:url(x});", "");
 
 test("the browser reads the kept rules as it reads the original", browserTestOptions(), async () => {
   const { chromium } = await import("playwright-core");
@@ -133,8 +142,9 @@ test("the browser reads the kept rules as it reads the original", browserTestOpt
       return [...sheet.cssRules].map((rule) => rule.cssText);
     }, css);
     for (const [what, css] of SAME_MEANING) {
-      const result = clean(`${css}\n${LOADS}`);
-      assert.deepEqual(await rules(result.cssText), await rules(`${css}\n${LOADS_REMOVED}`), what);
+      const result = clean(sanitizedInput(css));
+      assert.equal(result.unsafe, true, what);
+      assert.deepEqual(await rules(result.cssText ?? ""), await rules(byHand(css)), what);
     }
   } finally {
     await browser.close();
@@ -198,5 +208,19 @@ test("a captured stylesheet keeps its safe rules, and sheets past the CSS budget
     await disposeStaticMirror(join(dir, "work"), result.value);
   } finally {
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("sanitizing takes time in proportion to the sheet, however it is written", () => {
+  const megabyte = 1024 * 1024;
+  for (const [what, css] of [
+    ["many statements after a long run of space", `${" ".repeat(500_000)}${"a;".repeat(260_000)}.z{background:url(x)}`],
+    ["many braces in one custom property", `.a{${" ".repeat(500_000)}--x:${"{}".repeat(260_000)};background:url(x)}`],
+    ["many comments and @imports", `${"/* c */@import \"x.css\";".repeat(40_000)}.a{color:red}`],
+  ]) {
+    const started = performance.now();
+    sanitizeImportedStylesheet(css, megabyte);
+    const took = performance.now() - started;
+    assert.ok(took < 2_000, `${what}: ${Math.round(took)} ms`);
   }
 });
