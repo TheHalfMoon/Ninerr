@@ -31,16 +31,24 @@ test("a change committed while the editor's stream is connecting is shown once t
   // The stream is requested after the document is loaded: commit a change right then, before
   // letting the stream through.
   const editor = await openEditor(running.host, {
-    beforeOpen: (tab) => tab.route("**/api/events*", async (route) => {
-      if (!committed) {
-        committed = true;
-        await ok(running.call("POST", "/api/edit", { baseRevision: 1, intent: "Rename", operations: [{ type: "set-props", nodeId: "page", set: { name: "Renamed" } }] }), "edit in the gap");
-      }
-      await route.continue();
-    }),
+    beforeOpen: async (tab) => {
+      // The revision the editor shows at the very moment it says it is ready.
+      await tab.addInitScript(() => {
+        new MutationObserver(() => {
+          if (document.documentElement.dataset.ready === "true" && window.readyRevision === undefined) window.readyRevision = document.getElementById("revision")?.textContent ?? null;
+        }).observe(document, { subtree: true, attributes: true, attributeFilter: ["data-ready"] });
+      });
+      await tab.route("**/api/events*", async (route) => {
+        if (!committed) {
+          committed = true;
+          await ok(running.call("POST", "/api/edit", { baseRevision: 1, intent: "Rename", operations: [{ type: "set-props", nodeId: "page", set: { name: "Renamed" } }] }), "edit in the gap");
+        }
+        await route.continue();
+      });
+    },
   });
   t.after(() => editor.close());
   assert.equal(committed, true);
-  assert.equal(await editor.page.locator("#revision").textContent(), "Revision 2", "ready means caught up");
+  assert.equal(await editor.page.evaluate(() => window.readyRevision), "Revision 2", "ready means caught up");
   assert.deepEqual(editor.errors, []);
 });

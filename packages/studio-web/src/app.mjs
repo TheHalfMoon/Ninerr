@@ -1063,13 +1063,22 @@ function save() {
 // The event stream reconnects with a growing delay (1 s to 30 s, reset once it opens), and
 // refreshes the copy on reopening, since changes may have been missed while it was down.
 let streamDelay = 1000;
-function listenForChanges({ refreshOnOpen = false } = {}) {
+// Settled once, when the first stream is open and the copy has caught up, or when it was
+// refused (#302): the editor is ready from then on.
+let settleStream = null;
+const streamSettled = new Promise((resolve) => {
+  settleStream = resolve;
+});
+/**
+ * Start the change stream. The copy was loaded before the stream opened, so a change committed
+ * in between would never arrive: with `catchUp`, the first opening asks the host for its
+ * revision and refreshes the copy only if it moved (#302).
+ */
+function listenForChanges({ refreshOnOpen = false, catchUp = false } = {}) {
   state.events?.close();
   if (ended) return;
   const events = state.client.events();
   state.events = events;
-  // Resolved once the stream is open: from then on no change is missed (#302).
-  state.eventsOpen = new Promise((resolve) => events.addEventListener("open", resolve, { once: true }));
   let dropped = refreshOnOpen;
   events.addEventListener("change", (message) => {
     const received = performance.now();
@@ -1112,6 +1121,7 @@ function listenForChanges({ refreshOnOpen = false } = {}) {
     // A closed stream is not retried by the browser: find out whether the session ended,
     // and otherwise open a new one after a delay.
     if (events.readyState === 2 && state.events === events) {
+      settleStream();
       const delay = streamDelay;
       streamDelay = Math.min(30_000, streamDelay * 2);
       state.client.get("/api/session").then(
@@ -1127,6 +1137,15 @@ function listenForChanges({ refreshOnOpen = false } = {}) {
     // Changes may have been missed while the stream was down.
     if (dropped && state.document !== null) requestResync();
     dropped = false;
+    if (!catchUp) {
+      settleStream();
+      return;
+    }
+    // The first opening: catch up only if the host moved past the loaded copy.
+    state.client.get("/api/session").then(
+      (session) => (session.project === state.project && state.document !== null && session.revision !== state.revision ? requestResync() : undefined),
+      () => undefined,
+    ).finally(() => settleStream());
   });
 }
 
@@ -1603,15 +1622,13 @@ async function main() {
     setStatus(describeError(error));
     return;
   }
-  // The copy was loaded before the stream opened: a change committed in between would be
-  // missed, so the first open refreshes it as a reconnect does (#302).
-  listenForChanges({ refreshOnOpen: true });
+  listenForChanges({ catchUp: true });
   state.client.get("/api/confirmations").then(({ pending }) => showConfirmations(pending), () => {});
   if (session.project === null) await openProjectsDialog();
   else setStatus(`Opened ${session.project}.`);
-  // Ready once changes reach this copy; a stream that cannot open does not hold the editor back.
-  await Promise.race([state.eventsOpen, new Promise((resolve) => setTimeout(resolve, 5_000))]);
-  await resyncing;
+  // Ready once changes reach this copy (#302): the stream is open and the copy caught up, or
+  // the stream was refused. A stream that never answers does not hold the editor back.
+  await Promise.race([streamSettled, new Promise((resolve) => setTimeout(resolve, 5_000))]);
   document.documentElement.dataset.ready = "true";
 }
 
