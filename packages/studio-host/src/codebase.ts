@@ -402,18 +402,45 @@ function sameFileValue(prop: string, a: string, b: string): boolean {
   return equalProp(prop, a, b) && sameOverlapOrder(Object.keys(styleProperties({ cssText: a })), Object.keys(styleProperties({ cssText: b })));
 }
 
-// Properties whose first name part differs but which still set one another.
-const OVERLAPS: Record<string, string[]> = { inset: ["top", "right", "bottom", "left"], gap: ["row", "column"], font: ["line"], place: ["align", "justify"] };
-const nameGroup = (name: string): string => (name.startsWith("--") ? name : name.replace(/^-/u, "").split("-")[0]);
-const overlap = (x: string, y: string): boolean => {
-  const [a, b] = [nameGroup(x), nameGroup(y)];
-  return a === b || (OVERLAPS[a]?.includes(b) ?? false) || (OVERLAPS[b]?.includes(a) ?? false);
+/**
+ * Whether the file's style already says what the layer's does: compared as properties when
+ * the file's is plain, in any order, since the layer keeps its properties sorted.
+ */
+function fileMatchesLayer(prop: string, fileValue: string, mine: string): boolean {
+  if (prop === "style" && !plainStyle(fileValue)) return false;
+  return equalProp(prop, fileValue, mine);
+}
+
+// Shorthands and what they set, beyond their own name followed by "-" (margin-top).
+const SHORTHANDS = new Set(["margin", "padding", "inset", "border", "border-top", "border-right", "border-bottom", "border-left", "border-block", "border-inline", "border-block-start", "border-block-end", "border-inline-start", "border-inline-end", "border-width", "border-style", "border-color", "border-radius", "border-image", "outline", "background", "font", "flex", "flex-flow", "grid", "grid-template", "grid-area", "grid-row", "grid-column", "gap", "grid-gap", "place-items", "place-content", "place-self", "text-decoration", "list-style", "overflow", "transition", "animation", "mask", "columns", "scroll-margin", "scroll-padding", "inset-block", "inset-inline", "margin-block", "margin-inline", "padding-block", "padding-inline", "all"]);
+const SETS: Record<string, string[]> = {
+  inset: ["top", "right", "bottom", "left"],
+  gap: ["row-gap", "column-gap", "grid-gap", "grid-row-gap", "grid-column-gap"],
+  "grid-gap": ["row-gap", "column-gap", "gap", "grid-row-gap", "grid-column-gap"],
+  font: ["line-height"],
+  "flex-flow": ["flex-direction", "flex-wrap"],
+  "place-items": ["align-items", "justify-items"],
+  "place-content": ["align-content", "justify-content"],
+  "place-self": ["align-self", "justify-self"],
+  "border-width": ["border-top-width", "border-right-width", "border-bottom-width", "border-left-width"],
+  "border-style": ["border-top-style", "border-right-style", "border-bottom-style", "border-left-style"],
+  "border-color": ["border-top-color", "border-right-color", "border-bottom-color", "border-left-color"],
+  "border-radius": ["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"],
+  columns: ["column-count", "column-width"],
+  "inset-block": ["top", "bottom"],
+  "inset-inline": ["left", "right"],
+  "margin-inline": ["margin-left", "margin-right"],
+  "margin-block": ["margin-top", "margin-bottom"],
+  "padding-inline": ["padding-left", "padding-right"],
+  "padding-block": ["padding-top", "padding-bottom"],
 };
+const sets = (shorthand: string, name: string): boolean => SHORTHANDS.has(shorthand) && (shorthand === "all" || name.startsWith(`${shorthand}-`) || (SETS[shorthand]?.includes(name) ?? false));
+const overlap = (x: string, y: string): boolean => sets(x, y) || sets(y, x);
 
 /**
- * Whether two styles with the same properties write the ones that can set one another
- * (margin and margin-top, inset and top) in the same order: swapped, the later one wins
- * instead. Others may come in any order.
+ * Whether two styles with the same properties write a shorthand and what it sets (margin and
+ * margin-top, inset and top) in the same order: swapped, the other one wins. Others may
+ * come in any order.
  */
 function sameOverlapOrder(first: string[], second: string[]): boolean {
   const at = new Map(second.map((name, index) => [name, index]));
@@ -715,12 +742,12 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
       }
       // Not changed here: the base stays, so a change made in the file is never undone.
       if (equalProp(prop, mine, base)) continue;
-      if (sameFileValue(prop, fileValue, mine)) {
+      if (fileMatchesLayer(prop, fileValue, mine)) {
         nextBase.props[prop] = fileValue;
         matched.push({ nodeId: node.id, field, value: fileValue });
         continue;
       }
-      const unwritable = propUnwritable(prop, mine, fileValue, exclude.has(`${node.id}:${field}`));
+      const unwritable = propUnwritable(prop, mine, fileValue, base, exclude.has(`${node.id}:${field}`));
       if (!sameFileValue(prop, fileValue, base) && (!keptAgainst(keep, `${node.id}:${field}`, prop, fileValue) || unwritable !== null)) {
         conflicts.push({ nodeId: node.id, field, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
         continue;
@@ -815,11 +842,12 @@ function textUnwritable(mine: string, live: string, excluded: boolean): string |
 }
 
 /** Why a layer's prop value cannot be written into the source, or null. */
-function propUnwritable(prop: string, mine: string, fileValue: string, excluded: boolean): string | null {
+function propUnwritable(prop: string, mine: string, fileValue: string, base: string, excluded: boolean): string | null {
   if (/[\r\n\u2028\u2029]/u.test(mine)) return `${prop} with a line break is not written`;
   // A write rebuilds the style from the layer's, which is read from the file by
-  // styleProperties: a part it does not see would be lost (review of #291).
-  if (prop === "style" && !plainStyle(fileValue)) return "a style Ninerr cannot read exactly (a comment, !important, an escape, a ; inside quotes or parentheses, or a declaration it does not keep) is not written back";
+  // styleProperties: a part it does not see would be lost, from the file as it is or, through
+  // the layer, from the file as it was brought in (reviews of #291).
+  if (prop === "style" && !(plainStyle(fileValue) && plainStyle(base))) return "a style Ninerr cannot read exactly (a comment, !important, an escape, a ; inside quotes or parentheses, or a declaration it does not keep) is not written back";
   if (excluded) return `${prop} would not read back as written, so it is not written`;
   return null;
 }

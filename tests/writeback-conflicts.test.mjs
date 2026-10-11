@@ -294,3 +294,41 @@ test("a shorthand and its longhand swapped in the file are not the style shown",
   const refused = await call("POST", "/api/codebase/resolve", { nodeId: element, field: "style", file: shown });
   assert.deepEqual([refused.status, refused.json?.error?.code], [409, "no-conflict"]);
 });
+
+// From the third review of #291: the layer keeps its style's properties sorted, so whether the
+// file already says the layer's style is asked in any order; order counts only between a
+// shorthand and what it sets, between two file values; and a style read from an unplain file
+// at bring-in is not written either, since the layer's copy of it is the lossy one.
+test("a style edited alike in both places matches, whatever order the file keeps", async (t) => {
+  const source = BADGE.replace("color: green; padding: 4px", "font-weight: bold; font-size: 12px");
+  const { call, file, element, revision } = await broughtIn(t, source, "Badge");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { "font-size": "14px", "font-weight": "bold" } } }] }), "edit");
+  writeFileSync(file, source.replace("12px", "14px"));
+  const plan = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual([plan.conflicts, plan.matched.map(({ field }) => field)], [[], ["style"]]);
+});
+
+test("a file that only reorders properties that do not set one another is unchanged", async (t) => {
+  const source = BADGE.replace("color: green; padding: 4px", "text-align: left; text-transform: none; padding: 4px");
+  const { call, file, element, revision } = await broughtIn(t, source, "Badge");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { padding: "8px", "text-align": "left", "text-transform": "none" } } }] }), "edit");
+  writeFileSync(file, source.replace("text-align: left; text-transform: none", "text-transform: none; text-align: left"));
+  const plan = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual([plan.conflicts, plan.changes.map(({ field }) => field)], [[], ["style"]]);
+});
+
+test("a style brought in from an unplain file is not written, even over a plain one", async (t) => {
+  const { call, file, element, document, revision } = await broughtIn(t, ICON, "Icon");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { ...document.nodes[element].props.style, color: "blue" } } }] }), "edit");
+  writeFileSync(file, ICON.replace("color: green; background: url(data:image/png;base64,AAA)", "color: green; background: red"));
+  const shown = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual(shown.conflicts.map(({ field, keepable }) => [field, keepable]), [["style", false]]);
+  // Keeping it is refused: it stays a conflict, and nothing is written.
+  const keep = [{ nodeId: element, field: "style", file: "color: green; background: red" }];
+  const kept = await ok(call("POST", "/api/codebase/preview", { nodeId: element, keep }), "preview with keep");
+  assert.deepEqual([kept.changes, kept.conflicts.map((conflict) => conflict.field)], [[], ["style"]]);
+  // Taking the file's value is allowed.
+  await ok(call("POST", "/api/codebase/resolve", { nodeId: element, field: "style", file: "color: green; background: red" }), "take");
+  const after = await ok(call("GET", "/api/document"), "document");
+  assert.deepEqual(after.document.nodes[element].props.style, { background: "red", color: "green" });
+});
