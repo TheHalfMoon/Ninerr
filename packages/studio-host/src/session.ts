@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { LocalCollaborationRoom, createAccessPolicy, createCollaborationState } from "@ninerr/collaboration";
 import { createDocument } from "@ninerr/document-model";
 import { createHistoryState } from "@ninerr/history";
-import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES, createProject, migrateLegacyProject, openProject, projectLayout, type JournalSummary, type ProjectStore, type RecoveryReport } from "@ninerr/persistence";
+import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES, canonicalJson, createProject, migrateLegacyProject, openProject, projectLayout, type JournalSummary, type ProjectStore, type RecoveryReport } from "@ninerr/persistence";
 import { StudioError } from "./errors.ts";
 
 /** Who is acting. People act through the editor; agents act through MCP (PC5). */
@@ -366,7 +366,9 @@ export class StudioSession {
       this.#base = null;
       throw this.#storeFailure(error);
     }
-    // The room applied the same transaction to the same document the store holds.
+    // The room applied the same transaction to the same document the store holds, equal to the
+    // store's up to key order (the store sorts keys, #172): it is only the next commit's base,
+    // and nothing draws or exports it.
     this.#base = { document: nextDocument, past: [], future: [] };
     const event: ChangeEvent = {
       type: "transaction",
@@ -379,7 +381,10 @@ export class StudioSession {
       intent: input.intent,
       tool: input.tool,
       affectedNodeIds,
-      operations: attributed.operations as unknown[],
+      // In the journal's form (#172): keys in its order, so a client applying the change draws
+      // what a reload of the stored document draws (a style's later shorthand overrides an
+      // earlier longhand, so the order of its keys matters).
+      operations: JSON.parse(canonicalJson(attributed.operations)) as unknown[],
       ...(input.link?.undoOf ? { undoOf: input.link.undoOf } : {}),
       ...(input.link?.redoOf ? { redoOf: input.link.redoOf } : {}),
       ...(input.link?.revertOf ? { revertOf: input.link.revertOf } : {}),
