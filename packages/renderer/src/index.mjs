@@ -110,7 +110,7 @@ const VIEWPORT_SIZE = Object.freeze({
 });
 export const DRAWN_ID = "data-ninerr-html-id";
 const ESCAPE = /\\(?:[0-9a-f]{1,6}[ \t\n]?|[^\n0-9a-f]|$)/iuy;
-const ID_ATTRIBUTE = /\[\s*id\s*(?=\]|[~|^$*]?=)/iuy;
+const ID_ATTRIBUTE = /\[\s*(?:\*?\|)?id\s*(?=\]|[~|^$*]?=)/iuy;
 
 /**
  * A selector as the canvas draws it (#297): `#x` matches the drawn id as
@@ -335,7 +335,25 @@ export function createRenderer(root) {
     // Viewport lengths in its declarations, as in a layer's style (DESIGN_VIEWPORT), and ids
     // in its selectors as the canvas draws them (drawnSelector).
     const lengths = (group) => {
-      for (const rule of group.cssRules) {
+      for (let index = 0; index < group.cssRules.length; index += 1) {
+        let rule = group.cssRules[index];
+        // A nested @scope's start and limit are selectors too, but read-only: the rule is put
+        // back in its place with them drawn (#310). insertRule adds one rule to this group, so
+        // nothing reaches past the frame's own @scope; a rule the browser refuses stays as it was.
+        if (rule instanceof ScopeRule && typeof rule.start === "string") {
+          const prelude = `@scope (${rule.start})${typeof rule.end === "string" ? ` to (${rule.end})` : ""}`;
+          const drawnPrelude = `@scope (${drawnSelector(rule.start)})${typeof rule.end === "string" ? ` to (${drawnSelector(rule.end)})` : ""}`;
+          if (drawnPrelude !== prelude && rule.cssText.startsWith(`${prelude} {`)) {
+            const text = `${drawnPrelude}${rule.cssText.slice(prelude.length)}`;
+            try {
+              group.deleteRule(index);
+              group.insertRule(text, index);
+            } catch {
+              group.insertRule(rule.cssText, index);
+            }
+            rule = group.cssRules[index];
+          }
+        }
         if (typeof rule.selectorText === "string") {
           const written = rule.selectorText;
           const drawn = drawnSelector(written);

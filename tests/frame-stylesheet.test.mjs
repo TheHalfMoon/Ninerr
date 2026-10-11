@@ -414,3 +414,40 @@ test("on the canvas, a page's id rules apply with an id's specificity, nested an
     await browser.close();
   }
 });
+
+// #310 (from the review of #309): a nested @scope's start and limit are selectors the
+// browser keeps read-only, so their ids were never drawn: @scope (#card) matched nothing and
+// "to (#inner)" was no limit. [*|id] was not drawn either.
+test("a page's @scope with ids, and [*|id], apply on the canvas", browserTestOptions(), async () => {
+  const { readFileSync } = await import("node:fs");
+  const { findBrowser, launchBrowser } = await import("./support/browser.mjs");
+  const browser = await launchBrowser({ executablePath: findBrowser(), headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>");
+    const source = readFileSync(new URL("../packages/renderer/src/index.mjs", import.meta.url), "utf8");
+    await page.addScriptTag({ type: "module", content: `${source}\nwindow.rendererForTest = createRenderer(document.getElementById("root"));` });
+    await page.waitForFunction(() => window.rendererForTest !== undefined);
+    const drawn = await page.evaluate(() => {
+      const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children, props, metadata: {} });
+      const sheet = "@scope (#card) to (#inner) { p { color: rgb(255, 0, 0) } }\n@media (min-width: 1px) { @scope (#card) { .deep { font-weight: 700 } } }\n[*|id=\"note\"] { color: rgb(0, 128, 0) }";
+      const doc = {
+        rootIds: ["page"],
+        nodes: {
+          page: node("page", null, ["card", "note"], { tag: "div", stylesheet: sheet }),
+          card: node("card", "page", ["outer", "inner"], { tag: "div", attributes: { id: "card" } }),
+          outer: node("outer", "card", [], { tag: "p", text: "Outer", attributes: { class: "deep" } }),
+          inner: node("inner", "card", ["kept"], { tag: "div", attributes: { id: "inner" } }),
+          kept: node("kept", "inner", [], { tag: "p", text: "Inside the limit" }),
+          note: node("note", "page", [], { tag: "p", text: "Note", attributes: { id: "note" } }),
+        },
+      };
+      window.rendererForTest.render(doc);
+      const style = (id) => getComputedStyle(document.querySelector(`[data-ninerr-id="${id}"]`));
+      return { outer: style("outer").color, deep: style("outer").fontWeight, kept: style("kept").color, note: style("note").color, sheets: document.querySelectorAll("style[data-ninerr-sheet]").length, dropped: window.rendererForTest.stats.dropped };
+    });
+    assert.deepEqual(drawn, { outer: "rgb(255, 0, 0)", deep: "700", kept: "rgb(0, 0, 0)", note: "rgb(0, 128, 0)", sheets: 1, dropped: 0 });
+  } finally {
+    await browser.close();
+  }
+});
