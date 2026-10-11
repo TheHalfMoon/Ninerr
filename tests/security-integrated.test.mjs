@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { browserTestOptions } from "./support/browser.mjs";
+import { closeServerAfterTest } from "./support/cleanup.mjs";
 import { waitRevision } from "./support/editor.mjs";
 import { attemptsIn, browse, openTab, startNinerr } from "./support/ninerr-process.mjs";
 
@@ -97,6 +98,7 @@ test("hostile neighbours get nothing from a running Ninerr: a foreign page, a re
   const projects = join(root, "projects");
   const browser = await browse();
   const attacker = createServer();
+  closeServerAfterTest(attacker);
   let ninerr = null;
   try {
     ninerr = await startNinerr(projects);

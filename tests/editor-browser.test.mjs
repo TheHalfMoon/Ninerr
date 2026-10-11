@@ -4,8 +4,8 @@ import { appendFileSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startStudioHost } from "../packages/studio-host/src/index.ts";
-import { browserTestOptions, findBrowser } from "./support/browser.mjs";
+import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
+import { browserTestOptions, findBrowser, launchBrowser } from "./support/browser.mjs";
 import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
 
 // PC4 (#146): the editor end to end, in Chromium, against a real studio host on loopback.
@@ -17,8 +17,7 @@ let clock = 0;
 const now = () => new Date(Date.UTC(2026, 9, 7, 12, 0, 0) + clock++ * 1000).toISOString();
 
 async function openEditor(host) {
-  const { chromium } = await import("playwright-core");
-  const browser = await chromium.launch({ executablePath: findBrowser(), headless: true, args: ["--no-sandbox"] });
+  const browser = await launchBrowser({ executablePath: findBrowser(), headless: true, args: ["--no-sandbox"] });
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const foreign = [];
   const errors = [];

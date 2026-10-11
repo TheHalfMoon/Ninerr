@@ -8,7 +8,7 @@ import {
   importHtmlSnapshot,
   sanitizeImportedStylesheet,
 } from "../packages/import-stack/src/index.ts";
-import { browserTestOptions, findBrowser } from "./support/browser.mjs";
+import { browserTestOptions, findBrowser, launchBrowser } from "./support/browser.mjs";
 import { createPrng } from "./support/prng.mjs";
 
 // #283 (found by P08-G11 dogfooding on StartBootstrap's sb-admin-2): an imported stylesheet
@@ -136,8 +136,7 @@ const sanitizedInput = (css) => css.replaceAll("$L", LOAD).replaceAll("$I", IMPO
 const byHand = (css) => css.replaceAll("$L", "").replaceAll("$I", "").replace("background:url(x});", "").replace("background:url(x\"});", "");
 
 test("the browser reads the kept rules as it reads the original", browserTestOptions(), async () => {
-  const { chromium } = await import("playwright-core");
-  const browser = await chromium.launch({ executablePath: findBrowser(), headless: true });
+  const browser = await launchBrowser({ executablePath: findBrowser(), headless: true });
   try {
     const page = await browser.newPage();
     const rules = (css) => page.evaluate((text) => {

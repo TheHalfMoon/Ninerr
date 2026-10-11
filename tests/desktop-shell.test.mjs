@@ -8,6 +8,7 @@ import { join } from "node:path";
 
 import { editorOrigin, mayNavigate, mayRequest, windowPreferences } from "../packages/desktop/src/policy.mjs";
 import { findElectron } from "../scripts/desktop/electron.mjs";
+import { closeServerAfterTest } from "./support/cleanup.mjs";
 import { desktopTestOptions, display, launchDesktop } from "./support/desktop.mjs";
 import { layerCount, waitRevision } from "./support/editor.mjs";
 import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
@@ -58,6 +59,7 @@ test("the desktop app runs the editor in an isolated, sandboxed window that reac
     response.end("other");
   });
   await new Promise((resolve) => other.listen(0, "127.0.0.1", resolve));
+  closeServerAfterTest(other);
   const otherUrl = `http://127.0.0.1:${other.address().port}`;
   // Every connection the app makes off this computer goes through this proxy, which
   // records it and refuses it. Ninerr must make none, not even from the browser process.
@@ -71,6 +73,7 @@ test("the desktop app runs the editor in an isolated, sandboxed window that reac
     socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
   });
   await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  closeServerAfterTest(proxy);
   const args = [`--proxy-server=http://127.0.0.1:${proxy.address().port}`];
   const home = join(root, "home");
   mkdirSync(join(home, "Downloads"), { recursive: true });

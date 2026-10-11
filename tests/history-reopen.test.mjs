@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { startStudioHost } from "../packages/studio-host/src/index.ts";
+import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
 import { MAX_JOURNAL_SUMMARIES } from "../packages/persistence/src/store.ts";
 import { createDocument } from "../packages/document-model/src/index.mjs";
 import { PROJECT_FILES, createProject, openProject } from "../packages/persistence/src/index.ts";
