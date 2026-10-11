@@ -6,7 +6,7 @@ Last updated: 2026-10-11
 
 **P08 — Deep qualification and dogfooding.** N0, Ninerr independence and migration (umbrella #190), is `CLOSED_CANONICAL`. The founder renamed the product to Ninerr on 2026-10-08 and set the order: N0, P08 deep qualification and dogfooding, P09 Ninerr UI and UX, P10 release candidate hardening, then the founder release gate (`docs/MASTER_PLAN.md`). v1.0.0 is not authorized.
 
-Status: **P08 ACTIVE: every engineering exit criterion is met; one founder decision remains** (`docs/evidence/P08_EXIT_QUALIFICATION_2026-10-11.md`): accepting the P08-G4 stress budgets, and where gate 13 is judged (#275). P09 starts after that decision. N0 closed on 2026-10-09, with every exit criterion verified (`docs/evidence/N0_CLOSE_2026-10-09.md`). Each N0 grain landed through its own PR with exact-head CI, Jev qualification and review, and its evidence is in the `N0_*` records under docs/evidence. N0 delivered:
+Status: **P08 ACTIVE.** Its engineering exit criteria are met, with stated caveats (`docs/evidence/P08_EXIT_QUALIFICATION_2026-10-11.md`). Two decisions are the founder's: the P08-G4 stress budgets together with where gate 13 is judged (#275), and whether #283 (imported stylesheets) moves out of P08. P09 does not start before them. N0 closed on 2026-10-09, with every exit criterion verified (`docs/evidence/N0_CLOSE_2026-10-09.md`). Each N0 grain landed through its own PR with exact-head CI, Jev qualification and review, and its evidence is in the `N0_*` records under docs/evidence. N0 delivered:
 - the identity census (G1);
 - the persisted-data and host migrations with backward compatibility (G2), and the #185 write-back fix;
 - the package scope, product, tooling, runtime and prose identity (G3);
@@ -25,7 +25,7 @@ P08 tests complete end-to-end journeys repeatedly and adds property and state-ma
 
 `1f0ee8e7f2edc45ed65bdf13bf39753e3d0da5c3`
 
-This is the normal merge commit for PR #293 (#172). It is the latest commit whose post-merge run was verified when this page was updated. The CI and Desktop workflows completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three. The harness merge that followed, PR #292, changes only `scripts/dogfood/`, the license register, the notices and the identity census.
+This is the normal merge commit for PR #293 (#172). It is the latest commit whose post-merge run was verified when this page was updated. The CI and Desktop workflows completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three. The harness merge that followed, PR #292, changes only `scripts/dogfood/`, the license register, the notices, a founder-authorization record (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-10_DOGFOODING.md`) and the identity census.
 
 ## Before the v1 tag
 1. **License.** Resolved: Ninerr is Apache-2.0 (`LICENSE`), after the A/B source-rights audit (`docs/evidence/N0_G7A_LICENSE_2026-10-09.md`).
