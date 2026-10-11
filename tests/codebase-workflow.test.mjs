@@ -123,10 +123,13 @@ test("connect a folder, bring a component in, edit it and write the edit back to
     await page.locator(`[role=treeitem][data-node-id="${section}"] > .row`).click();
     await page.locator("#action-code").click();
     await page.locator("#codebase-review").click();
-    await page.locator("#codebase-preview button", { hasText: "Take the file's" }).click();
+    // A double click takes it once: the button is disabled at the first click.
+    await page.locator("#codebase-preview button", { hasText: "Take the file's" }).dblclick();
     await waitRevision(page, 7);
     await page.waitForFunction(() => /There is nothing to write back/u.test(document.getElementById("codebase-preview")?.textContent ?? "") && !/Changed both/u.test(document.getElementById("codebase-preview").textContent));
     assert.equal(host.session.document.nodes[heading].props.text, "Business");
+    assert.equal(host.session.revision, 7, "taken once");
+    assert.equal(await page.locator("#dialog[open] .error").first().textContent().catch(() => ""), "");
     assert.equal(await page.locator("#history li").first().locator(".intent").textContent(), "Take text from PriceCard.jsx");
     const before = readFileSync(cardPath, "utf8");
     assert.match(before, /<h2>Business<\/h2>/u, "taking the file's value writes nothing to it");

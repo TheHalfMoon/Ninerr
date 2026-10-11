@@ -333,7 +333,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       const current = requireSession();
       const folder = connectedFolder(current.name);
       settleWriteBacksOf(current, folder);
-      const { operations, file, field } = resolveWithFile(current.document, body?.nodeId, body?.field, folder);
+      const { operations, file, field } = resolveWithFile(current.document, body?.nodeId, body?.field, body?.file, folder);
       return current.edit(owner, { baseRevision: current.revision, operations, intent: `Take ${field} from ${file}`, tool: "ninerr:codebase" });
     },
     "POST /api/codebase/write": (body) => {
