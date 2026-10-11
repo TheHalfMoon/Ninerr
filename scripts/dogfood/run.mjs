@@ -387,7 +387,17 @@ try {
     const inFrame = (id) => { let at = snapshot.nodes[id]; while (at && at.parentId !== null) at = snapshot.nodes[at.parentId]; return at?.id === target.frameId; };
     const depthOf = (id) => { let depth = 0; let at = snapshot.nodes[id]; while (at.parentId !== null) { depth += 1; at = snapshot.nodes[at.parentId]; } return depth; };
     // The deepest drawn text layer, selected by clicking it on the canvas.
-    const candidates = Object.values(snapshot.nodes).filter((node) => inFrame(node.id) && typeof node.props?.text === "string" && node.props.text.trim() !== "").sort((a, b) => depthOf(b.id) - depthOf(a.id));
+    const texts = Object.values(snapshot.nodes).filter((node) => inFrame(node.id) && typeof node.props?.text === "string" && node.props.text.trim() !== "").sort((a, b) => depthOf(b.id) - depthOf(a.id));
+    // Only text the page's own stylesheets draw: a closed menu or a modal is in the layers but
+    // takes no space on the canvas (#283).
+    const drawn = new Set(await page.evaluate((ids) => {
+      const frame = document.querySelector("iframe").contentDocument;
+      return ids.filter((id) => {
+        const element = frame.querySelector(`[data-ninerr-id="${id}"]`);
+        return element !== null && element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
+      });
+    }, texts.map((node) => node.id)));
+    const candidates = texts.filter((node) => drawn.has(node.id));
     let textNode = null;
     for (const node of candidates.slice(0, 40)) {
       const point = await reachable(page, node.id);

@@ -243,3 +243,35 @@ test("the canvas drops a stylesheet that would end its frame's scope, even one w
     await browser.close();
   }
 });
+
+// Found dogfooding sb-admin-2 with #283: on the canvas, 100vh is the canvas frame's height,
+// which the canvas sets to fit the content: a page with min-height:100vh outgrew the frame on
+// every resize, and what lay below was out of reach. Viewport lengths in an import are taken
+// against the design viewport (1024 × 768) instead.
+test("an import's viewport lengths are pixels of the design viewport", () => {
+  assert.equal(
+    frameStylesheet([".s{min-height:100vh;width:50vw;margin:-10dvh 0}.h-100vh{height:1px}.a{width:calc(100vw - 2rem)}"]),
+    ".s{min-height:768px;width:512px;margin:-76.8px 0}.h-100vh{height:1px}.a{width:calc(1024px - 2rem)}",
+  );
+});
+
+test("a page using viewport heights fits on the canvas, and stays fitted after an edit", browserTestOptions(), async (t) => {
+  const running = await host(t);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  const html = `<style>.side{min-height:100vh;background:#4e73df}</style><div class="side">Menu</div><p style="height:50vh">Tall</p>${"<p>Row</p>".repeat(30)}<p class="last">The end</p>`;
+  const { event } = await imported(running, html);
+  await waitRevision(page, event.revision);
+  const fit = () => page.evaluate(() => {
+    const iframe = document.querySelector("iframe");
+    const last = iframe.contentDocument.querySelector(".last").getBoundingClientRect();
+    return { frame: iframe.offsetHeight, lastBottom: Math.ceil(last.bottom), side: Math.round(iframe.contentDocument.querySelector(".side").getBoundingClientRect().height) };
+  });
+  const first = await fit();
+  assert.equal(first.side, 768);
+  assert.ok(first.lastBottom <= first.frame, JSON.stringify(first));
+  await ok(running.call("POST", "/api/edit", { baseRevision: event.revision, intent: "Rename", operations: [{ type: "set-props", nodeId: event.frameId, set: { name: "Renamed" } }] }), "edit");
+  await waitRevision(page, event.revision + 1);
+  assert.deepEqual(await fit(), first, "the frame does not grow again");
+});

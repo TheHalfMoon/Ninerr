@@ -303,6 +303,24 @@ function selectors(prelude: string): string[] {
 // frame itself.
 const PAGE_ROOT = /^(\s*)(?:(?:html|:root)(?:\s*>\s*|\s+)body|html|:root|body)(?=$|[\s>+~.#[:,])/iu;
 
+/**
+ * The viewport an imported page is designed for on the canvas (#283, found dogfooding
+ * sb-admin-2). On the canvas a viewport unit would be the canvas frame's: the canvas sizes its
+ * frame to the content, so `min-height: 100vh` grows with each resize and the page always
+ * outgrows the frame. A frame's stylesheet takes viewport units against this size instead.
+ */
+export const DESIGN_VIEWPORT = Object.freeze({ width: 1024, height: 768 });
+
+// A viewport length (vh, vw, vmin, vmax, and their d, s and l forms), not part of a name.
+const VIEWPORT_LENGTH = /(?<![\w-])(-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)[dsl]?v(h|w|min|max)\b/giu;
+
+/** CSS text (a declaration block or a value) with its viewport lengths as pixels of DESIGN_VIEWPORT. */
+export function fixedViewportUnits(block: string): string {
+  const { width, height } = DESIGN_VIEWPORT;
+  const size = { h: height, w: width, min: Math.min(width, height), max: Math.max(width, height) };
+  return block.replace(VIEWPORT_LENGTH, (_match, amount: string, unit: string) => `${Math.round(Number(amount) * size[unit.toLowerCase() as keyof typeof size] * 100) / 10_000}px`);
+}
+
 /** A rule list with each selector that names the page renamed to the frame (:scope). */
 function scopedRules(css: string, depth: number): string {
   if (depth > MAX_DEPTH) return css;
@@ -310,7 +328,7 @@ function scopedRules(css: string, depth: number): string {
     if (item.block === null) return item.prelude;
     const name = item.atRule;
     if (name !== null) return GROUP_RULES.has(name) ? `${item.prelude}{${scopedRules(item.block, depth + 1)}}` : `${item.prelude}{${item.block}}`;
-    return `${selectors(item.prelude).map((selector) => selector.replace(PAGE_ROOT, "$1:scope")).join(",")}{${item.block}}`;
+    return `${selectors(item.prelude).map((selector) => selector.replace(PAGE_ROOT, "$1:scope")).join(",")}{${fixedViewportUnits(item.block)}}`;
   }).join("");
 }
 

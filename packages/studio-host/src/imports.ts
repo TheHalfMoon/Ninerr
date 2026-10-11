@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, frameStylesheet, importHtmlSnapshot, sanitizeImportedStylesheet, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
+import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, fixedViewportUnits, frameStylesheet, importHtmlSnapshot, sanitizeImportedStylesheet, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
 import { inferSemantics, reviewImport } from "@ninerr/intake";
 import { StudioError } from "./errors.ts";
 
@@ -302,7 +302,8 @@ function importOperation(proposalInput: ImportProposal, name: string) {
     return {
       ...node,
       parentId: node.parentId === null ? frameId : node.parentId,
-      props: { ...node.props, style: styleProperties(node.props.style), ...(semantics.has(node.id) ? { semantics: semantics.get(node.id) } : {}) },
+      // Viewport lengths against the design viewport, as in the frame's stylesheet (#283).
+      props: { ...node.props, style: Object.fromEntries(Object.entries(styleProperties(node.props.style)).map(([name, value]) => [name, fixedViewportUnits(value)])), ...(semantics.has(node.id) ? { semantics: semantics.get(node.id) } : {}) },
     };
   })];
   return {
