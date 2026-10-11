@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, importHtmlSnapshot, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
+import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, frameStylesheet, importHtmlSnapshot, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
 import { inferSemantics, reviewImport } from "@ninerr/intake";
 import { StudioError } from "./errors.ts";
 
@@ -116,7 +116,7 @@ export class ImportDesk {
 
 function summarize(proposalId: string, name: string, proposal: ImportProposal, review: ReturnType<typeof reviewImport>, blocking: string[]): ImportReviewSummary {
   const notes: string[] = [];
-  if (proposal.stylesheets.length > 0) notes.push(`${proposal.stylesheets.length} stylesheet${proposal.stylesheets.length === 1 ? " is" : "s are"} not carried into the design; inline styles are.`);
+  if (proposal.stylesheets.length > 0) notes.push(`${proposal.stylesheets.length} stylesheet${proposal.stylesheets.length === 1 ? " is" : "s are"} carried into the page frame, applied to it alone.`);
   if (proposal.resources.length > 0) notes.push(`${proposal.resources.length} linked resource${proposal.resources.length === 1 ? " is" : "s are"} not fetched: imports work offline.`);
   return {
     proposalId,
@@ -183,7 +183,13 @@ function importOperation(proposalInput: ImportProposal, name: string) {
     type: "frame",
     parentId: null,
     children: [...proposal.rootIds],
-    props: { tag: "div", name: name.slice(0, 200), style: { position: "relative", width: "1024px", "min-height": "640px", background: "#ffffff" } },
+    props: {
+      tag: "div",
+      name: name.slice(0, 200),
+      style: { position: "relative", width: "1024px", "min-height": "640px", background: "#ffffff" },
+      // The page's own stylesheets, sanitized, applied to this frame alone (#283).
+      ...(proposal.stylesheets.length === 0 ? {} : { stylesheet: frameStylesheet(proposal.stylesheets.map((sheet) => sheet.cssText)) }),
+    },
     metadata: {},
   };
   // Depth-first from each root, as collectProposalSubtree does, but validating once rather

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { LocalCollaborationRoom, createAccessPolicy, createCollaborationState } from "@ninerr/collaboration";
 import { createDocument } from "@ninerr/document-model";
 import { createHistoryState } from "@ninerr/history";
+import { MAX_FRAME_STYLESHEET_BYTES, cssLoadsOrExecutes } from "@ninerr/import-stack";
 import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES, canonicalJson, createProject, migrateLegacyProject, openProject, projectLayout, type JournalSummary, type ProjectStore, type RecoveryReport } from "@ninerr/persistence";
 import { StudioError } from "./errors.ts";
 
@@ -77,6 +78,27 @@ function earlierActorName(summary: JournalSummary, owner: StudioActor): string {
   if (summary.actor === owner.actorId) return owner.displayName;
   if (summary.actorKind === "agent") return summary.actor;
   return "Another person";
+}
+
+/**
+ * A layer's stylesheet (#283) is text, at most MAX_FRAME_STYLESHEET_BYTES, that loads and
+ * executes nothing, whoever sets it: an import, the editor, an agent, an undo.
+ */
+function assertSafeStylesheets(operations: unknown[]): void {
+  const check = (props: unknown) => {
+    if (props === null || typeof props !== "object" || !Object.hasOwn(props, "stylesheet")) return;
+    const sheet = (props as Record<string, unknown>).stylesheet;
+    if (typeof sheet !== "string" || Buffer.byteLength(sheet, "utf8") > MAX_FRAME_STYLESHEET_BYTES || cssLoadsOrExecutes(sheet)) {
+      throw new StudioError(400, "unsafe-stylesheet", "a stylesheet must be text of at most 1 MiB that loads and executes nothing (no url(), @import, image(), expression() or script URL)");
+    }
+  };
+  for (const operation of operations as any[]) {
+    if (operation?.type === "insert-node") check(operation.node?.props);
+    if (operation?.type === "set-props") check(operation.set);
+    if (operation?.type === "restore-subtree" && Array.isArray(operation.nodes)) {
+      for (const node of operation.nodes) check(node?.props);
+    }
+  }
 }
 
 export function assertProjectName(name: unknown): string {
@@ -328,6 +350,7 @@ export class StudioSession {
     let nextDocument: any;
     let inverse: unknown[];
     let affectedNodeIds: string[];
+    assertSafeStylesheets(input.operations);
     try {
       // Collaboration authorizes the actor and attributes the transaction. The room is built
       // per commit from the session's grants: its fact log is not kept (attribution lives in

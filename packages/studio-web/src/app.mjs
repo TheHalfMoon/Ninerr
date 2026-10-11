@@ -490,6 +490,12 @@ async function openCodeDialog() {
             setStatus("Select the code and copy it.");
           }
         } }, "Copy code")),
+        // The stylesheet that applies to it (#283), which the canvas applies to its frame alone.
+        ...(typeof exported.stylesheet === "string" ? [(() => {
+          const sheet = el("textarea", { id: "code-export-css", rows: 6, readonly: true, spellcheck: "false" });
+          sheet.value = exported.stylesheet;
+          return el("label", { for: "code-export-css" }, "Its stylesheet (on the canvas, applied to its frame alone; :scope is the frame)", sheet);
+        })()] : []),
       ];
     const importForm = el("form", {
       novalidate: true,

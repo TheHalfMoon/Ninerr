@@ -9,6 +9,8 @@
 //   text        text content, rendered before the node's children
 //   attributes  { name: string } (allowlisted names, sanitized values)
 //   style       { css-property: string } (sanitized values)
+//   stylesheet  CSS applied to this layer and its descendants alone (#283); the host refuses
+//               one that loads or executes anything, and so does the renderer
 //   name        layer name for the editor; never rendered
 // Anything else in props is ignored by the renderer. Imported nodes (@ninerr/import-stack)
 // already use { tag, text, attributes, style }.
@@ -67,6 +69,24 @@ const MAX_VALUE = 2_000;
 const STYLE_NAME = /^(--[A-Za-z0-9_-]{1,64}|-?[a-z][a-z-]{0,63})$/u;
 // Anything that could fetch, execute, or escape a declaration is refused outright.
 const UNSAFE_STYLE = /url\s*\(|image-set|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|[\\;{}<>]/iu;
+// A stylesheet that could fetch or execute is not drawn at all. It is judged with its escapes
+// decoded: a comment can hide a url( from a browser but never create one, so this raw view
+// holds every function and at-rule the browser would see. The frame's policy loads nothing but
+// data: URLs in any case.
+const MAX_STYLESHEET = 1024 * 1024;
+const UNSAFE_STYLESHEET = /url\s*\(|image-set\s*\(|image\s*\(|(?:^|[^-\w])src\s*\(|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|<\/style/u;
+function safeStylesheet(css) {
+  if (typeof css !== "string" || css.length > MAX_STYLESHEET) return false;
+  const decoded = css
+    .replace(/\r\n|[\r\f]/gu, "\n")
+    .replace(/\\([0-9a-fA-F]{1,6})\s?/gu, (_match, hex) => {
+      const code = Number.parseInt(hex, 16);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
+    })
+    .replace(/\\([^\n0-9a-fA-F])/gu, "$1")
+    .toLowerCase();
+  return !UNSAFE_STYLESHEET.test(decoded);
+}
 
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const own = (record, key) => (isRecord(record) && Object.hasOwn(record, key) ? record[key] : undefined);
@@ -112,7 +132,13 @@ export function planElement(node) {
   }
   const rawText = own(props, "text");
   const text = typeof rawText === "string" ? rawText.slice(0, MAX_TEXT) : null;
-  return { tag, namespace, attributes, style, text, dropped };
+  const rawStylesheet = own(props, "stylesheet");
+  let stylesheet = null;
+  if (rawStylesheet !== undefined) {
+    if (safeStylesheet(rawStylesheet)) stylesheet = rawStylesheet;
+    else dropped += 1;
+  }
+  return { tag, namespace, attributes, style, text, stylesheet, dropped };
 }
 
 function sanitizeAttribute(tag, namespace, name, rawValue) {
@@ -176,7 +202,27 @@ export function mountSandboxedRenderer(container) {
 export function createRenderer(root) {
   const doc = root.ownerDocument;
   const elements = new Map();
+  // Each layer's stylesheet, as a <style> in the frame's head scoped to that layer (#283).
+  const sheets = new Map();
   const stats = { created: 0, updated: 0, removed: 0, dropped: 0 };
+
+  function applySheet(nodeId, css) {
+    const current = sheets.get(nodeId);
+    if (css === null) {
+      current?.remove();
+      sheets.delete(nodeId);
+      return;
+    }
+    const escaped = nodeId.replace(/["\\\n\r\f]/gu, (char) => `\\${char.codePointAt(0).toString(16)} `);
+    const text = `@scope ([data-ninerr-id="${escaped}"]) {\n${css}\n}`;
+    const element = current ?? doc.createElement("style");
+    if (element.textContent !== text) element.textContent = text;
+    if (!current) {
+      element.setAttribute("data-ninerr-sheet", nodeId);
+      doc.head.append(element);
+      sheets.set(nodeId, element);
+    }
+  }
 
   function build(node) {
     const plan = planElement(node);
@@ -205,6 +251,7 @@ export function createRenderer(root) {
       if (element.style.getPropertyValue(name) === "") rejected += 1;
     }
     element.setAttribute("data-ninerr-type", node.type);
+    applySheet(node.id, plan.stylesheet);
     stats.dropped += plan.dropped + rejected;
     const first = element.firstChild;
     const textNode = first !== null && first.nodeType === 3 && first.__ninerrText ? first : null;
@@ -247,7 +294,9 @@ export function createRenderer(root) {
 
   function forget(element) {
     for (const descendant of [element, ...element.querySelectorAll("[data-ninerr-id]")]) {
-      elements.delete(descendant.getAttribute("data-ninerr-id"));
+      const id = descendant.getAttribute("data-ninerr-id");
+      elements.delete(id);
+      applySheet(id, null);
       stats.removed += 1;
     }
   }
@@ -258,6 +307,8 @@ export function createRenderer(root) {
     render(document) {
       for (const element of elements.values()) element.remove();
       elements.clear();
+      for (const sheet of sheets.values()) sheet.remove();
+      sheets.clear();
       root.replaceChildren();
       reconcileChildren(root, document.rootIds, document);
     },
