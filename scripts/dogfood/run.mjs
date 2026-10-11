@@ -324,8 +324,14 @@ try {
     }
   } else {
     for (const pageFile of project.pages) {
+      // The page and the local stylesheet files it links to, chosen together (#283); a
+      // stylesheet on another site is never fetched.
+      const pageHtml = readFileSync(join(source, pageFile), "utf8");
+      const links = [...pageHtml.matchAll(/<link\b[^>]*>/giu)].map(([tag]) => tag).filter((tag) => /rel=["']?stylesheet/iu.test(tag)).map((tag) => /href=["']([^"']+)["']/iu.exec(tag)?.[1]).filter((href) => typeof href === "string");
+      const localSheets = links.filter((href) => !/^[a-z][a-z0-9+.-]*:|^\/\//iu.test(href)).map((href) => join(source, ...pageFile.split("/").slice(0, -1), ...href.split("?")[0].split("/"))).filter((path) => existsSync(path));
+      const remoteSheets = links.filter((href) => /^[a-z][a-z0-9+.-]*:|^\/\//iu.test(href));
       await page.locator("#action-import").click();
-      await page.locator("#import-file").setInputFiles(join(source, pageFile));
+      await page.locator("#import-file").setInputFiles([join(source, pageFile), ...localSheets]);
       const before = await revisionOf(page);
       const review = await timed("import review", async () => {
         await page.locator("#dialog[open] button.primary", { hasText: "Review import" }).click();
@@ -355,14 +361,17 @@ try {
       }, frameId));
       const missing = sourceWords.filter((word) => !drawnWords.includes(word));
       check("A", `${pageFile}: ${layers} layers; every word of the page is drawn`, missing.length === 0, { sourceWords: sourceWords.length, drawnWords: drawnWords.length, missing: missing.slice(0, 10) });
-      const styled = (html.match(/<link[^>]+rel=["']?stylesheet/giu) ?? []).length;
-      if (styled > 0) {
-        const fill = await renderedStyle(page, frameId, "font-family");
-        unsupported("A", `${pageFile}: its ${styled} linked stylesheets`, `not loaded: an import is one HTML file and nothing it links to is fetched (the page draws in ${fill})`);
+      if (localSheets.length > 0) {
+        // Read from the chosen files and applied to the page's frame alone.
+        const font = await renderedStyle(page, frameId, "font-family");
+        const sheet = doc().nodes[frameId].props.stylesheet;
+        const applied = typeof sheet === "string" && sheet.length > 0 && review.includes("read from the files chosen with the page") && font !== "system-ui, sans-serif";
+        check("A", `${pageFile}: its ${localSheets.length} local stylesheet(s) are read and applied (#283)`, applied, { font, sheetBytes: sheet?.length ?? 0 });
+        if (!applied) finding("fidelity", "an imported page's linked stylesheets are not applied, so a real site imports unstyled", { page: pageFile });
       }
+      if (remoteSheets.length > 0) unsupported("A", `${pageFile}: its ${remoteSheets.length} stylesheet(s) on other sites`, "not fetched: an import reads only the files chosen with the page");
       await shot(page, `A-${pageFile.replace(/\W+/gu, "-")}`);
     }
-    if (project.pages.length > 0) finding("fidelity", "an imported page's linked stylesheets are never applied, so a real site imports unstyled");
   }
   if (imported.length === 0) {
     for (const key of ["B", "C", "D", "E"]) unsupported(key, "the journey", "nothing from this project could be brought into Ninerr");
