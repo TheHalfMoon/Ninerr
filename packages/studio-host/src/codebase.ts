@@ -325,7 +325,12 @@ export interface WriteBackPlan {
   token: string;
   diff: string;
   changes: Array<{ nodeId: string; field: string; from: string; to: string }>;
-  conflicts: Array<{ nodeId: string; field: string; reason: string }>;
+  /**
+   * Fields not written. A field changed both here and in the file (`overridable`) carries the
+   * three values: `here`, the `file`'s, and the `base` both last agreed on (#236). The person
+   * takes the file's (resolveWithFile) or keeps Ninerr's (the plan's `keep`).
+   */
+  conflicts: Array<{ nodeId: string; field: string; reason: string; here?: string; file?: string; base?: string; overridable?: boolean; keepable?: boolean }>;
   notWritten: Array<{ nodeId: string; reason: string }>;
   /**
    * Fields changed both here and in the file to the same value. Nothing is written for them,
@@ -408,7 +413,12 @@ function textReplacement(live: string, fileText: string, text: string): string {
 }
 
 /** What writing the bound layers under `nodeId` back to their file would change. */
-export function planWriteBack(document: any, nodeId: unknown, folder: string, exclude: Set<string> = new Set()): WriteBackPlan {
+/**
+ * What writing the bound layers under `nodeId` back to their file would change. `keep` names
+ * fields ("nodeId:field") changed both here and in the file that the person chose to write as
+ * they are here, over the file's change (#236); no other conflict can be kept.
+ */
+export function planWriteBack(document: any, nodeId: unknown, folder: string, exclude: Set<string> = new Set(), keep: KeptFields = new Map()): WriteBackPlan {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   const label = (node: any) => (typeof node.props?.name === "string" ? node.props.name : typeof node.props?.tag === "string" ? node.props.tag : node.type);
   const isBound = (node: any) => node?.props?.codeSource && typeof node.props.codeSource === "object" && typeof node.props.codeSource.file === "string" && typeof node.props.codeSource.path === "string";
@@ -598,17 +608,21 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
         nextBase.text = mine;
         matched.push({ nodeId: node.id, field: "text", value: mine });
       }
-      else if (fileText !== source.base.text) conflicts.push({ nodeId: node.id, field: "text", reason: "changed both here and in the file" });
-      else if (/[{}<>]/u.test(mine)) notWritten.push({ nodeId: node.id, reason: "text with { } < or > is not written as JSX text" });
-      else if (/^\s*\{/u.test(read.content.slice(entry.range.startOffset, entry.range.endOffset))) notWritten.push({ nodeId: node.id, reason: "text written as a {…} expression in the source is not written back" });
-      else if (exclude.has(`${node.id}:text`)) notWritten.push({ nodeId: node.id, reason: "this text would not read back as written, so it is not written" });
       else {
+        const unwritable = textUnwritable(mine, read.content.slice(entry.range.startOffset, entry.range.endOffset), exclude.has(`${node.id}:text`));
+        // Changed in the file too: written over it only when the person kept this layer's
+        // value against exactly the file's value now, and it can be written (#236).
+        if (fileText !== source.base.text && (keep.get(`${node.id}:text`) !== fileText || unwritable !== null)) {
+          conflicts.push({ nodeId: node.id, field: "text", reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileText, base: source.base.text, overridable: true, keepable: unwritable === null });
+        } else if (unwritable !== null) notWritten.push({ nodeId: node.id, reason: unwritable });
+        else {
         const range = entry.range;
         const live = read.content.slice(range.startOffset, range.endOffset);
         ops.push({ at: range.startOffset, op: { op: "update-text", targetSymbolId: symbol.id, anchor: { range, expectedText: live }, replacement: textReplacement(live, fileText, mine) } });
         changes.push({ nodeId: node.id, field: "text", from: fileText, to: mine });
         checks.push({ nodeId: node.id, field: "text", path: source.path, textIndex: isText ? source.textIndex : undefined, expected: mine });
         nextBase.text = mine;
+        }
       }
     }
     // Literal string props.
@@ -631,16 +645,13 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
         matched.push({ nodeId: node.id, field: prop, value: fileValue });
         continue;
       }
-      if (!equalProp(prop, fileValue, base)) {
-        conflicts.push({ nodeId: node.id, field: prop, reason: "changed both here and in the file" });
+      const unwritable = propUnwritable(prop, mine, exclude.has(`${node.id}:${prop}`));
+      if (!equalProp(prop, fileValue, base) && (keep.get(`${node.id}:${prop}`) !== fileValue || unwritable !== null)) {
+        conflicts.push({ nodeId: node.id, field: prop, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
         continue;
       }
-      if (/[\r\n\u2028\u2029]/u.test(mine)) {
-        notWritten.push({ nodeId: node.id, reason: `${prop} with a line break is not written` });
-        continue;
-      }
-      if (exclude.has(`${node.id}:${prop}`)) {
-        notWritten.push({ nodeId: node.id, reason: `${prop} would not read back as written, so it is not written` });
+      if (unwritable !== null) {
+        notWritten.push({ nodeId: node.id, reason: unwritable });
         continue;
       }
       if (prop === "style") mine = styleInSourceOrder(fileValue, node.props?.style ?? {});
@@ -694,12 +705,69 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
       if (exclude.size > 0) throw new StudioError(409, "patch-refused", `the change to ${file} would not read back as written`);
       // Rebuilt once without those fields (exclude is then not empty, so this recursion is
       // at most one level deep).
-      return planWriteBack(document, nodeId, folder, new Set(failing));
+      return planWriteBack(document, nodeId, folder, new Set(failing), keep);
     }
   }
   // The token names the file, what it would become, and the fields it would mark as matching.
-  const token = createHash("sha256").update(`${read.sha256}\0${after}\0${JSON.stringify(matched)}`, "utf8").digest("hex");
+  const token = createHash("sha256").update(`${read.sha256}\0${after}\0${JSON.stringify(matched)}\0${JSON.stringify([...keep].sort(([a], [b]) => (a < b ? -1 : 1)))}`, "utf8").digest("hex");
   return { file: read.file, sha256: read.sha256, token, diff: unifiedDiff(read.file, read.content, after), changes, conflicts, notWritten, matched, after, rebase };
+}
+
+/**
+ * The fields a person kept as they are here, by "nodeId:field", each with the file's value it
+ * was kept against: a later change to the file brings the conflict back (#236).
+ */
+export type KeptFields = Map<string, string>;
+
+const MAX_KEPT_VALUE = 64 * 1024;
+
+/** The fields a request keeps ({ nodeId, field, file }), checked and bounded. */
+export function keptFields(value: unknown): KeptFields {
+  if (value === undefined) return new Map();
+  const valid = (entry: any) => entry !== null && typeof entry === "object" && typeof entry.nodeId === "string" && entry.nodeId.length <= 200 && typeof entry.field === "string" && entry.field.length <= 200 && typeof entry.file === "string" && entry.file.length <= MAX_KEPT_VALUE;
+  if (!Array.isArray(value) || value.length > 5000 || !value.every(valid)) {
+    throw new StudioError(400, "invalid-keep", "keep must be a list of at most 5,000 { nodeId, field, file } entries, the file's value as it was shown");
+  }
+  return new Map(value.map((entry) => [`${entry.nodeId}:${entry.field}`, entry.file]));
+}
+
+/** Why a layer's text cannot be written into the source, or null. */
+function textUnwritable(mine: string, live: string, excluded: boolean): string | null {
+  if (/[{}<>]/u.test(mine)) return "text with { } < or > is not written as JSX text";
+  if (/^\s*\{/u.test(live)) return "text written as a {…} expression in the source is not written back";
+  if (excluded) return "this text would not read back as written, so it is not written";
+  return null;
+}
+
+/** Why a layer's prop value cannot be written into the source, or null. */
+function propUnwritable(prop: string, mine: string, excluded: boolean): string | null {
+  if (/[\r\n\u2028\u2029]/u.test(mine)) return `${prop} with a line break is not written`;
+  if (excluded) return `${prop} would not read back as written, so it is not written`;
+  return null;
+}
+
+/**
+ * Take the file's value for one field changed both here and in the file (#236): the operation
+ * that sets the layer's field to it and moves the field's base there, so the two agree.
+ */
+export function resolveWithFile(document: any, nodeId: unknown, field: unknown, shown: unknown, folder: string): { operations: unknown[]; file: string; field: string } {
+  if (typeof nodeId !== "string" || typeof field !== "string" || typeof shown !== "string") throw new StudioError(400, "invalid-resolve", "name the layer, the field and the file's value as it was shown");
+  const plan = planWriteBack(document, nodeId, folder);
+  const conflict = plan.conflicts.find((entry) => entry.nodeId === nodeId && entry.field === field && entry.overridable);
+  // The value taken is the one the person saw: a file changed since is reviewed again.
+  if (conflict === undefined || conflict.file !== shown) throw new StudioError(409, "no-conflict", "that field is no longer changed in both places as shown; review the write-back again");
+  const node = document.nodes[nodeId];
+  const source = node.props.codeSource as CodeSource;
+  const value = conflict.file;
+  let set: Record<string, unknown>;
+  if (field === "text") set = { text: value, codeSource: { ...source, base: { ...source.base, text: value } } };
+  else {
+    const base = { ...source.base, props: { ...source.base.props, [field]: value } };
+    set = field === "style"
+      ? { style: styleProperties({ cssText: value }), codeSource: { ...source, base } }
+      : { attributes: { ...(node.props.attributes ?? {}), [layerName(field)]: value }, codeSource: { ...source, base } };
+  }
+  return { operations: [{ type: "set-props", nodeId, set }], file: plan.file, field };
 }
 
 /** How a write-back names a part of the source. */
@@ -838,8 +906,8 @@ export type WriteBackCommit = (operations: unknown[], step: "record" | "confirm"
  * A plan with no change but fields that already agree with the file (`matched`) is one step,
  * `settle`: it commits those fields' new bases, and writes no temporary and no file.
  */
-export function writeBack(document: any, nodeId: unknown, folder: string, token: unknown, commit: WriteBackCommit): WriteBackPlan {
-  const plan = planWriteBack(document, nodeId, folder);
+export function writeBack(document: any, nodeId: unknown, folder: string, token: unknown, commit: WriteBackCommit, keep: KeptFields = new Map()): WriteBackPlan {
+  const plan = planWriteBack(document, nodeId, folder, new Set(), keep);
   if (typeof token !== "string" || plan.token !== token) throw new StudioError(409, "plan-changed", `${plan.file} or the layers changed since the preview; preview it again`);
   if (plan.changes.length === 0 && plan.matched.length === 0) throw new StudioError(409, "nothing-to-write", "there are no changes to write back");
   // The layers whose base this write changes take part, and so do those still carrying an

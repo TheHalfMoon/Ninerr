@@ -622,14 +622,53 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
     const file = boundNode.props.codeSource.file;
     const preview = el("div", { id: "codebase-preview", "aria-live": "polite" });
     const review = el("button", { type: "button", id: "codebase-review" }, `Write changes back to ${file}`);
-    review.addEventListener("click", busy(review, async () => {
-      const plan = await state.client.post("/api/codebase/preview", { nodeId: boundNode.id }, { project });
+    // Fields changed both here and in the file that the person chose to keep as they are here,
+    // each with the file's value it was kept against.
+    const keep = new Map();
+    const quoted = (value) => `“${value.length > 120 ? `${value.slice(0, 119)}…` : value}”`;
+    const showPlan = async () => {
+      error.textContent = "";
+      const plan = await state.client.post("/api/codebase/preview", { nodeId: boundNode.id, keep: [...keep.values()] }, { project });
       const items = (entries, render) => (entries.length === 0 ? [] : [el("ul", {}, entries.map((entry) => el("li", {}, render(entry))))]);
+      // A field changed in both places shows both values and lets the person pick one (#236).
+      const conflictItem = (conflict) => {
+        if (!conflict.overridable) return `${conflict.field}: ${conflict.reason}`;
+        // Each button is disabled at the click, so a second click queues nothing.
+        const choose = (button, action) => button.addEventListener("click", () => {
+          if (button.disabled) return;
+          button.disabled = true;
+          enqueue(async () => {
+            try {
+              await action();
+            } catch (failure) {
+              button.disabled = false;
+              if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
+            }
+          });
+        });
+        const take = el("button", { type: "button", class: "take-file" }, "Take the file's");
+        choose(take, async () => {
+          applyChange(await state.client.post("/api/codebase/resolve", { nodeId: conflict.nodeId, field: conflict.field, file: conflict.file }, { project }));
+          await showPlan();
+        });
+        // A value Ninerr cannot write is not offered to keep.
+        const mine = conflict.keepable ? el("button", { type: "button", class: "keep-here" }, "Keep Ninerr's") : null;
+        if (mine !== null) {
+          choose(mine, async () => {
+            keep.set(`${conflict.nodeId}:${conflict.field}`, { nodeId: conflict.nodeId, field: conflict.field, file: conflict.file });
+            await showPlan();
+          });
+        }
+        return [
+          el("span", {}, `${conflict.field}: here ${quoted(conflict.here)}, in the file ${quoted(conflict.file)} (both changed from ${quoted(conflict.base)})${conflict.keepable ? "" : ` — ${conflict.reason.split("; ").slice(1).join("; ")}`}`),
+          el("span", { class: "actions" }, take, mine),
+        ];
+      };
       preview.replaceChildren(
         el("p", {}, planSummary(plan)),
         ...(plan.diff === "" ? [] : [el("pre", { class: "diff", id: "codebase-diff", tabindex: "0", "aria-label": `Changes to ${plan.file}` }, plan.diff)]),
         ...(plan.conflicts.length === 0 ? [] : [el("p", {}, "Changed both here and in the file, so not written:")]),
-        ...items(plan.conflicts, (conflict) => `${conflict.field}: ${conflict.reason}`),
+        ...items(plan.conflicts, conflictItem),
         ...(plan.notWritten.length === 0 ? [] : [el("p", {}, "Not written back:")]),
         ...items(plan.notWritten, (entry) => entry.reason),
       );
@@ -640,7 +679,7 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
           write.disabled = true;
           enqueue(async () => {
             try {
-              const result = await state.client.post("/api/codebase/write", { nodeId: boundNode.id, token: plan.token }, { project });
+              const result = await state.client.post("/api/codebase/write", { nodeId: boundNode.id, token: plan.token, keep: [...keep.values()] }, { project });
               close();
               applyChange(result);
               setStatus(result.written > 0 ? `Wrote ${result.written} change${result.written === 1 ? "" : "s"} to ${result.file}.` : `Marked ${result.matched} field${result.matched === 1 ? "" : "s"} as matching ${result.file}.`);
@@ -655,7 +694,8 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
         });
         preview.append(el("div", { class: "actions" }, write));
       }
-    }));
+    };
+    review.addEventListener("click", busy(review, showPlan));
     section.append(el("div", { class: "actions" }, review), preview);
   }
   return section;

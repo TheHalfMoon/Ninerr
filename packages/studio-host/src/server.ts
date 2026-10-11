@@ -8,7 +8,7 @@ import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES } from "@ninerr/persistence";
 import { AgentRegistry } from "./agents.ts";
 import { StudioError } from "./errors.ts";
 import { exportJsx, importJsx } from "./code.ts";
-import { CodebaseLinks, assertFolder, bringIn, planWriteBack, removeTemporary, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
+import { CodebaseLinks, assertFolder, bringIn, keptFields, planWriteBack, removeTemporary, resolveWithFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 import { ImportDesk, MAX_IMPORT_HTML_BYTES } from "./imports.ts";
 import { ConfirmationBroker, handleMcpMessage } from "./mcp.ts";
 import { claimProjectsFolder } from "./folder-lock.ts";
@@ -208,6 +208,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     "POST /api/codebase/import",
     "POST /api/codebase/preview",
     "POST /api/codebase/write",
+    "POST /api/codebase/resolve",
   ]);
   const assertMadeForOpenProject = (request: IncomingMessage): void => {
     const header = request.headers["x-ninerr-project"];
@@ -329,8 +330,16 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       const current = requireSession();
       const folder = connectedFolder(current.name);
       settleWriteBacksOf(current, folder);
-      const { after: _after, rebase: _rebase, ...plan } = planWriteBack(current.document, body?.nodeId, folder);
+      const { after: _after, rebase: _rebase, ...plan } = planWriteBack(current.document, body?.nodeId, folder, new Set(), keptFields(body?.keep));
       return plan;
+    },
+    // Take the file's value for a field changed in both places (#236): one change to the layer.
+    "POST /api/codebase/resolve": (body) => {
+      const current = requireSession();
+      const folder = connectedFolder(current.name);
+      settleWriteBacksOf(current, folder);
+      const { operations, file, field } = resolveWithFile(current.document, body?.nodeId, body?.field, body?.file, folder);
+      return current.edit(owner, { baseRevision: current.revision, operations, intent: `Take ${field} from ${file}`, tool: "ninerr:codebase" });
     },
     "POST /api/codebase/write": (body) => {
       const current = requireSession();
@@ -348,7 +357,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       // project disagree with it.
       const plan = writeBack(current.document, body?.nodeId, folder, body?.token, (operations, step, planned) => {
         event = current.edit(owner, { baseRevision: current.revision, operations, intent: intents[step](planned), tool: "ninerr:codebase" }, "http", undefined, { undoable: false });
-      });
+      }, keptFields(body?.keep));
       return { ...event, file: plan.file, written: plan.changes.length, matched: plan.matched.length };
     },
     "POST /api/import/discard": (body) => {
