@@ -347,5 +347,9 @@ test("a kept value that would not read back is not written, and can then only be
   assert.deepEqual([conflict?.overridable, conflict?.keepable], [true, false], JSON.stringify(kept.conflicts));
   assert.match(conflict.reason, /would not read back as written/u);
   assert.ok(!kept.changes.some((change) => change.field === "text"), JSON.stringify(kept.changes));
-  assert.equal(readFileSync(file, "utf8"), before);
+  // Taking the file's value is still offered and works.
+  await ok(call("POST", "/api/codebase/resolve", { nodeId: heading, field: "text", file: "Business" }), "take");
+  const after = await ok(call("GET", "/api/document"), "document");
+  assert.equal(after.document.nodes[heading].props.text, "Business");
+  assert.equal(readFileSync(file, "utf8"), before, "taking writes nothing to the file");
 });
