@@ -155,3 +155,75 @@ test("only a field changed in both places can be kept; other conflicts and bad r
     assert.deepEqual([bad.status, bad.json?.error?.code], [400, "invalid-keep"], JSON.stringify(keep).slice(0, 40));
   }
 });
+
+// #291, from the reviews of #289: a style kept or taken against the file's value as shown is
+// still that value after the file is only reformatted; and a prop named text has a field of
+// its own, so taking or keeping the layer's text never acts on it, or the other way round.
+async function broughtIn(t, source, component) {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ninerr-conflicts-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  mkdirSync(join(root, "projects"));
+  mkdirSync(join(root, "app"));
+  const file = join(root, "app", "Part.jsx");
+  writeFileSync(file, source);
+  const { call } = await pool.open(join(root, "projects"));
+  await ok(call("POST", "/api/projects/create", { name: "site" }), "create");
+  await ok(call("POST", "/api/codebase/connect", { folder: join(root, "app") }), "connect");
+  const brought = await ok(call("POST", "/api/codebase/import", { file: "Part.jsx", component }), "bring in");
+  const { document, revision } = await ok(call("GET", "/api/document"), "document");
+  return { call, file, frame: brought.frameId, element: document.nodes[brought.frameId].children[0], document, revision };
+}
+
+const BADGE = `export function Badge() {
+  return <p style="color: green; padding: 4px">New</p>;
+}
+`;
+
+test("a style kept or taken as shown still counts when the file is only reformatted", async (t) => {
+  const { call, file, element, revision } = await broughtIn(t, BADGE, "Badge");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { color: "blue", padding: "4px" } } }] }), "edit");
+  writeFileSync(file, BADGE.replace("color: green", "color: red"));
+  const shown = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual(shown.conflicts.map(({ field, file: value }) => [field, value]), [["style", "color: red; padding: 4px"]]);
+  // The file is reformatted after the conflict was shown: the same style, written tighter.
+  writeFileSync(file, BADGE.replace("color: green; padding: 4px", "color:red;padding:4px"));
+  const keep = [{ nodeId: element, field: "style", file: "color: red; padding: 4px" }];
+  const kept = await ok(call("POST", "/api/codebase/preview", { nodeId: element, keep }), "preview with keep");
+  assert.deepEqual([kept.conflicts, kept.changes.map(({ field, to }) => [field, to])], [[], [["style", "color: blue; padding: 4px"]]], "kept, not asked again");
+  const taken = await ok(call("POST", "/api/codebase/resolve", { nodeId: element, field: "style", file: "color: red; padding: 4px" }), "take as shown");
+  assert.equal(taken.intent, "Take style from Part.jsx");
+  const { document } = await ok(call("GET", "/api/document"), "document");
+  assert.deepEqual(document.nodes[element].props.style, { color: "red", padding: "4px" });
+  // A file changed in substance since it was shown is still refused.
+  await ok(call("POST", "/api/undo"), "undo the take");
+  writeFileSync(file, BADGE.replace("color: green", "color: purple"));
+  const refused = await call("POST", "/api/codebase/resolve", { nodeId: element, field: "style", file: "color: red; padding: 4px" });
+  assert.deepEqual([refused.status, refused.json?.error?.code], [409, "no-conflict"]);
+});
+
+const NOTE = `export function Note() {
+  return <p text="a">Hello</p>;
+}
+`;
+
+test("a prop named text is a field of its own, apart from the layer's text", async (t) => {
+  const { call, file, element, document, revision } = await broughtIn(t, NOTE, "Note");
+  const attributes = document.nodes[element].props.attributes;
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { text: "Hi", attributes: { ...attributes, text: "b" } } }] }), "edit");
+  writeFileSync(file, NOTE.replace(">Hello<", ">Hey<").replace("text=\"a\"", "text=\"c\""));
+  const plan = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual(plan.conflicts.map(({ field, here, file: value, base }) => [field, here, value, base]).sort(), [["attribute text", "b", "c", "a"], ["text", "Hi", "Hey", "Hello"]]);
+  // Keeping the attribute writes the attribute alone; taking the text takes the text alone.
+  const keep = [{ nodeId: element, field: "attribute text", file: "c" }];
+  const kept = await ok(call("POST", "/api/codebase/preview", { nodeId: element, keep }), "preview with keep");
+  assert.deepEqual([kept.changes.map(({ field, from, to }) => [field, from, to]), kept.conflicts.map((conflict) => conflict.field)], [[["attribute text", "c", "b"]], ["text"]]);
+  await ok(call("POST", "/api/codebase/resolve", { nodeId: element, field: "text", file: "Hey" }), "take the text");
+  const after = (await ok(call("GET", "/api/document"), "document")).document.nodes[element].props;
+  assert.deepEqual([after.text, after.attributes.text, after.codeSource.base], ["Hey", "b", { text: "Hey", props: { text: "a" } }]);
+  await ok(call("POST", "/api/codebase/write", { nodeId: element, token: (await ok(call("POST", "/api/codebase/preview", { nodeId: element, keep }), "preview")).token, keep }), "write the attribute");
+  assert.equal(readFileSync(file, "utf8"), NOTE.replace(">Hello<", ">Hey<").replace("text=\"a\"", "text=\"b\""));
+});

@@ -351,6 +351,21 @@ function layerValue(node: any, prop: string): string | undefined {
   return typeof attributes[name] === "string" ? attributes[name] : undefined;
 }
 
+/**
+ * The write-back field of a literal prop: its name, but "attribute text" for a prop named
+ * text, which would otherwise share its field with the layer's text (#291). A JSX prop name
+ * has no space, so neither can stand for another prop.
+ */
+const ATTRIBUTE_TEXT = "attribute text";
+const propField = (prop: string): string => (prop === "text" ? ATTRIBUTE_TEXT : prop);
+const fieldProp = (field: string): string => (field === ATTRIBUTE_TEXT ? "text" : field);
+
+/** Whether a field was kept against the file's value as it is now (a style, however formatted). */
+const keptAgainst = (keep: KeptFields, key: string, prop: string, fileValue: string): boolean => {
+  const kept = keep.get(key);
+  return kept !== undefined && equalProp(prop, kept, fileValue);
+};
+
 function equalProp(prop: string, a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   if (prop === "style") {
@@ -612,7 +627,7 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
         const unwritable = textUnwritable(mine, read.content.slice(entry.range.startOffset, entry.range.endOffset), exclude.has(`${node.id}:text`));
         // Changed in the file too: written over it only when the person kept this layer's
         // value against exactly the file's value now, and it can be written (#236).
-        if (fileText !== source.base.text && (keep.get(`${node.id}:text`) !== fileText || unwritable !== null)) {
+        if (fileText !== source.base.text && (!keptAgainst(keep, `${node.id}:text`, "text", fileText) || unwritable !== null)) {
           conflicts.push({ nodeId: node.id, field: "text", reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileText, base: source.base.text, overridable: true, keepable: unwritable === null });
         } else if (unwritable !== null) notWritten.push({ nodeId: node.id, reason: unwritable });
         else {
@@ -627,10 +642,11 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
     }
     // Literal string props.
     for (const [prop, base] of Object.entries(source.base.props)) {
+      const field = propField(prop);
       const fileProp = symbol.props.find((candidate: any) => candidate.name === prop && typeof candidate.literal.value === "string");
       let mine = layerValue(node, prop);
       if (!fileProp) {
-        if (!equalProp(prop, mine, base)) conflicts.push({ nodeId: node.id, field: prop, reason: "no longer a literal string in the source" });
+        if (!equalProp(prop, mine, base)) conflicts.push({ nodeId: node.id, field, reason: "no longer a literal string in the source" });
         continue;
       }
       const fileValue: string = fileProp.literal.value;
@@ -642,12 +658,12 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
       if (equalProp(prop, mine, base)) continue;
       if (equalProp(prop, fileValue, mine)) {
         nextBase.props[prop] = fileValue;
-        matched.push({ nodeId: node.id, field: prop, value: fileValue });
+        matched.push({ nodeId: node.id, field, value: fileValue });
         continue;
       }
-      const unwritable = propUnwritable(prop, mine, exclude.has(`${node.id}:${prop}`));
-      if (!equalProp(prop, fileValue, base) && (keep.get(`${node.id}:${prop}`) !== fileValue || unwritable !== null)) {
-        conflicts.push({ nodeId: node.id, field: prop, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
+      const unwritable = propUnwritable(prop, mine, exclude.has(`${node.id}:${field}`));
+      if (!equalProp(prop, fileValue, base) && (!keptAgainst(keep, `${node.id}:${field}`, prop, fileValue) || unwritable !== null)) {
+        conflicts.push({ nodeId: node.id, field, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
         continue;
       }
       if (unwritable !== null) {
@@ -657,8 +673,8 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
       if (prop === "style") mine = styleInSourceOrder(fileValue, node.props?.style ?? {});
       const range = fileProp.range;
       ops.push({ at: range.startOffset, op: { op: "update-prop", targetSymbolId: symbol.id, anchor: { range, expectedText: read.content.slice(range.startOffset, range.endOffset) }, replacement: `${prop}="${mine.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;")}"` } });
-      changes.push({ nodeId: node.id, field: prop, from: fileValue, to: mine });
-      checks.push({ nodeId: node.id, field: prop, path: source.path, expected: mine });
+      changes.push({ nodeId: node.id, field, from: fileValue, to: mine });
+      checks.push({ nodeId: node.id, field, path: source.path, expected: mine });
       nextBase.props[prop] = mine;
     }
     if (source.tag === "#fragment") {
@@ -754,18 +770,20 @@ export function resolveWithFile(document: any, nodeId: unknown, field: unknown, 
   if (typeof nodeId !== "string" || typeof field !== "string" || typeof shown !== "string") throw new StudioError(400, "invalid-resolve", "name the layer, the field and the file's value as it was shown");
   const plan = planWriteBack(document, nodeId, folder);
   const conflict = plan.conflicts.find((entry) => entry.nodeId === nodeId && entry.field === field && entry.overridable);
-  // The value taken is the one the person saw: a file changed since is reviewed again.
-  if (conflict === undefined || conflict.file !== shown) throw new StudioError(409, "no-conflict", "that field is no longer changed in both places as shown; review the write-back again");
+  // The value taken is the one the person saw (a style, however formatted): a file changed
+  // since is reviewed again.
+  const prop = fieldProp(field);
+  if (conflict === undefined || conflict.file === undefined || !(field === "text" ? conflict.file === shown : equalProp(prop, conflict.file, shown))) throw new StudioError(409, "no-conflict", "that field is no longer changed in both places as shown; review the write-back again");
   const node = document.nodes[nodeId];
   const source = node.props.codeSource as CodeSource;
   const value = conflict.file;
   let set: Record<string, unknown>;
   if (field === "text") set = { text: value, codeSource: { ...source, base: { ...source.base, text: value } } };
   else {
-    const base = { ...source.base, props: { ...source.base.props, [field]: value } };
-    set = field === "style"
+    const base = { ...source.base, props: { ...source.base.props, [prop]: value } };
+    set = prop === "style"
       ? { style: styleProperties({ cssText: value }), codeSource: { ...source, base } }
-      : { attributes: { ...(node.props.attributes ?? {}), [layerName(field)]: value }, codeSource: { ...source, base } };
+      : { attributes: { ...(node.props.attributes ?? {}), [layerName(prop)]: value }, codeSource: { ...source, base } };
   }
   return { operations: [{ type: "set-props", nodeId, set }], file: plan.file, field };
 }
@@ -830,8 +848,9 @@ function readBackFailures(file: string, content: string, component: string, chec
       const entry = check.textIndex === undefined ? (symbol.children.length === 0 && symbol.texts.length === 1 ? symbol.texts[0] : undefined) : symbol.texts[check.textIndex];
       return entry?.value !== check.expected;
     }
-    const prop = symbol.props.find((candidate: any) => candidate.name === check.field && typeof candidate.literal.value === "string");
-    return !prop || !equalProp(check.field, prop.literal.value, check.expected);
+    const name = fieldProp(check.field);
+    const prop = symbol.props.find((candidate: any) => candidate.name === name && typeof candidate.literal.value === "string");
+    return !prop || !equalProp(name, prop.literal.value, check.expected);
   }).map((check) => `${check.nodeId}:${check.field}`);
 }
 
