@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
-import { browserTestOptions, findBrowser, launchBrowser } from "./support/browser.mjs";
+import { browserTestOptions, findBrowser, launchBrowser, step, watchRequests } from "./support/browser.mjs";
+import { editorReady, reloadEditor, waitRevision } from "./support/editor.mjs";
 import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
 
 // PC4 (#146): the editor end to end, in Chromium, against a real studio host on loopback.
@@ -29,13 +30,14 @@ async function openEditor(host) {
     return route.abort();
   });
   const page = await context.newPage();
+  const pending = watchRequests(page);
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
-  await page.goto(host.launchUrl());
-  await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
-  return { browser, page, foreign, errors, close: () => browser.close() };
+  await step("opening the editor", pending, () => page.goto(host.launchUrl()));
+  await editorReady(page, pending);
+  return { browser, page, pending, foreign, errors, close: () => browser.close() };
 }
 
 // A rendered layer's centre in page coordinates, through the canvas's transformed frame.
@@ -47,7 +49,6 @@ const screenOf = (page, id) => page.evaluate((nodeId) => {
   return { x: outer.left + (inner.left + inner.width / 2) * zoom, y: outer.top + (inner.top + inner.height / 2) * zoom };
 }, id);
 const layerCount = (page) => page.locator("#layers [role=treeitem]").count();
-const waitRevision = (page, revision) => page.waitForFunction((r) => document.getElementById("revision").textContent === `Revision ${r}`, revision);
 const historyIntents = (page) => page.locator("#history li .intent").allTextContents();
 
 test("create, edit, undo and redo, save and reopen a project through the editor", browserTestOptions(), async () => {
@@ -157,8 +158,7 @@ test("create, edit, undo and redo, save and reopen a project through the editor"
     await page.keyboard.press("Control+s");
     await page.waitForFunction(() => document.getElementById("status").textContent.startsWith("Saved."));
     const saved = JSON.stringify(host.session.document);
-    await page.reload();
-    await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
+    await reloadEditor(page, editor.pending);
     await waitRevision(page, 14);
     assert.equal(await layerCount(page), 2);
     assert.deepEqual(editor.foreign, []);
