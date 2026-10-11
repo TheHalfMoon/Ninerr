@@ -27,7 +27,7 @@ import {
 import { assertJournalFormat, encodeJournalLine, encodeSegmentHeader, genesisDigest, parseJournal, type ParsedJournal } from "./journal.ts";
 import { LEGACY_PROJECT_DIRECTORY } from "./legacy.ts";
 import { PROJECT_MIGRATIONS, migrateManifest, withBuiltInMigrations, type ManifestMigration } from "./migrations.ts";
-import { getObject, objectSize, putObject } from "./objects.ts";
+import { getObject, objectSize, putObject, removeObject } from "./objects.ts";
 import {
   JOURNAL_GENESIS,
   JOURNAL_GENESIS_DOMAINS,
@@ -552,6 +552,7 @@ export function openProject(root: string, options: OpenProjectOptions): ProjectS
       journalIdentity: fileIdentity(files.journal, "journal"),
       lock: lockRecord,
       snapshotSeq: snapshot.journalSeq,
+      snapshotObject: snapshot.documentObject,
       directory,
       recovery: { tornTailBytes: parsed.tornTailBytes, staleTemporaryFiles, replayedEntries: replayed, migratedFrom, lockOverride },
     });
@@ -722,6 +723,8 @@ interface StoreState {
   lock: LockRecord;
   /** The journal entry the snapshot reference stands at. */
   snapshotSeq: number;
+  /** The document object the snapshot reference names. */
+  snapshotObject: string;
   directory: DirectoryIdentity;
   recovery: RecoveryReport;
 }
@@ -748,6 +751,9 @@ export class ProjectStore {
   #poisoned = false;
   #directory: DirectoryIdentity;
   #snapshotSeq: number;
+  #snapshotObject: string;
+  /** Objects stored through putObject in this session: never removed as an old snapshot. */
+  #stored = new Set<string>();
   #committed = false;
   #segmentBase: number;
   #rotateAt: number;
@@ -770,6 +776,7 @@ export class ProjectStore {
     this.#lock = state.lock;
     this.#directory = state.directory;
     this.#snapshotSeq = state.snapshotSeq;
+    this.#snapshotObject = state.snapshotObject;
     this.#segmentBase = state.segmentBase;
     this.#rotateAt = state.rotateAt;
     this.#documentBytes = state.documentBytes;
@@ -905,6 +912,19 @@ export class ProjectStore {
     const snapshot: SnapshotRef = { revision: this.#document.revision, documentObject, journalSeq: this.#seq, chainDigest: this.#digest };
     atomicWrite(join(this.projectDir, PROJECT_FILES.snapshot), canonicalJson(snapshot), "snapshot reference");
     this.#snapshotSeq = this.#seq;
+    // The document the previous snapshot named is referenced by nothing now (the journal never
+    // names objects, and archives are journal bytes): it is removed, so a project's objects do
+    // not grow by a document per session (#244). After the new reference is durable, so a
+    // crash leaves at worst that one object behind. Removal is best effort.
+    const previous = this.#snapshotObject;
+    this.#snapshotObject = documentObject;
+    if (previous !== documentObject && !this.#stored.has(previous)) {
+      try {
+        removeObject(this.projectDir, previous);
+      } catch {
+        // left behind: it takes space, nothing reads it
+      }
+    }
     if (this.#journalBytes > this.#segmentBytes()) this.#startSegment();
     return snapshot;
   }
@@ -954,7 +974,9 @@ export class ProjectStore {
   putObject(bytes: Buffer): string {
     this.#assertWritable();
     if (!Buffer.isBuffer(bytes)) throw new PersistenceValidationError("object content must be a Buffer");
-    return putObject(this.projectDir, bytes);
+    const digest = putObject(this.projectDir, bytes);
+    this.#stored.add(digest);
+    return digest;
   }
 
   getObject(digest: string): Buffer {
