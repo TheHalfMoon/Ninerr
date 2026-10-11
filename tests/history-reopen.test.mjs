@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -134,6 +134,41 @@ test("a missing archive shortens the history and does not stop the project openi
   const [older] = JSON.parse(readFileSync(object(newest), "utf8").split("\n")[0]).segment.archive;
   rmSync(object(older));
   assert.deepEqual(reopened(root), { revisions: [6], revision: 6 });
+});
+
+test("an archive that does not end where the next segment starts ends the history there", (t) => {
+  const root = rotatedProject(t, 6, 1);
+  const journal = join(root, PROJECT_FILES.directory, PROJECT_FILES.journal);
+  const object = (digest) => join(root, PROJECT_FILES.directory, PROJECT_FILES.objects, digest.slice(0, 2), digest.slice(2));
+  // The current segment names, as its archive, a real archive one segment too old: its
+  // entries end at change 5, not at the change the segment starts after.
+  const [newest] = JSON.parse(readFileSync(journal, "utf8").split("\n")[0]).segment.archive;
+  const [older] = JSON.parse(readFileSync(object(newest), "utf8").split("\n")[0]).segment.archive;
+  writeFileSync(journal, readFileSync(journal, "utf8").replace(newest, older));
+  assert.deepEqual(reopened(root), { revisions: [], revision: 6 });
+});
+
+// A project whose node holds long texts: each commit replaces it with `size` bytes.
+function largeProject(t, { initial, size, commits, rotateJournalAt }) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-history-large-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  createProject(root, { projectId: "large", document: createDocument({ id: "doc", nodes: [{ id: "node", type: "frame", props: { name: "x".repeat(initial) } }] }), createdAt: now() });
+  const store = openProject(root, { owner: "writer", at: now(), ...(rotateJournalAt === undefined ? {} : { rotateJournalAt }) });
+  for (let revision = 0; revision < commits; revision += 1) {
+    store.commit({ id: `tx-${revision + 1}`, actor: "user-1", intent: `Fill ${revision + 1}`, baseRevision: revision, operations: [{ type: "set-props", nodeId: "node", set: { name: String.fromCharCode(97 + revision).repeat(size) } }] });
+  }
+  store.close();
+  return root;
+}
+const MiB = 1024 * 1024;
+
+test("the newest archive is read however large the document, and one over the budget is not", (t) => {
+  // A 9 MiB document: a segment rotates only past the document's size, so its archive is
+  // larger than the document. It is still read.
+  assert.deepEqual(reopened(largeProject(t, { initial: 9 * MiB, size: 1.7 * MiB, commits: 6 })), { revisions: range(1, 6), revision: 6 });
+  // An archive larger than the budget (8 MiB, the snapshot and the largest entry) is not
+  // read: the history is shorter, and the project opens.
+  assert.deepEqual(reopened(largeProject(t, { initial: 1, size: 3.5 * MiB, commits: 5, rotateJournalAt: 16 * MiB })), { revisions: [], revision: 5 });
 });
 
 test("the editor shows the earlier changes after a reopen, without a Revert for them", browserTestOptions(), async (t) => {

@@ -537,7 +537,7 @@ export function openProject(root: string, options: OpenProjectOptions): ProjectS
     const last = parsed.entries.at(-1);
     unchanged();
     return new ProjectStore(STORE_TOKEN, projectDir, manifest, document, {
-      history: journalHistory(projectDir, parsed, genesis),
+      history: journalHistory(projectDir, parsed, genesis, MAX_HISTORY_ARCHIVE_BYTES + snapshotBytes + PERSISTENCE_LIMITS.maxEntryBytes),
       seq: last?.entry.seq ?? parsed.segment?.baseSeq ?? 0,
       digest: last?.digest ?? parsed.segment?.anchor ?? genesis,
       segmentBase: parsed.segment?.baseSeq ?? 0,
@@ -651,10 +651,12 @@ export function migrateLegacyProject(root: string, options: MigrateLegacyProject
 export const MAX_JOURNAL_SUMMARIES = 500;
 
 /**
- * The most archived journal a store reads at open for the history (#231): the current segment
- * may have just started (a rotation happens in the commit that crosses the segment size, #258),
- * so the earlier changes are read back from the segments before it, newest first, until there
- * are MAX_JOURNAL_SUMMARIES. A segment is normally about `journalSegmentBytes`.
+ * The archived journal a store reads at open for the history (#231), beyond one segment: the
+ * current segment may have just started (a rotation happens in the commit that crosses the
+ * segment size, #258), so the earlier changes are read back from the segments before it,
+ * newest first, until there are MAX_JOURNAL_SUMMARIES. A segment is about the larger of
+ * `journalSegmentBytes` and the document, plus the entry that crossed it, so the budget is
+ * this plus the snapshot's size and the largest entry: the newest archive always fits.
  */
 export const MAX_HISTORY_ARCHIVE_BYTES = 8 * 1024 * 1024;
 
@@ -663,24 +665,25 @@ export const MAX_HISTORY_ARCHIVE_BYTES = 8 * 1024 * 1024;
  * an archive that is missing, damaged, over the budget or does not end where the next segment
  * starts ends the list there, and never stops the project from opening.
  */
-function journalHistory(projectDir: string, parsed: ParsedJournal, genesis: string): JournalSummary[] {
+function journalHistory(projectDir: string, parsed: ParsedJournal, genesis: string, budget: number): JournalSummary[] {
   const summarize = (entries: ParsedJournal["entries"]) => entries.map(({ entry }) => journalSummary(entry)).filter((summary): summary is JournalSummary => summary !== null);
   let history = summarize(parsed.entries.slice(-MAX_JOURNAL_SUMMARIES));
   let segment = parsed.segment;
-  let budget = MAX_HISTORY_ARCHIVE_BYTES;
+  let left = budget;
   while (segment !== null && history.length < MAX_JOURNAL_SUMMARIES) {
     let previous: ParsedJournal;
     try {
       const size = segment.archive.reduce((total, piece) => total + objectSize(projectDir, piece), 0);
-      if (size > budget) break;
-      budget -= size;
+      if (size > left) break;
+      left -= size;
       previous = parseJournal(Buffer.concat(segment.archive.map((piece) => getObject(projectDir, piece))), genesis);
     } catch {
       break;
     }
     const last = previous.entries.at(-1);
     const endDigest = last?.digest ?? previous.segment?.anchor ?? genesis;
-    if (previous.tornTailBytes > 0 || endDigest !== segment.anchor) break;
+    // Its verified lines must end where the next segment starts.
+    if (endDigest !== segment.anchor) break;
     history = [...summarize(previous.entries.slice(-(MAX_JOURNAL_SUMMARIES - history.length))), ...history];
     segment = previous.segment;
   }
@@ -730,8 +733,8 @@ export class ProjectStore {
   readonly recovery: Readonly<RecoveryReport>;
   /**
    * The journal's latest changes (up to MAX_JOURNAL_SUMMARIES) when the project was opened,
-   * oldest first: the history before this session. A journal segment (#258) holds the changes
-   * since it started, so older ones are no longer listed.
+   * oldest first: the history before this session, read back through the archived journal
+   * segments (#258) within a budget.
    */
   readonly history: ReadonlyArray<Readonly<JournalSummary>>;
   #document: ProjectDocument;
