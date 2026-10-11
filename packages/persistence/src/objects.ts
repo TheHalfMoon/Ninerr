@@ -1,4 +1,4 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { sha256Hex } from "./canonical.ts";
 import { PersistenceCorruptionError, PersistenceValidationError } from "./errors.ts";
@@ -44,6 +44,11 @@ function checkedObjectFile(projectDir: string, digest: string): string {
     if (assertNotSymlink(path, label) && !lstatSync(path).isDirectory()) throw new PersistenceValidationError(`${label} is not a directory`);
   }
   return file;
+}
+
+/** Remove a stored object; one already gone is not an error. */
+export function removeObject(projectDir: string, digest: string): void {
+  rmSync(checkedObjectFile(projectDir, digest), { force: true });
 }
 
 /** Read an object and verify its content against its id. */

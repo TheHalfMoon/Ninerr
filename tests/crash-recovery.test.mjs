@@ -224,12 +224,18 @@ test("a checkpoint interrupted before its snapshot reference moved, and an inter
     withCopy(root, (copy) => {
       // The checkpoint wrote its document object, then crashed before the snapshot
       // reference was replaced: restore the old reference, so the new object is an orphan.
+      // A checkpoint removes the old reference's document only after the new reference is
+      // durable (#244), so a crash before that leaves the old document too: restore it.
       const snapshotPath = ninerr(copy, PROJECT_FILES.snapshot);
       const before = readFileSync(snapshotPath);
+      const { documentObject } = JSON.parse(before.toString("utf8"));
+      const oldDocumentPath = join(ninerr(copy, PROJECT_FILES.objects), documentObject.slice(0, 2), documentObject.slice(2));
+      const oldDocument = readFileSync(oldDocumentPath);
       const store = open(copy);
       store.checkpoint();
       store.close();
       writeFileSync(snapshotPath, before);
+      writeFileSync(oldDocumentPath, oldDocument);
       // An object write that crashed leaves a temporary in its fan-out directory.
       const objects = ninerr(copy, PROJECT_FILES.objects);
       const fanOut = readdirSync(objects).find((name) => /^[0-9a-f]{2}$/u.test(name));
