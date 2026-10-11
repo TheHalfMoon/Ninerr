@@ -652,30 +652,47 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
       // A field changed in both places shows both values and lets the person pick one (#236).
       const conflictItem = (conflict) => {
         if (!conflict.overridable) return `${conflict.field}: ${conflict.reason}`;
-        // Each button is disabled at the click, so a second click queues nothing.
+        // A conflict's buttons are disabled together at a click, so neither queues a second
+        // choice while one is under way (#291).
+        const buttons = [];
         const choose = (button, action) => button.addEventListener("click", () => {
           if (button.disabled) return;
-          button.disabled = true;
+          for (const each of buttons) each.disabled = true;
           enqueue(async () => {
             try {
               await action();
             } catch (failure) {
-              button.disabled = false;
+              for (const each of buttons) each.disabled = false;
               if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
             }
           });
         });
         const take = el("button", { type: "button", class: "take-file" }, "Take the file's");
+        buttons.push(take);
         choose(take, async () => {
           applyChange(await state.client.post("/api/codebase/resolve", { nodeId: conflict.nodeId, field: conflict.field, file: conflict.file }, { project }));
-          await showPlan();
+          try {
+            await showPlan();
+          } catch (failure) {
+            // Taken: the plan shown is out of date, and is not left up to be acted on.
+            preview.replaceChildren(el("p", {}, `Took the file's ${conflict.field}. Review the write-back again to see what is left.`));
+            throw failure;
+          }
         });
         // A value Ninerr cannot write is not offered to keep.
         const mine = conflict.keepable ? el("button", { type: "button", class: "keep-here" }, "Keep Ninerr's") : null;
         if (mine !== null) {
+          buttons.push(mine);
           choose(mine, async () => {
-            keep.set(`${conflict.nodeId}:${conflict.field}`, { nodeId: conflict.nodeId, field: conflict.field, file: conflict.file });
-            await showPlan();
+            const key = `${conflict.nodeId}:${conflict.field}`;
+            keep.set(key, { nodeId: conflict.nodeId, field: conflict.field, file: conflict.file });
+            try {
+              await showPlan();
+            } catch (failure) {
+              // Not reviewed with it kept: it is not kept.
+              keep.delete(key);
+              throw failure;
+            }
           });
         }
         return [
