@@ -1,5 +1,6 @@
 import { parseFragment } from "parse5";
 import { ImportSecurityError, ImportValidationError } from "./errors.ts";
+import { sanitizeImportedStylesheet } from "./css-rules.ts";
 import { FORM_AUTHORITY_ATTRIBUTES, HOST_AUTHORITY_ATTRIBUTES, isForbiddenImportTag, isSafeStoredUrlReference, PRESENTATION_URL_ATTRIBUTES, REMOTE_AUTHORITY_ATTRIBUTES, sanitizeImportedCssText } from "./security.ts";
 import {
   IMPORT_SCHEMA_VERSION,
@@ -274,15 +275,23 @@ export function importHtmlSnapshot(requestInput: ImportRequest, html: string): I
     }
     if (rawTag === "style") {
       const rawCss = directText(node);
-      const sanitized = sanitizeImportedCssText(rawCss, request.policy.maxCssBytes);
+      // Rule by rule (#283): only what loads or executes is removed, not the whole sheet.
+      const sanitized = sanitizeImportedStylesheet(rawCss, request.policy.maxCssBytes);
       if (sanitized.unsafe) {
         security.unsafeStylesRemoved += 1;
-        diagnostic({
-          code: "unsafe-stylesheet-removed",
-          severity: "warning",
-          message: "Removed stylesheet containing executable or external-loading CSS",
-          sourceBinding: binding(request, domPath, node.sourceCodeLocation),
-        });
+        diagnostic(sanitized.cssText === null
+          ? {
+            code: "unsafe-stylesheet-removed",
+            severity: "warning",
+            message: "Removed stylesheet containing executable or external-loading CSS",
+            sourceBinding: binding(request, domPath, node.sourceCodeLocation),
+          }
+          : {
+            code: "unsafe-css-removed",
+            severity: "warning",
+            message: `Removed ${sanitized.removedDeclarations} declaration(s) and ${sanitized.removedRules} rule(s) that load or execute something; the rest of the stylesheet is kept`,
+            sourceBinding: binding(request, domPath, node.sourceCodeLocation),
+          });
       }
       if (sanitized.cssText !== null && sanitized.cssText !== "") {
         cssBytes += byteLength(sanitized.cssText);

@@ -104,7 +104,16 @@ export function sanitizeImportedCssText(
   if (Buffer.byteLength(css, "utf8") > maxBytes) {
     throw new ImportSecurityError("imported stylesheet exceeds maxCssBytes");
   }
-  const unsafe = cssSecurityViews(css).some((view) => (
+  const unsafe = cssLoadsOrExecutes(css);
+  return { cssText: unsafe ? null : css.trim(), unsafe };
+}
+
+/**
+ * Whether untrusted CSS could fetch or execute anything: an @import, a loading function
+ * (url, image, image-set), a script URL, an expression or a binding, in any view of it.
+ */
+export function cssLoadsOrExecutes(css: string): boolean {
+  return cssSecurityViews(css).some((view) => (
     /@import\b/u.test(view)
     || /expression\s*\(/u.test(view)
     || /url\s*\(/u.test(view)
@@ -114,7 +123,11 @@ export function sanitizeImportedCssText(
     || /-moz-binding\s*:/u.test(view)
     || /(?:^|[;{])\s*behavior\s*:/u.test(view)
   ));
-  return { cssText: unsafe ? null : css.trim(), unsafe };
+}
+
+/** Comments removed the way a CSS tokenizer removes them, after input preprocessing. */
+export function cssWithoutComments(css: string): string {
+  return withoutComments(preprocessCss(css));
 }
 
 export function isForbiddenImportTag(tag: string): boolean {
