@@ -55,9 +55,10 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   let layers = 0;
   // Labels and the controls they name (for → id). The canvas draws ids under a name of its
-  // own (DRAWN_ID), which the code never carries, but the code needs them: each control a label in this export points to keeps an id, unique in
-  // the export (a second copy of a form gets email-2), and its label points to that id. A
-  // label names the next control with its id in document order, or else the last before.
+  // own (DRAWN_ID), which the code never carries, but the code needs them: each control a
+  // label in this export points to keeps an id, unique in the export (a second copy of a
+  // form gets email-2), and its label points to that id. A label names the next control
+  // with its id in document order, or else the last before.
   const order: string[] = [];
   const walkOrder = (id: string, depth: number) => {
     if (depth > MAX_EXPORT_DEPTH || !document.nodes[id]) return;
