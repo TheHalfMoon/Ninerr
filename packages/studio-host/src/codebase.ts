@@ -906,7 +906,7 @@ export type WriteBackCommit = (operations: unknown[], step: "record" | "confirm"
  * A plan with no change but fields that already agree with the file (`matched`) is one step,
  * `settle`: it commits those fields' new bases, and writes no temporary and no file.
  */
-export function writeBack(document: any, nodeId: unknown, folder: string, token: unknown, commit: WriteBackCommit, keep: Set<string> = new Set()): WriteBackPlan {
+export function writeBack(document: any, nodeId: unknown, folder: string, token: unknown, commit: WriteBackCommit, keep: KeptFields = new Map()): WriteBackPlan {
   const plan = planWriteBack(document, nodeId, folder, new Set(), keep);
   if (typeof token !== "string" || plan.token !== token) throw new StudioError(409, "plan-changed", `${plan.file} or the layers changed since the preview; preview it again`);
   if (plan.changes.length === 0 && plan.matched.length === 0) throw new StudioError(409, "nothing-to-write", "there are no changes to write back");
