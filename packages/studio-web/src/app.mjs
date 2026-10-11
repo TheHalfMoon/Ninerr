@@ -1071,10 +1071,10 @@ const streamSettled = new Promise((resolve) => {
 });
 /**
  * Start the change stream. The copy was loaded before the stream opened, so a change committed
- * in between would never arrive: with `catchUp`, the first opening asks the host for its
- * revision and refreshes the copy only if it moved (#302).
+ * in between would never arrive: the host's first message on a stream names the project and its
+ * revision, and a copy behind it is refreshed then (#302).
  */
-function listenForChanges({ refreshOnOpen = false, catchUp = false } = {}) {
+function listenForChanges({ refreshOnOpen = false } = {}) {
   state.events?.close();
   if (ended) return;
   const events = state.client.events();
@@ -1105,16 +1105,22 @@ function listenForChanges({ refreshOnOpen = false, catchUp = false } = {}) {
     } catch {
       return;
     }
+    let caughtUp = Promise.resolve();
     if (info.failure && info.project === state.project) showReopen(info.failure);
     else if (info.project !== state.project) {
       // The copy belongs to the old project: stop applying to it until the new one is loaded.
       state.project = info.project;
       state.document = null;
       renderAll();
-      requestLoad().catch((error) => {
+      caughtUp = requestLoad().catch((error) => {
         if (!handleSessionEnded(error)) setStatus(describeError(error));
       });
-    }
+    } else if (state.document !== null && Number.isInteger(info.revision) && info.revision > state.revision) {
+      // Changes were committed before this stream subscribed: fetch them (#302).
+      caughtUp = requestResync();
+    } else if (loading !== null) caughtUp = loading.catch(() => undefined);
+    // The first stream's first message: the editor is ready once its copy caught up.
+    caughtUp.finally(() => settleStream());
   });
   events.addEventListener("error", () => {
     dropped = true;
@@ -1137,15 +1143,6 @@ function listenForChanges({ refreshOnOpen = false, catchUp = false } = {}) {
     // Changes may have been missed while the stream was down.
     if (dropped && state.document !== null) requestResync();
     dropped = false;
-    if (!catchUp) {
-      settleStream();
-      return;
-    }
-    // The first opening: catch up only if the host moved past the loaded copy.
-    state.client.get("/api/session").then(
-      (session) => (session.project === state.project && state.document !== null && session.revision !== state.revision ? requestResync() : undefined),
-      () => undefined,
-    ).finally(() => settleStream());
   });
 }
 
@@ -1622,7 +1619,7 @@ async function main() {
     setStatus(describeError(error));
     return;
   }
-  listenForChanges({ catchUp: true });
+  listenForChanges();
   state.client.get("/api/confirmations").then(({ pending }) => showConfirmations(pending), () => {});
   if (session.project === null) await openProjectsDialog();
   else setStatus(`Opened ${session.project}.`);
