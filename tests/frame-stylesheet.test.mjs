@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { frameStylesheet } from "../packages/import-stack/src/index.ts";
-import { planElement } from "../packages/renderer/src/index.mjs";
+import { designViewportLengths, planElement } from "../packages/renderer/src/index.mjs";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
 import { hostPool, ok } from "./support/host-api.mjs";
@@ -242,4 +242,69 @@ test("the canvas drops a stylesheet that would end its frame's scope, even one w
   } finally {
     await browser.close();
   }
+});
+
+// Found dogfooding sb-admin-2 with #283: on the canvas, 100vh is the canvas frame's height,
+// which the canvas sets to fit the content: a page with min-height:100vh outgrew the frame on
+// every resize, and what lay below was out of reach. The renderer draws viewport lengths as
+// pixels of the design viewport (1024 × 768); the document keeps what was written.
+test("viewport lengths are drawn as pixels of the design viewport, strings and names aside", () => {
+  for (const [value, drawn] of [
+    ["100vh", "768px"],
+    ["calc(100vh - 2*10vw)", "calc(768px - 2*102.4px)"],
+    ["-10dvh 0", "-76.8px 0"],
+    ["10vb 5VI", "76.8px 51.2px"],
+    ["10vmin 10vmax", "76.8px 102.4px"],
+    ["1e2vh", "768px"],
+    ["\"100vh tall\" 10vh", "\"100vh tall\" 76.8px"],
+    ["10vhx", "10vhx"],
+    ["var(--h-100vh)", "var(--h-100vh)"],
+  ]) assert.equal(designViewportLengths(value), drawn, value);
+});
+
+test("a page using viewport heights fits on the canvas, and stays fitted after an edit", browserTestOptions(), async (t) => {
+  const running = await host(t);
+  const html = `<style>.side{min-height:100vh;background:#4e73df}.pad{padding:var(--p,0px) 0 20vh 0}.pair{margin-block-start:10vh;padding-top:10vh;margin-top:3px}@scope (.side){.inner{height:10vb}}.card{&:hover{color:red}.body{height:10vh}}</style><div class="side">Menu<span class="inner">x</span></div><p style="height:50vh">Tall</p><div class="card"><p class="body">b</p></div>${"<p>Row</p>".repeat(30)}<p class="pad">p</p><p class="pair">q</p><p class="last">The end</p>`;
+  // Imported before the editor opens, so the editor loads it.
+  const { event } = await imported(running, html);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, event.revision);
+  const fit = () => page.evaluate(() => {
+    const iframe = document.querySelector("iframe");
+    const last = iframe.contentDocument.querySelector(".last").getBoundingClientRect();
+    return { frame: iframe.offsetHeight, lastBottom: Math.ceil(last.bottom), side: Math.round(iframe.contentDocument.querySelector(".side").getBoundingClientRect().height) };
+  });
+  const first = await fit();
+  assert.equal(first.side, 768);
+  assert.ok(first.lastBottom <= first.frame, JSON.stringify(first));
+  // The document keeps what was written.
+  const { document } = await ok(running.call("GET", "/api/document"), "document");
+  assert.match(document.nodes[event.frameId].props.stylesheet, /min-height:100vh/u);
+  // A layer styled with a viewport height after the import fits too, and nothing grows again.
+  await ok(running.call("POST", "/api/edit", { baseRevision: event.revision, intent: "Taller", operations: [{ type: "set-props", nodeId: event.frameId, set: { style: { ...document.nodes[event.frameId].props.style, "min-height": "100vh" } } }] }), "edit");
+  await waitRevision(page, event.revision + 1);
+  assert.deepEqual(await fit(), first, "the frame does not grow again");
+  const nested = await page.evaluate(() => {
+    const frame = document.querySelector("iframe").contentDocument;
+    return [frame.querySelector(".inner"), frame.querySelector(".body")].map((element) => getComputedStyle(element).height);
+  });
+  // 10vh and 10vb of 768px, to the browser's layout precision.
+  assert.ok(nested.every((height) => Math.abs(Number.parseFloat(height) - 76.8) < 0.1), `inside @scope and in a nested rule too: ${nested}`);
+  // A shorthand waiting on var() is drawn against the design viewport too, and a logical and
+  // physical pair keeps its order: the physical one, written last, wins.
+  const drawn = await page.evaluate(() => {
+    const frame = document.querySelector("iframe").contentDocument;
+    const pad = getComputedStyle(frame.querySelector(".pad"));
+    const pair = getComputedStyle(frame.querySelector(".pair"));
+    return { padBottom: pad.paddingBottom, marginTop: pair.marginTop, paddingTop: pair.paddingTop };
+  });
+  assert.deepEqual(drawn, { padBottom: "153.6px", marginTop: "3px", paddingTop: "76.8px" });
+  // Several changes in a row: the frame keeps its size.
+  for (let step = 0; step < 5; step += 1) {
+    await ok(running.call("POST", "/api/edit", { baseRevision: event.revision + 1 + step, intent: "Rename", operations: [{ type: "set-props", nodeId: event.frameId, set: { name: `Page ${step}` } }] }), "edit");
+    await waitRevision(page, event.revision + 2 + step);
+  }
+  assert.deepEqual(await fit(), first, "the frame still fits, at the same size");
 });

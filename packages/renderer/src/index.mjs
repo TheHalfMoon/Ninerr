@@ -89,6 +89,33 @@ function safeStylesheet(css) {
   return !UNSAFE_STYLESHEET.test(decoded);
 }
 
+/**
+ * The viewport a design is drawn for (#283, found dogfooding sb-admin-2). In the canvas frame a
+ * viewport length would be the frame's, and the canvas sizes its frame to the content: a
+ * `min-height: 100vh` then grew with every resize and the page always outgrew its frame, out
+ * of reach. So the renderer draws viewport lengths (vh, vw, vb, vi, vmin, vmax, and their d, s
+ * and l forms) as pixels of this viewport, in a layer's style and in its stylesheet's
+ * declarations. The document keeps what was written, so code export and the inspector show it.
+ * Media queries are left as they are, and container units (cq*) too.
+ */
+export const DESIGN_VIEWPORT = Object.freeze({ width: 1024, height: 768 });
+const VIEWPORT_LENGTH = /(?<![\w-])([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)[dsl]?v(h|w|b|i|min|max)\b/giu;
+const VIEWPORT_SIZE = Object.freeze({
+  h: DESIGN_VIEWPORT.height,
+  b: DESIGN_VIEWPORT.height,
+  w: DESIGN_VIEWPORT.width,
+  i: DESIGN_VIEWPORT.width,
+  min: Math.min(DESIGN_VIEWPORT.width, DESIGN_VIEWPORT.height),
+  max: Math.max(DESIGN_VIEWPORT.width, DESIGN_VIEWPORT.height),
+});
+/** A CSS value with its viewport lengths as pixels of DESIGN_VIEWPORT; strings are left as written. */
+export function designViewportLengths(value) {
+  if (!/v(?:h|w|b|i|min|max)\b/iu.test(value)) return value;
+  return value.split(/("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')/u).map((part, index) => (index % 2 === 1
+    ? part
+    : part.replace(VIEWPORT_LENGTH, (_match, amount, unit) => `${Math.round(Number(amount) * VIEWPORT_SIZE[unit.toLowerCase()] * 100) / 10_000}px`))).join("");
+}
+
 const isRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const own = (record, key) => (isRecord(record) && Object.hasOwn(record, key) ? record[key] : undefined);
 
@@ -216,8 +243,10 @@ export function createRenderer(root) {
     }
     const escaped = nodeId.replace(/["\\\n\r\f]/gu, (char) => `\\${char.codePointAt(0).toString(16)} `);
     const text = `@scope ([data-ninerr-id="${escaped}"]) {\n${css}\n}`;
+    // Unchanged: already checked, pruned and drawn (#301 review: the walk below is not cheap).
+    if (current !== undefined && current.textContent === text) return;
     const element = current ?? doc.createElement("style");
-    if (element.textContent !== text) element.textContent = text;
+    element.textContent = text;
     if (!current) {
       element.setAttribute("data-ninerr-sheet", nodeId);
       doc.head.append(element);
@@ -247,6 +276,21 @@ export function createRenderer(root) {
       }
     };
     prune(rules[0]);
+    // Viewport lengths in its declarations, as in a layer's style (DESIGN_VIEWPORT).
+    const lengths = (group) => {
+      for (const rule of group.cssRules) {
+        // The rule's declarations as written, rewritten at once: a shorthand that waits on
+        // var() keeps its text only here, and writing properties one by one would reorder a
+        // logical and physical pair, which changes which wins.
+        if (rule.style !== undefined) {
+          const written = rule.style.cssText;
+          const drawn = designViewportLengths(written);
+          if (drawn !== written) rule.style.cssText = drawn;
+        }
+        if (rule.cssRules !== undefined) lengths(rule);
+      }
+    };
+    lengths(rules[0]);
   }
 
   function build(node) {
@@ -271,7 +315,7 @@ export function createRenderer(root) {
     for (const [name, raw] of Object.entries(plan.style)) {
       const important = /\s*!important$/iu.test(raw);
       const value = important ? raw.replace(/\s*!important$/iu, "") : raw;
-      element.style.setProperty(name, value, important ? "important" : "");
+      element.style.setProperty(name, designViewportLengths(value), important ? "important" : "");
       // The browser's CSS parser is the final judge; count what it refused.
       if (element.style.getPropertyValue(name) === "") rejected += 1;
     }
