@@ -8,81 +8,86 @@ import {
   importHtmlSnapshot,
   sanitizeImportedStylesheet,
 } from "../packages/import-stack/src/index.ts";
+import { browserTestOptions, findBrowser } from "./support/browser.mjs";
 import { createPrng } from "./support/prng.mjs";
 
 // #283 (found by P08-G11 dogfooding on StartBootstrap's sb-admin-2): an imported stylesheet
 // was all or nothing, so one url() among a site's rules removed the whole sheet. Now only
-// what loads or executes is removed, rule by rule, and the result is checked again as a whole.
+// what loads or executes is removed, and everything else is kept exactly as written.
 
 const MAX = 1024 * 1024;
 const clean = (css) => sanitizeImportedStylesheet(css, MAX);
+// One loading declaration, so the rule-by-rule path is taken.
+const LOADS = ".zz{color:red;background:url(x.png)}";
+const LOADS_REMOVED = ".zz{color:red;}";
 
-test("a stylesheet keeps its safe rules and loses only what loads or executes", () => {
+test("a stylesheet keeps everything as written except what loads or executes", () => {
   const css = [
     "@charset \"utf-8\";",
     "@import url(https://example.com/theme.css);",
-    "@import \"local.css\";",
-    ":root{--blue:#4e73df;--font:\"Nunito\",sans-serif}",
-    "body{margin:0;font-family:var(--font);background:url(https://example.com/bg.png) no-repeat}",
-    ".icon{width:1rem;background-image:url(\"data:image/svg+xml,%3csvg%3e%3c/svg%3e\")}",
-    "@font-face{font-family:Nunito;font-weight:400;src:url(nunito.woff2) format(\"woff2\")}",
+    ":root{--blue:#4e73df}",
+    "body { margin: 0; background: url(https://example.com/bg.png) no-repeat; color: #858796 }",
+    "@font-face{font-family:Nunito;src:url(nunito.woff2) format(\"woff2\");font-weight:400}",
     "@media (min-width:768px){.sidebar{width:14rem!important}.logo{background:url(x.png)}}",
     "@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}",
     ".card{color:#333;&:hover{color:#000;cursor:url(hand.cur),pointer}}",
     "a[href=\"url(\"]{color:red}",
     "@unknown-rule x{color:red}",
-    ".text{content:\"};{\";color:blue}",
+    "@unknown-loading x{background:url(y)}",
   ].join("\n");
   const result = clean(css);
   assert.equal(result.unsafe, true);
   assert.equal(cssLoadsOrExecutes(result.cssText), false, "nothing left loads or executes");
   assert.equal(result.cssText, [
     "@charset \"utf-8\";",
-    ":root{--blue:#4e73df;--font:\"Nunito\",sans-serif;}",
-    "body{margin:0;font-family:var(--font);}",
-    ".icon{width:1rem;}",
-    "@font-face{font-family:Nunito;font-weight:400;}",
-    "@media (min-width:768px){.sidebar{width:14rem!important;}.logo{}}",
-    "@keyframes spin{from{transform:rotate(0);}to{transform:rotate(360deg);}}",
+    ":root{--blue:#4e73df}",
+    "body { margin: 0; color: #858796 }",
+    "@font-face{font-family:Nunito;font-weight:400}",
+    "@media (min-width:768px){.sidebar{width:14rem!important}.logo{}}",
+    "@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}",
     ".card{color:#333;&:hover{color:#000;}}",
-    ".text{content:\"};{\";color:blue;}",
-  ].join(""));
-  // Removed: background, background-image, src, the .logo background, cursor; and the two
-  // @imports, the selector with url( in it, and the unknown at-rule.
-  assert.deepEqual([result.removedDeclarations, result.removedRules], [5, 4]);
+    "@unknown-rule x{color:red}",
+  ].join("\n"));
+  // Removed: background, src, the .logo background, cursor; and the @import, the selector
+  // with url( in it, and the unknown at-rule that loads.
+  assert.deepEqual([result.removedDeclarations, result.removedRules], [4, 3]);
 });
 
 test("a stylesheet with nothing unsafe is kept exactly as written", () => {
   const css = "/* theme */ .a { color: red } @media print { .a { display: none } }";
-  assert.deepEqual(clean(`  ${css}
-`), { cssText: css, unsafe: false, removedDeclarations: 0, removedRules: 0 });
+  assert.deepEqual(clean(`  ${css}\n`), { cssText: css, unsafe: false, removedDeclarations: 0, removedRules: 0 });
 });
 
-test("disguised loading is removed: escapes, comments, case and continuations", () => {
+test("disguised loading is removed: escapes, comments, case, src() and a style end tag", () => {
   for (const declaration of [
     "background:\\75rl(x.png)",
     "background:u\\72l(x.png)",
     "background:URL(x.png)",
     "background:u/**/rl(x.png)",
     "background:image-set(\"a.png\" 1x)",
+    "background-image:src(\"x.png\")",
     "width:expression(alert(1))",
     "-moz-binding:url(x.xml#a)",
     "behavior:url(x.htc)",
     "background:javascript:alert(1)",
+    "content:\"</style><img src=x onerror=alert(1)>\"",
   ]) {
     const result = clean(`.a{color:red;${declaration}}`);
     assert.equal(result.cssText, ".a{color:red;}", declaration);
     assert.equal(result.removedDeclarations, 1, declaration);
   }
   for (const rule of ["@\\69mport \"x.css\";", "@IMPORT \"x.css\";", "@import/**/\"x.css\";"]) {
-    assert.equal(clean(`${rule}.a{color:red}`).cssText, ".a{color:red;}", rule);
+    assert.equal(clean(`${rule}.a{color:red}`).cssText, ".a{color:red}", rule);
   }
+  // A comment that, removed, would spell an end tag is kept, and the gate judges it.
+  assert.equal(clean(".b{background:url(x)}</sty/**/le><img src=x onerror=alert(1)>{}").cssText, ".b{}");
 });
 
-test("a stylesheet that does not parse is judged whole, as before", () => {
+test("a stylesheet whose structure does not close is judged whole, as before", () => {
   assert.deepEqual(clean(".a{color:red;background:url(x)"), { cssText: null, unsafe: true, removedDeclarations: 0, removedRules: 1 });
   assert.deepEqual(clean(".a{color:red"), { cssText: ".a{color:red", unsafe: false, removedDeclarations: 0, removedRules: 0 });
-  assert.equal(clean(`${"@media screen{".repeat(40)}.a{color:red}${"}".repeat(40)}`).cssText.startsWith("@media"), true, "too deep: judged whole, and safe");
+  const deep = `${"@media screen{".repeat(40)}${LOADS}${"}".repeat(40)}`;
+  assert.deepEqual(clean(deep), { cssText: null, unsafe: true, removedDeclarations: 0, removedRules: 1 });
   assert.throws(() => sanitizeImportedStylesheet("a".repeat(11), 10), /maxCssBytes/u);
 });
 
@@ -90,13 +95,49 @@ test("whatever the input, nothing kept loads or executes (generated)", () => {
   const random = createPrng(283);
   const parts = [
     ".a", "{", "}", ";", ":", "color:red", "url(", "x.png", ")", "@import", "@media screen", "\"", "'", "\\", "\\75", "rl(",
-    "/*", "*/", "image(", "image-set(", "expression(", "javascript:", "behavior:", "-moz-binding:", "&", " ", "\n", "[", "]",
-    "@font-face", "src:", "@keyframes k", "from", "to", "%", "@layer a", ",", "--x:", "{{", "}}",
+    "/*", "*/", "image(", "image-set(", "src(", "expression(", "javascript:", "behavior:", "-moz-binding:", "&", " ", "\n", "[", "]",
+    "@font-face", "@scope", "--x:", "@keyframes k", "from", "to", "%", "@layer a", ",", "{{", "}}", "</style", "<!--", "-->",
   ];
   for (let run = 0; run < 3000; run += 1) {
     const css = Array.from({ length: random.int(1, 40) }, () => random.pick(parts)).join("");
     const result = clean(css);
     if (result.cssText !== null) assert.equal(cssLoadsOrExecutes(result.cssText), false, JSON.stringify(css));
+  }
+});
+
+// What the browser reads from the sanitized sheet must be what it reads from the original
+// with only the loading declaration removed by hand.
+const SAME_MEANING = [
+  ["escaped whitespace in a selector", ".a\\ {color:red}.b{color:blue}"],
+  ["escaped whitespace in a value", ".a{font-family:Foo\\ ;color:blue}"],
+  ["a bad string", ".a{content:\"abc\n;color:red}.b{color:blue}"],
+  ["a comment between tokens", ".a{margin:1px/**/2px}a/**/b{color:red}"],
+  ["a custom property holding a block", ".a{--x:{a:b};color:blue}"],
+  ["a group rule nested in a style rule", ".a{color:red;@media (min-width:1px){color:blue}}"],
+  ["@scope with bare declarations", "@scope (.card){color:red}"],
+  ["@page margin rules", "@page{margin:1cm;@top-center{content:\"x\"}}"],
+  ["@font-feature-values blocks", "@font-feature-values Font{@styleset{nice:1}}"],
+  ["a stray semicolon in a selector", ".b;c{color:blue}.d{color:green}"],
+  ["a stray closing brace", "}.d{color:green}"],
+  ["HTML comment markers", "<!-- .a{color:red} -->"],
+];
+
+test("the browser reads the kept rules as it reads the original", browserTestOptions(), async () => {
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ executablePath: findBrowser(), headless: true });
+  try {
+    const page = await browser.newPage();
+    const rules = (css) => page.evaluate((text) => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(text);
+      return [...sheet.cssRules].map((rule) => rule.cssText);
+    }, css);
+    for (const [what, css] of SAME_MEANING) {
+      const result = clean(`${css}\n${LOADS}`);
+      assert.deepEqual(await rules(result.cssText), await rules(`${css}\n${LOADS_REMOVED}`), what);
+    }
+  } finally {
+    await browser.close();
   }
 });
 
@@ -111,8 +152,51 @@ test("an imported page keeps the safe rules of its stylesheet and says what was 
     policy: defaultImportPolicy("offline"),
   };
   const proposal = importHtmlSnapshot(request, "<style>.title{color:#4e73df;font-weight:800}.hero{background:url(hero.png);padding:2rem}</style><h1 class=\"title\">Dashboard</h1>");
-  assert.deepEqual(proposal.stylesheets.map((sheet) => sheet.cssText), [".title{color:#4e73df;font-weight:800;}.hero{padding:2rem;}"]);
+  assert.deepEqual(proposal.stylesheets.map((sheet) => sheet.cssText), [".title{color:#4e73df;font-weight:800}.hero{padding:2rem}"]);
   const diagnostic = proposal.diagnostics.find((entry) => entry.code === "unsafe-css-removed");
   assert.match(diagnostic?.message ?? "", /Removed 1 declaration\(s\) and 0 rule\(s\)/u);
   assert.equal(proposal.security.unsafeStylesRemoved, 1);
+});
+
+test("a captured stylesheet keeps its safe rules, and sheets past the CSS budget are left out and said", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { disposeStaticMirror, mirrorStaticSite, proposalFromStaticMirror } = await import("../packages/import-stack/src/index.ts");
+  const dir = await mkdtemp(join(tmpdir(), "ninerr-css-mirror-"));
+  try {
+    const policy = { ...defaultImportPolicy("remote"), maxMirrorDepth: 1, maxCssBytes: 64 };
+    const grant = { id: "grant-example", capability: "import.fetch", scheme: "https", host: "example.com", port: null, allowPrivateNetwork: false, purpose: "css-rules test" };
+    const request = {
+      schemaVersion: IMPORT_SCHEMA_VERSION,
+      requestId: "import-mirror-css",
+      actorId: "user-1",
+      intent: "Mirror a page with two stylesheets",
+      at: "2026-10-11T12:00:00.000Z",
+      source: { kind: "remote-url", uri: "https://example.com/page.html", baseUrl: "https://example.com/page.html" },
+      policy,
+      networkPolicy: { schemaVersion: 1, mode: "allowlist", grants: [grant] },
+    };
+    const bodies = new Map([
+      ["https://example.com/page.html", { type: "text/html", body: "<link rel=\"stylesheet\" href=\"/a.css\"><link rel=\"stylesheet\" href=\"/b.css\"><p class=\"x\">x</p>" }],
+      ["https://example.com/a.css", { type: "text/css", body: ".x{color:red}.y{background:url(/i.png)}" }],
+      ["https://example.com/b.css", { type: "text/css", body: ".z{color:blue;margin:0 auto;padding:1rem 2rem;border:0}" }],
+      ["https://example.com/i.png", { type: "image/png", body: "PNGDATA" }],
+    ]);
+    const result = await mirrorStaticSite(request, "https://example.com/page.html", { jobId: "mirror-css", workRoot: join(dir, "work") }, {
+      resolveHost: async () => ["93.184.216.34"],
+      fetchResource: async (url) => {
+        const row = bodies.get(url.href);
+        if (!row) throw new Error(`unexpected fetch ${url.href}`);
+        return { status: 200, headers: { "content-type": row.type, "content-encoding": "identity" }, body: new TextEncoder().encode(row.body) };
+      },
+    });
+    assert.equal(result.status, "ok", JSON.stringify(result));
+    const proposal = await proposalFromStaticMirror(request, result.value);
+    assert.deepEqual(proposal.stylesheets.map((sheet) => sheet.cssText), [".x{color:red}.y{}"]);
+    assert.deepEqual(proposal.diagnostics.filter((entry) => /css|stylesheet/u.test(entry.code)).map((entry) => entry.code), ["unsafe-mirrored-css-removed", "mirrored-stylesheet-over-limit"]);
+    await disposeStaticMirror(join(dir, "work"), result.value);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

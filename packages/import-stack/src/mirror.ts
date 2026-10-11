@@ -468,13 +468,26 @@ export async function proposalFromStaticMirror(requestInput: ImportRequest, resu
     logicalName: resource.logicalPath,
     sourceUri: resource.finalUri,
   }));
+  // The proposal holds at most maxCssBytes of CSS in all: a captured sheet past it is left
+  // out and said, rather than failing the whole import.
+  let cssBytes = proposal.stylesheets.reduce((total, sheet) => total + Buffer.byteLength(sheet.cssText, "utf8"), 0);
   for (const resource of verified.manifest.resources) {
     if (resource.mediaType !== "text/css") continue;
     const stylesheetBytes = verified.bytesByLogicalPath.get(resource.logicalPath)!;
     if (stylesheetBytes.byteLength > proposal.policy.maxCssBytes) throw new ImportSecurityError("mirrored stylesheet exceeds maxCssBytes");
     // Rule by rule (#283): only what loads or executes is removed.
     const sanitized = sanitizeImportedStylesheet(decodeUtf8(stylesheetBytes, "mirrored stylesheet"), proposal.policy.maxCssBytes);
-    if (sanitized.cssText !== null) {
+    if (sanitized.cssText !== null && cssBytes + Buffer.byteLength(sanitized.cssText, "utf8") > proposal.policy.maxCssBytes) {
+      if (proposal.diagnostics.length < proposal.policy.maxDiagnostics) {
+        proposal.diagnostics.push({
+          code: "mirrored-stylesheet-over-limit",
+          severity: "warning",
+          message: "Captured stylesheet left out: the import's stylesheets would exceed maxCssBytes.",
+          sourceBinding: { sourceUri: resource.finalUri, domPath: "external-stylesheet" },
+        });
+      }
+    } else if (sanitized.cssText !== null) {
+      cssBytes += Buffer.byteLength(sanitized.cssText, "utf8");
       proposal.stylesheets.push({
         id: `import-style:${sha256Text(`${proposal.proposalId}:${resource.finalUri}`).slice(0, 32)}`,
         cssText: sanitized.cssText,

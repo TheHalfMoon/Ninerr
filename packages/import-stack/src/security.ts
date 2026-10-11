@@ -110,7 +110,8 @@ export function sanitizeImportedCssText(
 
 /**
  * Whether untrusted CSS could fetch or execute anything: an @import, a loading function
- * (url, image, image-set), a script URL, an expression or a binding, in any view of it.
+ * (url, image, image-set, src), a script URL, an expression, a binding, or text that ends a
+ * <style> element, in any view of it.
  */
 export function cssLoadsOrExecutes(css: string): boolean {
   return cssSecurityViews(css).some((view) => (
@@ -122,13 +123,13 @@ export function cssLoadsOrExecutes(css: string): boolean {
     || /(?:javascript|vbscript):/u.test(view)
     || /-moz-binding\s*:/u.test(view)
     || /(?:^|[;{])\s*behavior\s*:/u.test(view)
+    // CSS Values 4's src(), a url() by another name (#283 review).
+    || /(?:^|[^-\w])src\s*\(/u.test(view)
+    // Text that would end a <style> element written out as HTML.
+    || /<\/style/u.test(view)
   ));
 }
 
-/** Comments removed the way a CSS tokenizer removes them, after input preprocessing. */
-export function cssWithoutComments(css: string): string {
-  return withoutComments(preprocessCss(css));
-}
 
 export function isForbiddenImportTag(tag: string): boolean {
   const normalized = tag.toLowerCase();
