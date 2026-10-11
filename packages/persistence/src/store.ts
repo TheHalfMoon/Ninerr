@@ -27,7 +27,7 @@ import {
 import { assertJournalFormat, encodeJournalLine, encodeSegmentHeader, genesisDigest, parseJournal, type ParsedJournal } from "./journal.ts";
 import { LEGACY_PROJECT_DIRECTORY } from "./legacy.ts";
 import { PROJECT_MIGRATIONS, migrateManifest, withBuiltInMigrations, type ManifestMigration } from "./migrations.ts";
-import { getObject, putObject } from "./objects.ts";
+import { getObject, objectSize, putObject } from "./objects.ts";
 import {
   JOURNAL_GENESIS,
   JOURNAL_GENESIS_DOMAINS,
@@ -35,6 +35,7 @@ import {
   PROJECT_FILES,
   PROJECT_FORMAT,
   PROJECT_SCHEMA_VERSION,
+  type JournalSummary,
   type LegacyMigrationReport,
   type LockOverride,
   type LockRecord,
@@ -536,6 +537,7 @@ export function openProject(root: string, options: OpenProjectOptions): ProjectS
     const last = parsed.entries.at(-1);
     unchanged();
     return new ProjectStore(STORE_TOKEN, projectDir, manifest, document, {
+      history: journalHistory(projectDir, parsed, genesis, MAX_HISTORY_ARCHIVE_BYTES + snapshotBytes + PERSISTENCE_LIMITS.maxEntryBytes),
       seq: last?.entry.seq ?? parsed.segment?.baseSeq ?? 0,
       digest: last?.digest ?? parsed.segment?.anchor ?? genesis,
       segmentBase: parsed.segment?.baseSeq ?? 0,
@@ -645,7 +647,68 @@ export function migrateLegacyProject(root: string, options: MigrateLegacyProject
   }
 }
 
+/** The most changes a store keeps a summary of from its journal at open (#231). */
+export const MAX_JOURNAL_SUMMARIES = 500;
+
+/**
+ * The archived journal a store reads at open for the history (#231), beyond one segment: the
+ * current segment may have just started (a rotation happens in the commit that crosses the
+ * segment size, #258), so the earlier changes are read back from the segments before it,
+ * newest first, until there are MAX_JOURNAL_SUMMARIES. A segment is about the larger of
+ * `journalSegmentBytes` and the document, plus the entry that crossed it, so the budget is
+ * this plus the snapshot's size and the largest entry: the newest archive always fits.
+ */
+export const MAX_HISTORY_ARCHIVE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The summaries of the journal's latest changes, oldest first. The archives are only history:
+ * an archive that is missing, damaged, over the budget or does not end where the next segment
+ * starts ends the list there, and never stops the project from opening.
+ */
+function journalHistory(projectDir: string, parsed: ParsedJournal, genesis: string, budget: number): JournalSummary[] {
+  const summarize = (entries: ParsedJournal["entries"]) => entries.map(({ entry }) => journalSummary(entry)).filter((summary): summary is JournalSummary => summary !== null);
+  let history = summarize(parsed.entries.slice(-MAX_JOURNAL_SUMMARIES));
+  let segment = parsed.segment;
+  let left = budget;
+  while (segment !== null && history.length < MAX_JOURNAL_SUMMARIES) {
+    let previous: ParsedJournal;
+    try {
+      const size = segment.archive.reduce((total, piece) => total + objectSize(projectDir, piece), 0);
+      if (size > left) break;
+      left -= size;
+      previous = parseJournal(Buffer.concat(segment.archive.map((piece) => getObject(projectDir, piece))), genesis);
+    } catch {
+      break;
+    }
+    const last = previous.entries.at(-1);
+    const endDigest = last?.digest ?? previous.segment?.anchor ?? genesis;
+    // Its verified lines must end where the next segment starts.
+    if (endDigest !== segment.anchor) break;
+    history = [...summarize(previous.entries.slice(-(MAX_JOURNAL_SUMMARIES - history.length))), ...history];
+    segment = previous.segment;
+  }
+  return history;
+}
+
+/** The summary of a journal entry's transaction, or null for one that lacks the fields. */
+function journalSummary(entry: { revision: number; transaction: Record<string, unknown> }): JournalSummary | null {
+  const transaction = entry.transaction;
+  const text = (value: unknown) => (typeof value === "string" ? value.slice(0, 500) : null);
+  const metadata = transaction.metadata as { collaboration?: { actorKind?: unknown } } | undefined;
+  if (typeof transaction.id !== "string" || typeof transaction.actor !== "string") return null;
+  return {
+    revision: entry.revision,
+    transactionId: transaction.id,
+    actor: transaction.actor,
+    actorKind: metadata?.collaboration?.actorKind === "agent" ? "agent" : "user",
+    intent: text(transaction.intent),
+    tool: text(transaction.tool),
+  };
+}
+
 interface StoreState {
+  /** The journal's latest changes when the project was opened, oldest first. */
+  history: JournalSummary[];
   seq: number;
   digest: string;
   /** The entry the journal's current segment starts after (0 for the first segment). */
@@ -668,6 +731,12 @@ export class ProjectStore {
   readonly projectDir: string;
   readonly manifest: Readonly<ProjectManifest>;
   readonly recovery: Readonly<RecoveryReport>;
+  /**
+   * The journal's latest changes (up to MAX_JOURNAL_SUMMARIES) when the project was opened,
+   * oldest first: the history before this session, read back through the archived journal
+   * segments (#258) within a budget.
+   */
+  readonly history: ReadonlyArray<Readonly<JournalSummary>>;
   #document: ProjectDocument;
   #seq: number;
   #digest: string;
@@ -691,6 +760,7 @@ export class ProjectStore {
     this.projectDir = projectDir;
     this.manifest = Object.freeze({ ...manifest });
     this.recovery = Object.freeze(state.recovery);
+    this.history = Object.freeze(state.history.map((summary) => Object.freeze(summary)));
     this.#document = document;
     this.#seq = state.seq;
     this.#digest = state.digest;

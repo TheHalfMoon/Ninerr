@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { LocalCollaborationRoom, createAccessPolicy, createCollaborationState } from "@ninerr/collaboration";
 import { createDocument } from "@ninerr/document-model";
 import { createHistoryState } from "@ninerr/history";
-import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES, createProject, migrateLegacyProject, openProject, projectLayout, type ProjectStore, type RecoveryReport } from "@ninerr/persistence";
+import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES, createProject, migrateLegacyProject, openProject, projectLayout, type JournalSummary, type ProjectStore, type RecoveryReport } from "@ninerr/persistence";
 import { StudioError } from "./errors.ts";
 
 /** Who is acting. People act through the editor; agents act through MCP (PC5). */
@@ -41,6 +41,13 @@ export interface ChangeEvent {
   revertOf?: string;
 }
 
+/**
+ * A line of the history panel: a change's summary. `earlier` marks one made before this
+ * session, read from the project's journal at open (#231): it is shown, but only this
+ * session's changes can be undone or reverted.
+ */
+export type HistoryEntry = Omit<ChangeEvent, "operations"> & { earlier?: true };
+
 export interface EditInput {
   baseRevision: number;
   operations: unknown[];
@@ -61,9 +68,16 @@ const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 // Names Windows reserves for devices, with or without an extension.
 const RESERVED_NAME = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/iu;
 const MAX_UNDO = 200;
-// The history panel's log: the latest changes since the project was opened, without operations.
+// The history panel's log: the project's latest changes, earlier ones from its journal first, without operations.
 const MAX_LOG = 500;
 export const MAX_OPERATIONS_PER_EDIT = 5_000;
+
+/** An earlier change's author: this owner by name, an agent by id (the host names it from its registry), anyone else plainly. */
+function earlierActorName(summary: JournalSummary, owner: StudioActor): string {
+  if (summary.actor === owner.actorId) return owner.displayName;
+  if (summary.actorKind === "agent") return summary.actor;
+  return "Another person";
+}
 
 export function assertProjectName(name: unknown): string {
   if (typeof name !== "string" || !PROJECT_NAME.test(name) || name.includes("..") || name.endsWith(".") || RESERVED_NAME.test(name)) {
@@ -93,7 +107,7 @@ export class StudioSession {
   #undo = new Map<string, UndoEntry[]>();
   #redo = new Map<string, UndoEntry[]>();
   #listeners = new Set<(event: ChangeEvent) => void>();
-  #log: Array<Omit<ChangeEvent, "operations">> = [];
+  #log: Array<HistoryEntry> = [];
   #closed = false;
   #failure: string | null = null;
   // The document as of the last commit, as history state for the next one. The session is
@@ -110,6 +124,21 @@ export class StudioSession {
     this.#documentId = store.document.id;
     this.#grants = [{ principalKind: "actor", principalId: owner.actorId, capabilities: OWNER_CAPABILITIES }];
     this.#now = now;
+    // The project's earlier changes, from its journal, so the history panel shows who made
+    // them after a reopen (#231).
+    this.#log = store.history.slice(-MAX_LOG).map((summary) => ({
+      type: "transaction",
+      project: name,
+      revision: summary.revision,
+      transactionId: summary.transactionId,
+      actor: summary.actor,
+      actorKind: summary.actorKind,
+      actorName: earlierActorName(summary, owner),
+      intent: summary.intent,
+      tool: summary.tool,
+      affectedNodeIds: [],
+      earlier: true,
+    }));
   }
 
   /**
@@ -189,8 +218,8 @@ export class StudioSession {
     return (this.#redo.get(actor.actorId)?.length ?? 0) > 0;
   }
 
-  /** The changes committed since the project was opened, newest last (at most 500). */
-  get log(): ReadonlyArray<Omit<ChangeEvent, "operations">> {
+  /** The project's latest changes, the journal's earlier ones first, newest last (at most 500). */
+  get log(): ReadonlyArray<HistoryEntry> {
     return this.#log;
   }
 
