@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { browserTestOptions } from "./support/browser.mjs";
-import { openEditor, rendered, waitRevision } from "./support/editor.mjs";
+import { openEditor, rendered, waitRevision, reloadEditor } from "./support/editor.mjs";
 import { hostPool, ok } from "./support/host-api.mjs";
 
 // #172 (found by the PC8b review): the renderer applies a style's entries in key order, so a
@@ -52,8 +52,7 @@ test("the editor draws a style the same live and after a reload", browserTestOpt
   await ok(running.call("POST", "/api/edit", { baseRevision: 1, intent: "Margins", operations: [{ type: "set-props", nodeId: "box", set: { style: { "margin-left": "5px", margin: "0px" } } }] }), "edit");
   await waitRevision(editor.page, 2);
   const live = await rendered(editor.page, "box", "margin-left");
-  await editor.page.reload();
-  await editor.page.waitForFunction(() => document.documentElement.dataset.ready === "true");
+  await reloadEditor(editor.page, editor.pending);
   await waitRevision(editor.page, 2);
   assert.equal(live, await rendered(editor.page, "box", "margin-left"), "the same left margin live and after a reload");
   assert.deepEqual(editor.foreign, []);

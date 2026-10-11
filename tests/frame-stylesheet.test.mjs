@@ -8,7 +8,7 @@ import { frameStylesheet } from "../packages/import-stack/src/index.ts";
 import { designViewportLengths, drawnSelector, planElement } from "../packages/renderer/src/index.mjs";
 import { exportJsx } from "../packages/studio-host/src/code.ts";
 import { browserTestOptions } from "./support/browser.mjs";
-import { openEditor, waitRevision } from "./support/editor.mjs";
+import { openEditor, reloadEditor, waitRevision } from "./support/editor.mjs";
 import { hostPool, ok } from "./support/host-api.mjs";
 
 // #283 step 2 (found by P08-G11 dogfooding): the design model had no stylesheets, so an
@@ -118,8 +118,7 @@ test("the canvas applies an imported page's stylesheet to its frame alone, live 
   }, { frameId: event.frameId });
   const expected = { title: "rgb(78, 115, 223)", note: "rgb(10, 20, 30)", body: "rgb(1, 2, 3)", elsewhere: "rgb(0, 0, 0)" };
   assert.deepEqual(await colours(), expected);
-  await page.reload();
-  await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
+  await reloadEditor(page, editor.pending);
   await waitRevision(page, event.revision + 1);
   assert.deepEqual(await colours(), expected, "the same after a reload");
   // Undoing the import removes its stylesheet with it.

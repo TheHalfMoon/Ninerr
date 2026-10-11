@@ -1,4 +1,4 @@
-import { findBrowser, launchBrowser } from "./browser.mjs";
+import { findBrowser, launchBrowser, step, watchRequests } from "./browser.mjs";
 
 // Open the Ninerr editor of a running studio host in Chromium, as a person would from its
 // launch link. Every request outside the host's origin is aborted and recorded, and page
@@ -15,18 +15,28 @@ export async function openEditor(host, { beforeOpen } = {}) {
     return route.abort();
   });
   const page = await context.newPage();
+  const pending = watchRequests(page);
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
   // A test may route the page first, for example to hold back the change stream.
   if (beforeOpen !== undefined) await beforeOpen(page);
-  await page.goto(host.launchUrl());
-  await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
-  return { browser, page, foreign, errors, close: () => browser.close() };
+  await step("opening the editor", pending, () => page.goto(host.launchUrl()));
+  await editorReady(page, pending);
+  return { browser, page, pending, foreign, errors, close: () => browser.close() };
 }
 
-export const waitRevision = (page, revision) => page.waitForFunction((r) => document.getElementById("revision").textContent === `Revision ${r}`, revision);
+/** Wait for the editor to say it is ready; `pending` (watchRequests) names what still loads. */
+export const editorReady = (page, pending) => step("the editor becoming ready", pending, () => page.waitForFunction(() => document.documentElement.dataset.ready === "true"));
+
+/** Reload the editor and wait until it is ready again. */
+export async function reloadEditor(page, pending) {
+  await step("reloading the editor", pending, () => page.reload());
+  await editorReady(page, pending);
+}
+
+export const waitRevision = (page, revision) => step(`waiting for revision ${revision}`, null, () => page.waitForFunction((r) => document.getElementById("revision").textContent === `Revision ${r}`, revision));
 export const layerCount = (page) => page.locator("#layers [role=treeitem]").count();
 export const rendered = (page, id, read) => page.evaluate(({ nodeId, property }) => {
   const element = document.querySelector("iframe").contentDocument.querySelector(`[data-ninerr-id="${nodeId}"]`);

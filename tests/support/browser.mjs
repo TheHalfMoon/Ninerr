@@ -52,6 +52,32 @@ export async function launchBrowser(options) {
   return browser;
 }
 
+/**
+ * The requests `page` has started and not finished, as a function that lists them: method,
+ * path (never the query, which can hold a launch ticket), kind and age. A load that times out
+ * can then say what it was still waiting on (#300).
+ */
+export function watchRequests(page) {
+  const open = new Map();
+  page.on("request", (request) => open.set(request, Date.now()));
+  for (const event of ["requestfinished", "requestfailed"]) page.on(event, (request) => open.delete(request));
+  return () => [...open].map(([request, at]) => `${request.method()} ${new URL(request.url()).pathname} (${request.resourceType()}, ${Math.round((Date.now() - at) / 1000)} s)`);
+}
+
+/**
+ * Run one step of a browser test (a load, a reload, a wait); if it times out, fail with the
+ * step's name and, given `pending` (watchRequests), what was still loading (#300).
+ */
+export async function step(what, pending, action) {
+  try {
+    return await action();
+  } catch (error) {
+    if (error?.name !== "TimeoutError") throw error;
+    const open = pending?.() ?? [];
+    throw new Error(`${what} timed out; still loading: ${open.length === 0 ? "nothing" : open.join(", ")}`, { cause: error });
+  }
+}
+
 const TYPES = { ".mjs": "text/javascript", ".js": "text/javascript", ".html": "text/html", ".css": "text/css", ".json": "application/json" };
 
 /**
