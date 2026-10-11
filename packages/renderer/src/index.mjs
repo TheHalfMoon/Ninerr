@@ -243,8 +243,10 @@ export function createRenderer(root) {
     }
     const escaped = nodeId.replace(/["\\\n\r\f]/gu, (char) => `\\${char.codePointAt(0).toString(16)} `);
     const text = `@scope ([data-ninerr-id="${escaped}"]) {\n${css}\n}`;
+    // Unchanged: already checked, pruned and drawn (#301 review: the walk below is not cheap).
+    if (current !== undefined && current.textContent === text) return;
     const element = current ?? doc.createElement("style");
-    if (element.textContent !== text) element.textContent = text;
+    element.textContent = text;
     if (!current) {
       element.setAttribute("data-ninerr-sheet", nodeId);
       doc.head.append(element);
@@ -277,13 +279,13 @@ export function createRenderer(root) {
     // Viewport lengths in its declarations, as in a layer's style (DESIGN_VIEWPORT).
     const lengths = (group) => {
       for (const rule of group.cssRules) {
+        // The rule's declarations as written, rewritten at once: a shorthand that waits on
+        // var() keeps its text only here, and writing properties one by one would reorder a
+        // logical and physical pair, which changes which wins.
         if (rule.style !== undefined) {
-          for (let index = 0; index < rule.style.length; index += 1) {
-            const name = rule.style.item(index);
-            const value = rule.style.getPropertyValue(name);
-            const drawn = designViewportLengths(value);
-            if (drawn !== value) rule.style.setProperty(name, drawn, rule.style.getPropertyPriority(name));
-          }
+          const written = rule.style.cssText;
+          const drawn = designViewportLengths(written);
+          if (drawn !== written) rule.style.cssText = drawn;
         }
         if (rule.cssRules !== undefined) lengths(rule);
       }

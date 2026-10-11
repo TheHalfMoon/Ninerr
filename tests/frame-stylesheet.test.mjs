@@ -264,11 +264,12 @@ test("viewport lengths are drawn as pixels of the design viewport, strings and n
 
 test("a page using viewport heights fits on the canvas, and stays fitted after an edit", browserTestOptions(), async (t) => {
   const running = await host(t);
+  const html = `<style>.side{min-height:100vh;background:#4e73df}.pad{padding:var(--p,0px) 0 20vh 0}.pair{margin-block-start:10vh;padding-top:10vh;margin-top:3px}@scope (.side){.inner{height:10vb}}.card{&:hover{color:red}.body{height:10vh}}</style><div class="side">Menu<span class="inner">x</span></div><p style="height:50vh">Tall</p><div class="card"><p class="body">b</p></div>${"<p>Row</p>".repeat(30)}<p class="pad">p</p><p class="pair">q</p><p class="last">The end</p>`;
+  // Imported before the editor opens, so the editor loads it.
+  const { event } = await imported(running, html);
   const editor = await openEditor(running.host);
   t.after(() => editor.close());
   const { page } = editor;
-  const html = `<style>.side{min-height:100vh;background:#4e73df}@scope (.side){.inner{height:10vb}}.card{&:hover{color:red}.body{height:10vh}}</style><div class="side">Menu<span class="inner">x</span></div><p style="height:50vh">Tall</p><div class="card"><p class="body">b</p></div>${"<p>Row</p>".repeat(30)}<p class="last">The end</p>`;
-  const { event } = await imported(running, html);
   await waitRevision(page, event.revision);
   const fit = () => page.evaluate(() => {
     const iframe = document.querySelector("iframe");
@@ -291,4 +292,19 @@ test("a page using viewport heights fits on the canvas, and stays fitted after a
   });
   // 10vh and 10vb of 768px, to the browser's layout precision.
   assert.ok(nested.every((height) => Math.abs(Number.parseFloat(height) - 76.8) < 0.1), `inside @scope and in a nested rule too: ${nested}`);
+  // A shorthand waiting on var() is drawn against the design viewport too, and a logical and
+  // physical pair keeps its order: the physical one, written last, wins.
+  const drawn = await page.evaluate(() => {
+    const frame = document.querySelector("iframe").contentDocument;
+    const pad = getComputedStyle(frame.querySelector(".pad"));
+    const pair = getComputedStyle(frame.querySelector(".pair"));
+    return { padBottom: pad.paddingBottom, marginTop: pair.marginTop, paddingTop: pair.paddingTop };
+  });
+  assert.deepEqual(drawn, { padBottom: "153.6px", marginTop: "3px", paddingTop: "76.8px" });
+  // Several changes in a row: the frame keeps its size.
+  for (let step = 0; step < 5; step += 1) {
+    await ok(running.call("POST", "/api/edit", { baseRevision: event.revision + 1 + step, intent: "Rename", operations: [{ type: "set-props", nodeId: event.frameId, set: { name: `Page ${step}` } }] }), "edit");
+    await waitRevision(page, event.revision + 2 + step);
+  }
+  assert.deepEqual(await fit(), first, "the frame still fits, at the same size");
 });
