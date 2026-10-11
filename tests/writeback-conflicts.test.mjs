@@ -256,3 +256,41 @@ test("a style shown in a conflict is not the one kept or taken once the file cha
   const refused = await call("POST", "/api/codebase/resolve", { nodeId: element, field: "style", file: shown });
   assert.deepEqual([refused.status, refused.json?.error?.code], [409, "no-conflict"]);
 });
+
+// From the second review of #291: a write rebuilds a style from the layer's, read from the
+// file by the same lossy parse, so a file style it cannot read exactly is never written over:
+// it is said not written, and in a conflict it can only be taken from the file.
+test("a style the parse cannot read exactly is not written back, and nothing in it is lost", async (t) => {
+  for (const style of ["color: green; background: url(data:image/png;base64,AAA)", "color: green; /* x */ margin: 2px", "color: purple !important; color: green"]) {
+    await t.test(style, async (t) => {
+      const source = BADGE.replace("color: green; padding: 4px", style);
+      const { call, file, element, revision } = await broughtIn(t, source, "Badge");
+      await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { color: "blue" } } }] }), "edit");
+      const plan = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+      assert.deepEqual([plan.changes, plan.conflicts], [[], []], JSON.stringify(plan));
+      assert.ok(plan.notWritten.some((entry) => /cannot read exactly/u.test(entry.reason)), JSON.stringify(plan.notWritten));
+      assert.equal(readFileSync(file, "utf8"), source);
+    });
+  }
+});
+
+test("an unseen !important in the file is not taken as already matching", async (t) => {
+  const { call, file, element, revision } = await broughtIn(t, BADGE, "Badge");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { color: "blue", padding: "4px" } } }] }), "edit");
+  // Its properties read as the layer's, but it draws purple.
+  writeFileSync(file, BADGE.replace("color: green; padding: 4px", "color: purple !important; color: blue; padding: 4px"));
+  const plan = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual(plan.matched, []);
+  assert.deepEqual(plan.conflicts.map(({ field, keepable }) => [field, keepable]), [["style", false]], "a conflict that can only be taken from the file");
+});
+
+test("a shorthand and its longhand swapped in the file are not the style shown", async (t) => {
+  const { call, file, element, revision } = await broughtIn(t, BADGE, "Badge");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { color: "blue", padding: "4px" } } }] }), "edit");
+  const shown = "color: red; margin-top: 5px; margin: 0";
+  writeFileSync(file, BADGE.replace("color: green; padding: 4px", "color: red; margin: 0; margin-top: 5px"));
+  const kept = await ok(call("POST", "/api/codebase/preview", { nodeId: element, keep: [{ nodeId: element, field: "style", file: shown }] }), "preview with keep");
+  assert.deepEqual([kept.changes, kept.conflicts.map((conflict) => conflict.field)], [[], ["style"]]);
+  const refused = await call("POST", "/api/codebase/resolve", { nodeId: element, field: "style", file: shown });
+  assert.deepEqual([refused.status, refused.json?.error?.code], [409, "no-conflict"]);
+});

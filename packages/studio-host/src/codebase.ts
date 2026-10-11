@@ -397,8 +397,32 @@ function plainStyle(text: string): boolean {
  * change, never written over unseen (review of #291).
  */
 function sameFileValue(prop: string, a: string, b: string): boolean {
-  if (prop === "style" && !(plainStyle(a) && plainStyle(b))) return a === b;
-  return equalProp(prop, a, b);
+  if (prop !== "style") return equalProp(prop, a, b);
+  if (!(plainStyle(a) && plainStyle(b))) return a === b;
+  return equalProp(prop, a, b) && sameOverlapOrder(Object.keys(styleProperties({ cssText: a })), Object.keys(styleProperties({ cssText: b })));
+}
+
+// Properties whose first name part differs but which still set one another.
+const OVERLAPS: Record<string, string[]> = { inset: ["top", "right", "bottom", "left"], gap: ["row", "column"], font: ["line"], place: ["align", "justify"] };
+const nameGroup = (name: string): string => (name.startsWith("--") ? name : name.replace(/^-/u, "").split("-")[0]);
+const overlap = (x: string, y: string): boolean => {
+  const [a, b] = [nameGroup(x), nameGroup(y)];
+  return a === b || (OVERLAPS[a]?.includes(b) ?? false) || (OVERLAPS[b]?.includes(a) ?? false);
+};
+
+/**
+ * Whether two styles with the same properties write the ones that can set one another
+ * (margin and margin-top, inset and top) in the same order: swapped, the later one wins
+ * instead. Others may come in any order.
+ */
+function sameOverlapOrder(first: string[], second: string[]): boolean {
+  const at = new Map(second.map((name, index) => [name, index]));
+  for (let i = 0; i < first.length; i += 1) {
+    for (let j = i + 1; j < first.length; j += 1) {
+      if (overlap(first[i], first[j]) && at.get(first[i])! > at.get(first[j])!) return false;
+    }
+  }
+  return true;
 }
 
 function equalProp(prop: string, a: string | undefined, b: string | undefined): boolean {
@@ -691,12 +715,12 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
       }
       // Not changed here: the base stays, so a change made in the file is never undone.
       if (equalProp(prop, mine, base)) continue;
-      if (equalProp(prop, fileValue, mine)) {
+      if (sameFileValue(prop, fileValue, mine)) {
         nextBase.props[prop] = fileValue;
         matched.push({ nodeId: node.id, field, value: fileValue });
         continue;
       }
-      const unwritable = propUnwritable(prop, mine, exclude.has(`${node.id}:${field}`));
+      const unwritable = propUnwritable(prop, mine, fileValue, exclude.has(`${node.id}:${field}`));
       if (!sameFileValue(prop, fileValue, base) && (!keptAgainst(keep, `${node.id}:${field}`, prop, fileValue) || unwritable !== null)) {
         conflicts.push({ nodeId: node.id, field, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
         continue;
@@ -791,8 +815,11 @@ function textUnwritable(mine: string, live: string, excluded: boolean): string |
 }
 
 /** Why a layer's prop value cannot be written into the source, or null. */
-function propUnwritable(prop: string, mine: string, excluded: boolean): string | null {
+function propUnwritable(prop: string, mine: string, fileValue: string, excluded: boolean): string | null {
   if (/[\r\n\u2028\u2029]/u.test(mine)) return `${prop} with a line break is not written`;
+  // A write rebuilds the style from the layer's, which is read from the file by
+  // styleProperties: a part it does not see would be lost (review of #291).
+  if (prop === "style" && !plainStyle(fileValue)) return "a style Ninerr cannot read exactly (a comment, !important, an escape, a ; inside quotes or parentheses, or a declaration it does not keep) is not written back";
   if (excluded) return `${prop} would not read back as written, so it is not written`;
   return null;
 }
