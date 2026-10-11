@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -79,6 +79,46 @@ test("journal archives are kept when their segment's snapshot is replaced", (t) 
   const reopened = openProject(root, { owner: "reader", at: AT });
   try {
     assert.deepEqual(reopened.history.map((summary) => summary.revision), [1, 2, 3, 4, 5]);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("checkpoints with no change in between keep the snapshot's document", (t) => {
+  const root = project(t);
+  const store = openProject(root, { owner: "writer", at: AT });
+  rename(store, "Once");
+  store.checkpoint();
+  store.checkpoint();
+  store.checkpoint();
+  store.close();
+  assert.deepEqual(objects(root), [snapshotObject(root)]);
+  const reopened = openProject(root, { owner: "reader", at: AT });
+  try {
+    assert.equal(reopened.document.nodes.node.props.name, "Once");
+  } finally {
+    reopened.close();
+  }
+});
+
+test("a checkpoint whose snapshot reference cannot be written removes nothing", (t) => {
+  const root = project(t);
+  const store = openProject(root, { owner: "writer", at: AT });
+  const snapshotPath = join(root, PROJECT_FILES.directory, PROJECT_FILES.snapshot);
+  const reference = readFileSync(snapshotPath);
+  const previous = snapshotObject(root);
+  rename(store, "Changed");
+  // The reference cannot be replaced: a directory stands in its place.
+  rmSync(snapshotPath);
+  mkdirSync(snapshotPath);
+  assert.throws(() => store.checkpoint());
+  assert.ok(objects(root).includes(previous), "the document the reference names is still there");
+  rmSync(snapshotPath, { recursive: true });
+  writeFileSync(snapshotPath, reference);
+  store.close();
+  const reopened = openProject(root, { owner: "reader", at: AT, breakStaleLock: { reason: "the test replaced the snapshot reference" } });
+  try {
+    assert.deepEqual([reopened.revision, reopened.document.nodes.node.props.name], [1, "Changed"]);
   } finally {
     reopened.close();
   }

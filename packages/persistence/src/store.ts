@@ -971,6 +971,12 @@ export class ProjectStore {
     this.#nextSegmentAt = this.#segmentBytes();
   }
 
+  /**
+   * Store bytes as a content-addressed object. A checkpoint never removes an object stored
+   * here in the same session, even when its bytes are the replaced snapshot's document. That
+   * holds for this session only, since nothing records it on disk (#244), so a caller that
+   * keeps assets must name them in the document or store them elsewhere.
+   */
   putObject(bytes: Buffer): string {
     this.#assertWritable();
     if (!Buffer.isBuffer(bytes)) throw new PersistenceValidationError("object content must be a Buffer");
