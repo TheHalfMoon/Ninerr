@@ -114,11 +114,15 @@ const ID_ATTRIBUTE = /\[\s*id\s*(?=\]|[~|^$*]?=)/iuy;
 
 /**
  * A selector as the canvas draws it (#297): `#x` matches the drawn id as
- * `:is([data-ninerr-html-id="x"],#x)`, whose `#x` matches nothing on the canvas but keeps
- * an id's specificity, so the cascade is the page's own; `[id…]` names the drawn attribute.
+ * `[data-ninerr-html-id="x"]:not(#_)`, and `[id…]` names the drawn attribute. `:not(#_)`
+ * matches everything on the canvas, which draws no ids, and keeps the id column of the
+ * selector's specificity: each id adds the same (0,1,0) besides, so the page's rules keep
+ * their order in the cascade. (`:is([…],#x)` kept it exactly, but made style recalculation
+ * of a large page one to two orders of magnitude slower: the review of #297 measured it.)
  * `selector` is the browser's serialization, with strings in double quotes.
  */
 export function drawnSelector(selector) {
+  if (!/[#[]/u.test(selector)) return selector;
   let drawn = "";
   let index = 0;
   const escapeAt = (at) => {
@@ -144,7 +148,7 @@ export function drawnSelector(selector) {
         else break;
       }
       const name = selector.slice(index + 1, end);
-      drawn += name === "" ? "#" : `:is([${DRAWN_ID}="${name}"],#${name})`;
+      drawn += name === "" ? "#" : `[${DRAWN_ID}="${name}"]:not(#_)`;
       index = end;
     } else {
       ID_ATTRIBUTE.lastIndex = index;

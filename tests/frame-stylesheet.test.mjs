@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { frameStylesheet } from "../packages/import-stack/src/index.ts";
 import { designViewportLengths, drawnSelector, planElement } from "../packages/renderer/src/index.mjs";
+import { exportJsx } from "../packages/studio-host/src/code.ts";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
 import { hostPool, ok } from "./support/host-api.mjs";
@@ -317,17 +318,27 @@ test("an id is drawn under the canvas's own name, and id selectors are drawn to 
   const plan = planElement({ id: "w", type: "element", props: { tag: "div", attributes: { id: "wrapper", "data-ninerr-html-id": "spoof", class: "a" } } });
   assert.deepEqual(plan.attributes, { "data-ninerr-html-id": "wrapper", class: "a" }, "an authored data-ninerr-html-id is refused");
   for (const [selector, drawn] of [
-    ["#wrapper", ':is([data-ninerr-html-id="wrapper"],#wrapper)'],
-    ["#content-wrapper .x", ':is([data-ninerr-html-id="content-wrapper"],#content-wrapper) .x'],
-    ["#a#b:not(#c)", ':is([data-ninerr-html-id="a"],#a):is([data-ninerr-html-id="b"],#b):not(:is([data-ninerr-html-id="c"],#c))'],
-    ["#\\31 23 .a", ':is([data-ninerr-html-id="\\31 23"],#\\31 23) .a'],
-    ["#a\\:b", ':is([data-ninerr-html-id="a\\:b"],#a\\:b)'],
+    ["#wrapper", '[data-ninerr-html-id="wrapper"]:not(#_)'],
+    ["#content-wrapper .x", '[data-ninerr-html-id="content-wrapper"]:not(#_) .x'],
+    ["#a#b:not(#c)", '[data-ninerr-html-id="a"]:not(#_)[data-ninerr-html-id="b"]:not(#_):not([data-ninerr-html-id="c"]:not(#_))'],
+    ["#\\31 23 .a", '[data-ninerr-html-id="\\31 23"]:not(#_) .a'],
+    ["#a\\:b", '[data-ninerr-html-id="a\\:b"]:not(#_)'],
     ['[id="a"]', '[data-ninerr-html-id="a"]'],
     ['[ID^="a"]', '[data-ninerr-html-id^="a"]'],
     ['a[href="#x"]', 'a[href="#x"]'],
     ["[idx]", "[idx]"],
     [".plain > p", ".plain > p"],
   ]) assert.equal(drawnSelector(selector), drawn, selector);
+  // The code carries no drawn id: a control a label names keeps its id, as before (review of #297).
+  const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children, props, metadata: {} });
+  const doc = { id: "doc", rootIds: ["wrapper"], nodes: {
+    wrapper: node("wrapper", null, ["label", "input"], { tag: "div", attributes: { id: "wrapper", class: "x" } }),
+    label: node("label", "wrapper", [], { tag: "label", text: "Email", attributes: { for: "email" } }),
+    input: node("input", "wrapper", [], { tag: "input", attributes: { id: "email", type: "text" } }),
+  } };
+  const { code } = exportJsx(doc, "wrapper");
+  assert.doesNotMatch(code, /data-ninerr/u, code);
+  assert.match(code, /htmlFor="email"[\s\S]*id="email"/u, code);
 });
 
 test("on the canvas, a page's id rules apply with an id's specificity, nested and after edits", browserTestOptions(), async () => {
@@ -345,9 +356,12 @@ test("on the canvas, a page's id rules apply with an id's specificity, nested an
       const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children, props, metadata: {} });
       const sheet = [
         "#wrapper{display:flex}",
-        // Written first, yet it beats the two classes after it, as an id does.
+        // Written first, yet it beats the two classes after it, as an id does; and an id in
+        // :where() weighs nothing, so the class after it wins.
         "#title{color:rgb(255, 0, 0)}",
         ".t.t{color:rgb(0, 0, 255)}",
+        ":where(#inner){color:rgb(255, 0, 0)}",
+        "p{color:rgb(0, 0, 128)}",
         "[id=\"note\"]{color:rgb(0, 128, 0)}",
         ".card{#inner{font-weight:700}}",
         ".side:has(#title){border-left:3px solid rgb(1, 2, 3)}",
@@ -374,12 +388,13 @@ test("on the canvas, a page's id rules apply with an id's specificity, nested an
         title: style("title").color,
         note: style("note").color,
         inner: style("inner").fontWeight,
+        innerColour: style("inner").color,
         side: style("side").borderLeftColor,
         elsewhere: style("other-title").color,
         ids: document.querySelectorAll("[id]").length,
       };
     }, wrapperId);
-    const expected = { wrapper: "flex", title: "rgb(255, 0, 0)", note: "rgb(0, 128, 0)", inner: "700", side: "rgb(1, 2, 3)", elsewhere: "rgb(0, 0, 0)", ids: 1 };
+    const expected = { wrapper: "flex", title: "rgb(255, 0, 0)", note: "rgb(0, 128, 0)", inner: "700", innerColour: "rgb(0, 0, 128)", side: "rgb(1, 2, 3)", elsewhere: "rgb(0, 0, 0)", ids: 1 };
     assert.deepEqual(await drawn("wrapper"), expected, "the root div is the page's only real id");
     assert.deepEqual(await drawn(null), { ...expected, wrapper: "block" }, "an id taken away stops matching");
     assert.deepEqual(await drawn("wrapper"), expected, "and matches again when it comes back");
