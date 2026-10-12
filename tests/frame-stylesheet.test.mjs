@@ -510,6 +510,23 @@ test("each frame's @keyframes apply to that frame alone, under a name of its own
     assert.deepEqual(drawn.written, ["pulse", "pulse", "pulse"], "the sheets keep what was written");
     assert.equal(new Set(drawn.live).size, 3, `one name per frame: ${drawn.live}`);
     assert.ok(drawn.live.every((name) => /^pulse--n[0-9a-z]+$/u.test(name)), String(drawn.live));
+    // From the review: a keyframes name that is also an animation keyword (running) renames
+    // only the name in a shorthand, which the browser writes with its keywords; and two frames
+    // whose ids a 32-bit hash would confuse still get names of their own.
+    const more = await page.evaluate(() => {
+      const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children, props, metadata: {} });
+      const sheet = (opacity) => `@keyframes running { from { opacity: ${opacity} } to { opacity: ${opacity} } } @keyframes spin { from { opacity: 0.4 } to { opacity: 0.4 } } .p { animation: spin 10s linear paused } .q { animation-name: running; animation-duration: 10s; animation-play-state: paused }`;
+      const doc = { rootIds: ["import-node:53e8f", "import-node:ce5f0"], nodes: {} };
+      for (const [id, opacity] of [["import-node:53e8f", 0.25], ["import-node:ce5f0", 0.75]]) {
+        doc.nodes[id] = node(id, null, [`${id}/p`, `${id}/q`], { tag: "div", stylesheet: sheet(opacity) });
+        doc.nodes[`${id}/p`] = node(`${id}/p`, id, [], { tag: "p", text: "P", attributes: { class: "p" } });
+        doc.nodes[`${id}/q`] = node(`${id}/q`, id, [], { tag: "p", text: "Q", attributes: { class: "q" } });
+      }
+      window.rendererForTest.render(doc);
+      const opacity = (id) => getComputedStyle(document.querySelector(`[data-ninerr-id="${CSS.escape(id)}"]`)).opacity;
+      return ["import-node:53e8f", "import-node:ce5f0"].flatMap((id) => [opacity(`${id}/p`), opacity(`${id}/q`)]);
+    });
+    assert.deepEqual(more, ["0.4", "0.25", "0.4", "0.75"]);
   } finally {
     await browser.close();
   }
