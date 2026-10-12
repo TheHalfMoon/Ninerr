@@ -215,8 +215,9 @@ test("a journal entry that does not apply is refused by its number (#251)", () =
   appendFileSync(file(root, PROJECT_FILES.journal), second.line + third.line);
   assert.throws(() => open(root), (error) => error instanceof PersistenceCorruptionError && /^journal entry 3 does not apply/u.test(error.message));
   // Entries that each apply but leave an invalid document are refused together.
-  const orphan = [{ type: "restore-subtree", rootId: "r", parentId: null, index: 0, nodes: [{ id: "r", type: "frame" }, { id: "orphan", type: "frame" }] }];
-  const invalid = encodeJournalLine({ seq: 3, revision: 3, transaction: transaction("tx-5", 3, orphan) }, second.digest);
+  // (A restored chain deeper than the limit: each operation applies, the result is refused.)
+  const tooDeep = [{ type: "restore-subtree", rootId: "r", parentId: null, index: 0, nodes: Array.from({ length: 1025 }, (_, level) => ({ id: `r${level || ""}`, type: "frame", parentId: level === 0 ? null : `r${level - 1 || ""}`, children: level < 1024 ? [`r${level + 1}`] : [] })) }];
+  const invalid = encodeJournalLine({ seq: 3, revision: 3, transaction: transaction("tx-5", 3, tooDeep) }, second.digest);
   writeFileSync(file(root, PROJECT_FILES.journal), one.line + second.line + invalid.line);
   assert.throws(() => open(root), (error) => error instanceof PersistenceCorruptionError && /^journal entries 2 to 3 do not apply/u.test(error.message));
 }));

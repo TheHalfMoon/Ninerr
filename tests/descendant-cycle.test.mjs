@@ -36,6 +36,7 @@ const shared = (levels) => {
   }
   return [{ type: "restore-subtree", rootId: "r", parentId: "root", nodes }, { type: "remove-node", nodeId: "r" }];
 };
+const DUPLICATE = [{ type: "restore-subtree", rootId: "r", parentId: "root", nodes: [frame("r", { children: ["x"] }), frame("x", { parentId: "r" }), frame("x", { parentId: "r" })] }];
 const SELF = [{ type: "restore-subtree", rootId: "r", parentId: "root", nodes: [frame("r", { children: ["r"] })] }];
 const UNREACHED = [{ type: "restore-subtree", rootId: "r", parentId: "root", nodes: [frame("r"), frame("x", { parentId: "y", children: ["y"] }), frame("y", { parentId: "x", children: ["x"] })] }];
 
@@ -85,9 +86,17 @@ const attempt = (operations) => inWorker(({ nodes, operations }, { createDocumen
 }, { nodes: start(), operations });
 
 test("a restored snapshot that is not one tree under its root is refused at once", async () => {
-  for (const [label, operations] of [["parents naming each other", PARENT_CYCLE], ["child lists that loop", CHILD_CYCLE], ["shared child lists", shared(30)], ["a root listing itself", SELF], ["nodes not under the root", UNREACHED]]) {
+  for (const [label, operations, refusal] of [
+    ["parents naming each other", PARENT_CYCLE, /is not under its root as its parentId says/u],
+    ["child lists that loop", CHILD_CYCLE, /lists node x under more than one parent/u],
+    ["shared child lists", shared(30), /lists node L1a under more than one parent/u],
+    ["a root listing itself", SELF, /lists its root r as a child/u],
+    ["nodes not under the root", UNREACHED, /has nodes not under its root/u],
+    ["an id named twice", DUPLICATE, /names a node more than once/u],
+  ]) {
     const result = await attempt(operations);
     assert.match(result.error ?? "applied", /^TransactionError: Restore snapshot /u, label);
+    assert.match(result.error, refusal, label);
   }
 });
 

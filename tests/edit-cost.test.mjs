@@ -20,13 +20,18 @@ const AT = "2026-10-10T12:00:00.000Z";
  * document only the final validation refuses: a restored subtree carrying a node that no
  * parent lists as a child.
  */
-const ghost = (id, baseRevision) => ({
-  id,
-  actor: "u",
-  baseRevision,
-  operations: [{ type: "restore-subtree", rootId: "sub", parentId: "frame", nodes: [{ id: "sub", type: "frame", children: [], props: {} }, { id: "ghost", type: "element", parentId: "frame", props: {} }] }],
+// Every operation applies, but only the final check refuses the result: a restored chain of
+// frames deeper than the document's depth limit. (A restored snapshot must itself be one tree,
+// so a node no parent lists is refused at once and cannot serve here, #327.)
+const tooDeep = (rootId, parentId) => ({
+  type: "restore-subtree",
+  rootId,
+  parentId,
+  index: 0,
+  nodes: Array.from({ length: 1025 }, (_, level) => ({ id: level === 0 ? rootId : `${rootId}${level}`, type: "frame", parentId: level === 0 ? null : level === 1 ? rootId : `${rootId}${level - 1}`, children: level < 1024 ? [`${rootId}${level + 1}`] : [], props: {} })),
 });
-const ORPHAN = /must reference child ghost exactly once/u;
+const deepEdit = (id, baseRevision) => ({ id, actor: "u", baseRevision, operations: [tooDeep("sub", "frame")] });
+const TOO_DEEP = /document tree is deeper than 1024 levels/u;
 
 /** structuredClone's copy and cloneValidated's must be the same, in values and key order. */
 function assertSameCopy(value) {
@@ -82,7 +87,7 @@ test("skipping a store's own input check still validates what a transaction prod
   const document = createDocument({ id: "doc", nodes: [{ id: "frame", type: "frame", children: [], props: {} }] });
   // Only the final validation refuses this one; it must run whether the input was checked or not.
   for (const ownValidated of [false, true]) {
-    assert.throws(() => applyTransaction(document, ghost("t1", 0), { ownValidated }), (error) => error instanceof DocumentInvariantError && ORPHAN.test(error.message));
+    assert.throws(() => applyTransaction(document, deepEdit("t1", 0), { ownValidated }), (error) => error instanceof DocumentInvariantError && TOO_DEEP.test(error.message));
   }
   // Without the option, an input holding values that are not JSON is refused before anything
   // is applied. (The validated copy would turn a Map or a Date into {}: that is why only a
@@ -105,7 +110,7 @@ test("a store commits, reopens and refuses exactly as before with its own input 
     // A transaction only the final validation refuses is refused, and nothing is written: the
     // project still opens.
     const before = store.journalSeq;
-    assert.throws(() => store.commit(ghost("t2", 1)), ORPHAN);
+    assert.throws(() => store.commit(deepEdit("t2", 1)), TOO_DEEP);
     assert.equal(store.journalSeq, before);
     // Changing what the getter returned changes nothing in the store.
     const copy = store.document;

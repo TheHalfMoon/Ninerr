@@ -194,8 +194,11 @@ function applyRestoreSubtree(document, operation) {
       if (!snapshotIds.has(childId)) {
         throw new TransactionError(`Restore snapshot is missing child ${childId}`);
       }
-      if (childId === operation.rootId || listedBy.has(childId)) {
-        throw new TransactionError(`Restore snapshot lists node ${childId} under more than one parent or under itself`);
+      if (childId === operation.rootId) {
+        throw new TransactionError(`Restore snapshot lists its root ${childId} as a child`);
+      }
+      if (listedBy.has(childId)) {
+        throw new TransactionError(`Restore snapshot lists node ${childId} under more than one parent`);
       }
       listedBy.set(childId, node.id);
     }

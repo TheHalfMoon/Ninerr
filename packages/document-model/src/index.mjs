@@ -455,8 +455,8 @@ export function isDescendant(document, ancestorId, candidateId) {
   getNode(document, ancestorId);
   getNode(document, candidateId);
   let cursor = document.nodes[candidateId];
-  // A transaction can leave parents naming each other part-way (a restored snapshot is
-  // checked whole only at its end), so the walk refuses a cycle rather than loop for ever.
+  // A restored snapshot must be one tree (#327), so parents cannot name each other part-way
+  // through a transaction; the walk still refuses a cycle rather than loop for ever.
   const seen = new Set();
   while (cursor.parentId !== null) {
     if (cursor.parentId === ancestorId) return true;
