@@ -425,7 +425,7 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
         take(operation.nodeId);
         if (node) take(node.parentId);
         take(operation.parentId);
-        if (node) moved.push(node.id);
+        if (node && !moved.includes(node.id)) moved.push(node.id);
         break;
       }
       default:

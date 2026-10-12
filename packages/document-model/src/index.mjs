@@ -145,6 +145,10 @@ function sortNodeRecord(nodes) {
  * every key costs n log n (#252). Any key of `added` may already be in place; one no longer in
  * the document is ignored. The result is the order sortNodeRecord gives.
  */
+// A key JS orders as an array index: enumerated before every other key, in numeric order.
+const INTEGER_KEY = /^(?:0|[1-9]\d{0,9})$/u;
+const isIndexKey = (key) => INTEGER_KEY.test(key) && Number(key) <= 4294967294;
+
 export function withAddedNodesSorted(document, added) {
   const nodes = document.nodes;
   const fresh = [...new Set(added)].filter((key) => typeof key === "string" && Object.hasOwn(nodes, key)).sort(compareCodeUnits);
@@ -153,6 +157,12 @@ export function withAddedNodesSorted(document, added) {
   let next = 0;
   for (const key of Object.keys(nodes)) {
     if (freshSet.has(key)) continue;
+    // Integer-like keys come first in any object, whatever their order: they are passed over
+    // in the merge, and fromEntries puts them in place (review of #252).
+    if (isIndexKey(key)) {
+      entries.push([key, nodes[key]]);
+      continue;
+    }
     while (next < fresh.length && compareCodeUnits(fresh[next], key) < 0) {
       entries.push([fresh[next], nodes[fresh[next]]]);
       next += 1;
@@ -536,18 +546,37 @@ export function changedPartIsValid(document, ids, moved = [], { added = true } =
   const safeDepth = DOCUMENT_LIMITS.maxTreeDepth - 2;
   // Its depth, walking up to a root through parents that list it; infinite if it does not get
   // there within safeDepth (a cycle, a broken link, or too deep to call without the whole check).
+  // Depths found, so a restored subtree's nodes do not each walk up the whole way (review of
+  // #252: undo of a large, deep removal).
+  const depths = new Map();
   const depthOf = (id) => {
+    const path = [];
     let node = own(id);
     if (node === undefined) return Number.POSITIVE_INFINITY;
-    let depth = 0;
-    while (node.parentId !== null) {
+    let base = 0;
+    for (;;) {
+      if (depths.has(node.id)) {
+        base = depths.get(node.id);
+        break;
+      }
+      path.push(node.id);
+      if (node.parentId === null) {
+        if (!rootSet.has(node.id)) return Number.POSITIVE_INFINITY;
+        base = -1;
+        break;
+      }
       const parent = own(node.parentId);
-      if (!parent || !lists(parent, node.id)) return Number.POSITIVE_INFINITY;
+      if (!parent || !lists(parent, node.id) || path.length > safeDepth) return Number.POSITIVE_INFINITY;
       node = parent;
-      depth += 1;
-      if (depth > safeDepth) return Number.POSITIVE_INFINITY;
     }
-    return rootSet.has(node.id) ? depth : Number.POSITIVE_INFINITY;
+    if (base === Number.POSITIVE_INFINITY) return base;
+    // path[0] is `id`, path.at(-1) the highest node found; each is one deeper than the next.
+    for (let index = path.length - 1; index >= 0; index -= 1) {
+      base += 1;
+      if (base > safeDepth) return Number.POSITIVE_INFINITY;
+      depths.set(path[index], base);
+    }
+    return depths.get(id);
   };
   for (const id of ids) {
     const node = own(id);

@@ -286,3 +286,76 @@ test("structural changes on a document history produced end, or are refused, exa
   }
   assert.ok(applied > 60, `${applied} transactions applied`);
 });
+
+// From the review of the structural path: cases the random rounds do not reach, each held to
+// the full path (the same document in the same key order, or the same refusal).
+test("structural changes at the limits end, or are refused, exactly as the full path (#252)", () => {
+  const same = (document, operations, label) => {
+    const transaction = { id: `tx-${label}`, actor: "u", baseRevision: document.revision, operations };
+    const attempt = (input) => {
+      try {
+        return { document: JSON.stringify(applyTransaction(input, transaction).document) };
+      } catch (error) {
+        return { error: `${error.name}: ${error.message}` };
+      }
+    };
+    const fast = attempt(document);
+    assert.deepStrictEqual(fast, attempt(structuredClone(document)), label);
+    return fast;
+  };
+  const produced = (nodes) => createHistoryState(createDocument({ id: "limits", nodes })).document;
+  // Integer-like keys enumerate first: a new key merges among the others all the same.
+  const keys = produced([{ id: "root", type: "frame", children: ["9", "1a"], props: {} }, { id: "9", type: "element", parentId: "root", props: {} }, { id: "1a", type: "element", parentId: "root", props: {} }]);
+  same(keys, [{ type: "insert-node", node: { id: "2a", type: "element", props: {} }, parentId: "root" }], "an id among digit-led ones");
+  // A restored snapshot whose nodes list each other: unreachable.
+  same(keys, [{ type: "restore-subtree", rootId: "x", parentId: "root", nodes: [{ id: "x", type: "frame", children: [], props: {} }, { id: "y", type: "frame", parentId: "z", children: ["z"], props: {} }, { id: "z", type: "frame", parentId: "y", children: ["y"], props: {} }] }], "a cycle in a snapshot");
+  // Around the depth limit: a chain, an insert at its end, a move of a subtree, a restored chain.
+  for (const length of [1020, 1022, 1023, 1024]) {
+    const chain = [{ id: "c0", type: "frame", children: ["c1"], props: {} }];
+    for (let index = 1; index < length; index += 1) chain.push({ id: `c${index}`, type: "frame", parentId: `c${index - 1}`, children: index + 1 < length ? [`c${index + 1}`] : [], props: {} });
+    chain.push({ id: "side", type: "frame", children: ["s1"], props: {} }, { id: "s1", type: "frame", parentId: "side", children: ["s2"], props: {} }, { id: "s2", type: "frame", parentId: "s1", children: [], props: {} });
+    let document;
+    try {
+      document = produced(chain);
+    } catch {
+      continue; // the chain itself is past the limit
+    }
+    same(document, [{ type: "insert-node", node: { id: "tip", type: "element", props: {} }, parentId: `c${length - 1}` }], `insert at depth ${length}`);
+    same(document, [{ type: "move-node", nodeId: "side", parentId: `c${length - 3}`, index: 0 }], `move to depth ${length}`);
+    const snapshot = [{ id: "r0", type: "frame", children: ["r1"], props: {} }];
+    for (let index = 1; index < length; index += 1) snapshot.push({ id: `r${index}`, type: "frame", parentId: `r${index - 1}`, children: index + 1 < length ? [`r${index + 1}`] : [], props: {} });
+    same(document, [{ type: "restore-subtree", rootId: "r0", parentId: "side", nodes: snapshot }], `restore a chain of ${length}`);
+  }
+  // The node limit: a document at it takes no more.
+  const full = [{ id: "root", type: "frame", children: [], props: {} }];
+  for (let index = 1; index < 100_000; index += 1) {
+    full[0].children.push(`k${index}`);
+    full.push({ id: `k${index}`, type: "element", parentId: "root", props: {} });
+  }
+  const atLimit = produced(full);
+  same(atLimit, [{ type: "insert-node", node: { id: "one-more", type: "element", props: {} }, parentId: "root" }], "past the node limit");
+  same(atLimit, [{ type: "remove-node", nodeId: "k1" }, { type: "insert-node", node: { id: "one-more", type: "element", props: {} }, parentId: "root" }], "removed, then one added");
+});
+
+test("undoing the removal of a large, deep subtree costs no more than checking it whole (#252)", () => {
+  // A chain 300 deep with 50 leaves on each level: an undo restores 15,300 nodes at once.
+  const nodes = [{ id: "top", type: "frame", children: ["d0"], props: {} }];
+  for (let level = 0; level < 300; level += 1) {
+    const id = `d${level}`;
+    const children = Array.from({ length: 50 }, (_, leaf) => `${id}-l${leaf}`);
+    if (level + 1 < 300) children.push(`d${level + 1}`);
+    nodes.push({ id, type: "frame", parentId: level === 0 ? "top" : `d${level - 1}`, children, props: {} });
+    for (let leaf = 0; leaf < 50; leaf += 1) nodes.push({ id: `${id}-l${leaf}`, type: "text", parentId: id, props: { text: "x" } });
+  }
+  const document = createHistoryState(createDocument({ id: "deep", nodes })).document;
+  const removed = applyTransaction(document, { id: "rm", actor: "u", baseRevision: document.revision, operations: [{ type: "remove-node", nodeId: "d0" }] });
+  const undo = { ...removed.inverse, baseRevision: removed.document.revision };
+  const time = (task) => {
+    const started = performance.now();
+    task();
+    return performance.now() - started;
+  };
+  const fast = Math.min(...[0, 1, 2].map(() => time(() => applyTransaction(removed.document, undo))));
+  const full = Math.min(...[0, 1, 2].map(() => time(() => applyTransaction(structuredClone(removed.document), undo))));
+  assert.ok(fast < full * 1.5, `restoring 15,300 nodes 300 deep: ${fast.toFixed(0)} ms, the whole check ${full.toFixed(0)} ms`);
+});
