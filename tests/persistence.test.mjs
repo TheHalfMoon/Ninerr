@@ -219,7 +219,7 @@ test("a journal entry that does not apply is refused by its number (#251)", () =
   const tooDeep = [{ type: "restore-subtree", rootId: "r", parentId: null, index: 0, nodes: Array.from({ length: 1025 }, (_, level) => ({ id: `r${level || ""}`, type: "frame", parentId: level === 0 ? null : `r${level - 1 || ""}`, children: level < 1024 ? [`r${level + 1}`] : [] })) }];
   const invalid = encodeJournalLine({ seq: 3, revision: 3, transaction: transaction("tx-5", 3, tooDeep) }, second.digest);
   writeFileSync(file(root, PROJECT_FILES.journal), one.line + second.line + invalid.line);
-  assert.throws(() => open(root), (error) => error instanceof PersistenceCorruptionError && /^journal entries 2 to 3 do not apply/u.test(error.message));
+  assert.throws(() => open(root), (error) => error instanceof PersistenceCorruptionError && /^journal entries 2 to 3 do not apply.*deeper than 1024 levels/u.test(error.message));
 }));
 
 test("second writers are refused until the first closes", () => withProject((root) => {

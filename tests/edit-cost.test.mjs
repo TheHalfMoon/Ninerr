@@ -15,11 +15,6 @@ import { createPrng } from "./support/prng.mjs";
 
 const AT = "2026-10-10T12:00:00.000Z";
 
-/**
- * A transaction that passes every check made while its operation is applied, and leaves a
- * document only the final validation refuses: a restored subtree carrying a node that no
- * parent lists as a child.
- */
 // Every operation applies, but only the final check refuses the result: a restored chain of
 // frames deeper than the document's depth limit. (A restored snapshot must itself be one tree,
 // so a node no parent lists is refused at once and cannot serve here, #327.)
