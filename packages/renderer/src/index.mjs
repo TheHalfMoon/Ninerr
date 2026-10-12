@@ -163,6 +163,50 @@ export function drawnSelector(selector) {
   return drawn;
 }
 
+const ANIMATION_DECLARATION = /(^|;\s*)((?:-webkit-)?animation(?:-name)?\s*:\s*)([^;"']*)(?=;|$)/giu;
+
+/** `value` split at its top-level commas (not those inside steps(…) or cubic-bezier(…)). */
+function topLevelItems(value) {
+  const items = [];
+  let depth = 0;
+  let from = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === "(") depth += 1;
+    else if (value[index] === ")") depth -= 1;
+    else if (value[index] === "," && depth === 0) {
+      items.push(value.slice(from, index));
+      from = index + 1;
+    }
+  }
+  items.push(value.slice(from));
+  return items;
+}
+
+/**
+ * Declarations (a rule's cssText as the browser writes it) with the animation names in
+ * `renamed` (keyed and valued as written in CSS, escaped) written as their frame's names, in
+ * animation and animation-name only. In the shorthand only the name is renamed, which the
+ * browser writes last in each item, never a keyword (ease, running) a keyframes name may share.
+ * A quoted name, or one given through var(), is left as written.
+ */
+export function renamedAnimations(cssText, renamed) {
+  if (renamed.size === 0 || !/animation/iu.test(cssText)) return cssText;
+  return cssText.replace(ANIMATION_DECLARATION, (whole, start, property, value) => {
+    if (/var\(/iu.test(value)) return whole;
+    const [, list, important] = /^([\s\S]*?)(\s*!\s*important\s*)?$/iu.exec(value);
+    const shorthand = !/-name\s*:/iu.test(property);
+    const items = topLevelItems(list).map((item) => {
+      // A written name may hold an escape's space (\31 abc for "1abc").
+      const name = shorthand ? (/((?:\\[0-9a-fA-F]{1,6} |\S)+)\s*$/u.exec(item)?.[1] ?? "") : item.trim();
+      // Unquoted, none is the keyword for no animation, never a keyframes name.
+      if (!renamed.has(name) || name.toLowerCase() === "none") return item;
+      const at = shorthand ? item.lastIndexOf(name) : item.indexOf(name);
+      return `${item.slice(0, at)}${renamed.get(name)}${item.slice(at + name.length)}`;
+    });
+    return `${start}${property}${items.join(",")}${important ?? ""}`;
+  });
+}
+
 /** A CSS value with its viewport lengths as pixels of DESIGN_VIEWPORT; strings are left as written. */
 export function designViewportLengths(value) {
   if (!/v(?:h|w|b|i|min|max)\b/iu.test(value)) return value;
@@ -291,6 +335,8 @@ export function createRenderer(root) {
   const elements = new Map();
   // Each layer's stylesheet, as a <style> in the frame's head scoped to that layer (#283).
   const sheets = new Map();
+  // Each frame's number in this renderer, for names that must be the frame's own (#299).
+  const frameNumbers = new Map();
   const stats = { created: 0, updated: 0, removed: 0, dropped: 0 };
 
   function applySheet(nodeId, css) {
@@ -322,13 +368,27 @@ export function createRenderer(root) {
       stats.dropped += 1;
       return;
     }
-    // Rules that are global even inside @scope (@property, @font-face, @keyframes, @layer
-    // order, @page, …) would act on every frame: they are removed, the rest is kept.
+    // Rules that are global even inside @scope (@property, @font-face, @layer order, @page,
+    // …) would act on every frame: they are removed, the rest is kept. @keyframes are global
+    // too, but named: each is kept under a name of this frame's (grow becomes grow--n<number>,
+    // the frame's own number in this renderer), and the sheet's animations name it so, so
+    // frames' animations never meet (#299).
     const kept = [view.CSSStyleRule, view.CSSMediaRule, view.CSSSupportsRule, view.CSSContainerRule, ScopeRule, view.CSSLayerBlockRule, view.CSSStartingStyleRule, view.CSSNestedDeclarations].filter((type) => type !== undefined);
+    if (!frameNumbers.has(nodeId)) frameNumbers.set(nodeId, frameNumbers.size + 1);
+    const suffix = `--n${frameNumbers.get(nodeId)}`;
+    // Keyed and valued as the names are written in CSS (escaped), as declarations hold them.
+    const animations = new Map();
     const prune = (group) => {
       for (let index = group.cssRules.length - 1; index >= 0; index -= 1) {
         const rule = group.cssRules[index];
-        if (!kept.some((type) => rule instanceof type)) {
+        if (view.CSSKeyframesRule !== undefined && rule instanceof view.CSSKeyframesRule) {
+          // Renamed once: a rule put back by a rebuild below is pruned again.
+          if (!rule.name.endsWith(suffix)) {
+            const renamed = `${rule.name}${suffix}`;
+            animations.set(view.CSS.escape(rule.name), view.CSS.escape(renamed));
+            rule.name = renamed;
+          }
+        } else if (!kept.some((type) => rule instanceof type)) {
           group.deleteRule(index);
           stats.dropped += 1;
         } else if (rule.cssRules !== undefined) prune(rule);
@@ -372,7 +432,7 @@ export function createRenderer(root) {
         // logical and physical pair, which changes which wins.
         if (rule.style !== undefined) {
           const written = rule.style.cssText;
-          const drawn = designViewportLengths(written);
+          const drawn = designViewportLengths(renamedAnimations(written, animations));
           if (drawn !== written) rule.style.cssText = drawn;
         }
         if (rule.cssRules !== undefined) lengths(rule, depth + 1);
