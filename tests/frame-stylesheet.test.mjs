@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { frameStylesheet } from "../packages/import-stack/src/index.ts";
-import { designViewportLengths, drawnSelector, planElement } from "../packages/renderer/src/index.mjs";
+import { designViewportLengths, drawnSelector, planElement, renamedAnimations } from "../packages/renderer/src/index.mjs";
 import { exportJsx } from "../packages/studio-host/src/code.ts";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, reloadEditor, waitRevision } from "./support/editor.mjs";
@@ -564,4 +564,20 @@ test("each frame's @keyframes apply to that frame alone, under a name of its own
   } finally {
     await browser.close();
   }
+});
+
+test("a frame's animation names are renamed in animation declarations only, keywords aside", () => {
+  const renamed = new Map([["spin", "spin--n1"], ["running", "running--n1"], ["none", "none--n1"], ["\\31 abc", "\\31 abc--n1"]]);
+  for (const [declarations, drawn] of [
+    ["animation: 10s ease 0s 1 normal none running spin;", "animation: 10s ease 0s 1 normal none running spin--n1;"],
+    ["animation: 1s steps(2, end) 0s 1 normal none running spin, 2s ease 0s 1 normal none paused running;", "animation: 1s steps(2, end) 0s 1 normal none running spin--n1, 2s ease 0s 1 normal none paused running--n1;"],
+    ["animation-name: running, other ! important;", "animation-name: running--n1, other ! important;"],
+    ["animation-name: none;", "animation-name: none;"],
+    ["animation: 0s ease 0s 1 normal none running none;", "animation: 0s ease 0s 1 normal none running none;"],
+    ["animation: 10s ease 0s 1 normal none running \\31 abc;", "animation: 10s ease 0s 1 normal none running \\31 abc--n1;"],
+    ["-webkit-animation-name: spin;", "-webkit-animation-name: spin--n1;"],
+    ["animation-name: var(--n);", "animation-name: var(--n);"],
+    ["animation-name: \"spin\";", "animation-name: \"spin\";"],
+    ["transition: spin 1s; --x: spin;", "transition: spin 1s; --x: spin;"],
+  ]) assert.equal(renamedAnimations(declarations, renamed), drawn, declarations);
 });

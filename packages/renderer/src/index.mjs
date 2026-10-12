@@ -196,8 +196,10 @@ export function renamedAnimations(cssText, renamed) {
     const [, list, important] = /^([\s\S]*?)(\s*!\s*important\s*)?$/iu.exec(value);
     const shorthand = !/-name\s*:/iu.test(property);
     const items = topLevelItems(list).map((item) => {
-      const name = shorthand ? (/(\S+)(\s*)$/u.exec(item)?.[1] ?? "") : item.trim();
-      if (!renamed.has(name)) return item;
+      // A written name may hold an escape's space (\31 abc for "1abc").
+      const name = shorthand ? (/((?:\\[0-9a-fA-F]{1,6} |\S)+)\s*$/u.exec(item)?.[1] ?? "") : item.trim();
+      // Unquoted, none is the keyword for no animation, never a keyframes name.
+      if (!renamed.has(name) || name.toLowerCase() === "none") return item;
       const at = shorthand ? item.lastIndexOf(name) : item.indexOf(name);
       return `${item.slice(0, at)}${renamed.get(name)}${item.slice(at + name.length)}`;
     });
