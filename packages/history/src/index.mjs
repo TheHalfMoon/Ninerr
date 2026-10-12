@@ -1,5 +1,6 @@
 import {
   cloneDocument,
+  changedPartIsValid,
   cloneValidated,
   createNode,
   getNode,
@@ -9,6 +10,7 @@ import {
   jsonDataProblem,
   validateDocument,
   validateNodes,
+  withAddedNodesSorted,
   withSortedNodes,
 } from "../../document-model/src/index.mjs";
 
@@ -368,12 +370,72 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
         working.nodes[id] = cloneValidated(document.nodes[id]);
       }
     }
+  } else if (ours) {
+    // A structural change on a document this module returned: copied on write too, the
+    // records each operation will change copied just before it applies (found as getNode finds
+    // them), the rest shared (#252).
+    working = { ...document, nodes: { ...document.nodes }, rootIds: [...document.rootIds] };
   } else {
     working = cloneValidated(document);
   }
+  const structural = ours && !propsOnly;
+  // Of a structural change: the records it changed or added (or removed whole), and the nodes
+  // whose subtrees it moved, for the check of the changed part; and whether it added keys.
+  const changed = new Set();
+  const moved = [];
+  let keysAdded = false;
+  const key = (id) => (id === null || id === undefined || typeof id === "symbol" ? undefined : String(id));
+  const take = (id) => {
+    const name = key(id);
+    if (name === undefined) return;
+    changed.add(name);
+    if (Object.hasOwn(document.nodes, name) && working.nodes[name] === document.nodes[name]) {
+      working.nodes[name] = cloneValidated(document.nodes[name]);
+    }
+  };
+  const before = (operation) => {
+    const at = (id) => {
+      const name = key(id);
+      return name !== undefined && Object.hasOwn(working.nodes, name) ? working.nodes[name] : undefined;
+    };
+    switch (operation?.type) {
+      case "set-props":
+        take(operation.nodeId);
+        break;
+      case "insert-node":
+        take(operation.parentId);
+        if (typeof operation.node?.id === "string") changed.add(operation.node.id);
+        keysAdded = true;
+        break;
+      case "remove-node": {
+        const node = at(operation.nodeId);
+        if (node) take(node.parentId);
+        take(operation.nodeId);
+        break;
+      }
+      case "restore-subtree":
+        take(operation.parentId);
+        for (const node of Array.isArray(operation.nodes) ? operation.nodes : []) {
+          if (typeof node?.id === "string") changed.add(node.id);
+        }
+        keysAdded = true;
+        break;
+      case "move-node": {
+        const node = at(operation.nodeId);
+        take(operation.nodeId);
+        if (node) take(node.parentId);
+        take(operation.parentId);
+        if (node && !moved.includes(node.id)) moved.push(node.id);
+        break;
+      }
+      default:
+        break;
+    }
+  };
   const inverseOperations = [];
   const affectedNodeIds = new Set();
   for (const operation of normalizedTransaction.operations) {
+    if (structural) before(operation);
     collectAffectedNodeIds(working, operation, affectedNodeIds);
     const inverse = applyOperation(working, operation);
     inverseOperations.unshift(inverse);
@@ -383,6 +445,11 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
   if (propsOnly) {
     normalizedDocument = working;
     validateNodes(normalizedDocument, affectedNodeIds);
+  } else if (structural) {
+    // Sorted only if keys were added; checked in the part it changed, or, when that check is
+    // not sure, whole, which then decides with its own message.
+    normalizedDocument = keysAdded ? withAddedNodesSorted(working, changed) : working;
+    if (!changedPartIsValid(normalizedDocument, changed, moved, { added: keysAdded })) validateDocument(normalizedDocument);
   } else {
     normalizedDocument = withSortedNodes(working);
     validateDocument(normalizedDocument);
