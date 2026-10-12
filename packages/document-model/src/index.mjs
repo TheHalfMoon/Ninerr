@@ -428,14 +428,16 @@ export function getNode(document, nodeId) {
 
 export function getSubtreeNodeIds(document, nodeId) {
   getNode(document, nodeId);
+  // Each node, then its children's subtrees in order, without recursion: inside a transaction a
+  // restored chain can be deeper than the stack (depth is checked only at its end, #329).
   const result = [];
-  const visit = (id) => {
+  const pending = [nodeId];
+  while (pending.length > 0) {
+    const id = pending.pop();
     result.push(id);
-    for (const childId of document.nodes[id].children) {
-      visit(childId);
-    }
-  };
-  visit(nodeId);
+    const { children } = document.nodes[id];
+    for (let index = children.length - 1; index >= 0; index -= 1) pending.push(children[index]);
+  }
   return result;
 }
 
