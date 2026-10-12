@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { DocumentInvariantError, cloneDocument, cloneValidated, createDocument, validateDocument } from "../packages/document-model/src/index.mjs";
-import { applyCommittedTransaction, applyTransaction, createHistoryState } from "../packages/history/src/index.mjs";
+import { applyCommittedTransaction, applyTransaction, createHistoryState, replayTransactions } from "../packages/history/src/index.mjs";
 import { createProject, openProject } from "../packages/persistence/src/index.ts";
 import { createPrng } from "./support/prng.mjs";
 
@@ -223,4 +223,14 @@ test("a props edit's node is named by a string, and a refused transaction change
   // One that applies, then one that does not: the transaction is refused, and nothing changed.
   assert.throws(() => applyTransaction(document, { id: "t", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: "5", set: { text: "LEAK" } }, { type: "set-props", nodeId: "missing", set: { text: "x" } }] }), /Unknown node id missing/u);
   assert.deepStrictEqual(document, snapshot);
+});
+
+test("a journal written before props edits needed a string node id still replays as committed (#252)", () => {
+  // From the second review: a set-props journaled by an earlier Ninerr with nodeId 5 (node
+  // "5", as getNode converted it) must still replay, or the project would not open.
+  const document = createDocument({ id: "old", nodes: [{ id: "root", type: "frame", children: ["5"], props: {} }, { id: "5", type: "text", parentId: "root", props: { text: "five" } }] });
+  const replayed = replayTransactions(document, [{ id: "old-1", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: 5, set: { text: "FIVE" } }] }]);
+  assert.equal(replayed.nodes["5"].props.text, "FIVE");
+  // A live commit still needs a string.
+  assert.throws(() => applyTransaction(document, { id: "new-1", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: 5, set: { text: "x" } }] }), /set-props\.nodeId/u);
 });

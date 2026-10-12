@@ -417,6 +417,16 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
  * two transactions is not caught; the result is fully validated. A transaction that does
  * not apply throws a TransactionError whose `index` names it.
  */
+/**
+ * An operation as it was applied when it was journaled. Before #252 a set-props named its node
+ * by any value, found as getNode converts it (5 names node "5"); a commit now needs a string,
+ * but a journal written before still replays as it was committed.
+ */
+function asJournaled(operation) {
+  if (operation?.type !== "set-props" || typeof operation.nodeId === "string" || typeof operation.nodeId === "symbol") return operation;
+  return { ...operation, nodeId: String(operation.nodeId) };
+}
+
 export function replayTransactions(document, transactions) {
   validateDocument(document);
   const working = cloneValidated(document);
@@ -426,7 +436,7 @@ export function replayTransactions(document, transactions) {
       if (normalized.baseRevision !== null && normalized.baseRevision !== working.revision) {
         throw new TransactionError(`Stale transaction ${normalized.id}: expected revision ${normalized.baseRevision}, current revision ${working.revision}`);
       }
-      for (const operation of normalized.operations) applyOperation(working, operation);
+      for (const operation of normalized.operations) applyOperation(working, asJournaled(operation));
     } catch (error) {
       const failure = new TransactionError(error instanceof Error ? error.message : String(error));
       failure.index = index;
