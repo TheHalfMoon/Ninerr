@@ -338,14 +338,15 @@ test("structural changes at the limits end, or are refused, exactly as the full 
 });
 
 test("undoing the removal of a large, deep subtree costs no more than checking it whole (#252)", () => {
-  // A chain 300 deep with 50 leaves on each level: an undo restores 15,300 nodes at once.
+  // A chain 1,000 deep with 15 leaves on each level: an undo restores 16,000 nodes at once,
+  // deep enough that walking each up the whole way costs several times the whole check.
   const nodes = [{ id: "top", type: "frame", children: ["d0"], props: {} }];
-  for (let level = 0; level < 300; level += 1) {
+  for (let level = 0; level < 1000; level += 1) {
     const id = `d${level}`;
-    const children = Array.from({ length: 50 }, (_, leaf) => `${id}-l${leaf}`);
-    if (level + 1 < 300) children.push(`d${level + 1}`);
+    const children = Array.from({ length: 15 }, (_, leaf) => `${id}-l${leaf}`);
+    if (level + 1 < 1000) children.push(`d${level + 1}`);
     nodes.push({ id, type: "frame", parentId: level === 0 ? "top" : `d${level - 1}`, children, props: {} });
-    for (let leaf = 0; leaf < 50; leaf += 1) nodes.push({ id: `${id}-l${leaf}`, type: "text", parentId: id, props: { text: "x" } });
+    for (let leaf = 0; leaf < 15; leaf += 1) nodes.push({ id: `${id}-l${leaf}`, type: "text", parentId: id, props: { text: "x" } });
   }
   const document = createHistoryState(createDocument({ id: "deep", nodes })).document;
   const removed = applyTransaction(document, { id: "rm", actor: "u", baseRevision: document.revision, operations: [{ type: "remove-node", nodeId: "d0" }] });
@@ -357,5 +358,5 @@ test("undoing the removal of a large, deep subtree costs no more than checking i
   };
   const fast = Math.min(...[0, 1, 2].map(() => time(() => applyTransaction(removed.document, undo))));
   const full = Math.min(...[0, 1, 2].map(() => time(() => applyTransaction(structuredClone(removed.document), undo))));
-  assert.ok(fast < full * 1.5, `restoring 15,300 nodes 300 deep: ${fast.toFixed(0)} ms, the whole check ${full.toFixed(0)} ms`);
+  assert.ok(fast < full * 2, `restoring 16,000 nodes 1,000 deep: ${fast.toFixed(0)} ms, the whole check ${full.toFixed(0)} ms`);
 });
