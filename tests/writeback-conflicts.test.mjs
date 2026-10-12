@@ -332,3 +332,24 @@ test("a style brought in from an unplain file is not written, even over a plain 
   const after = await ok(call("GET", "/api/document"), "document");
   assert.deepEqual(after.document.nodes[element].props.style, { background: "red", color: "green" });
 });
+
+// #291 item 4: a kept value whose write would not read back as written (JSX joins a text's
+// lines with a space) is left out of the plan, and its conflict can then only be taken.
+test("a kept value that would not read back is not written, and can then only be taken", async (t) => {
+  const { call, file, section, heading } = await conflicted(t);
+  const { revision } = await ok(call("GET", "/api/document"), "document");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: heading, set: { text: "Team\nplus" } }] }), "edit");
+  const before = readFileSync(file, "utf8");
+  const first = await ok(call("POST", "/api/codebase/preview", { nodeId: section }), "preview");
+  assert.equal(first.conflicts.find((entry) => entry.field === "text")?.keepable, true, "offered to keep until a write is planned");
+  const kept = await ok(call("POST", "/api/codebase/preview", { nodeId: section, keep: [{ nodeId: heading, field: "text", file: "Business" }] }), "preview with keep");
+  const conflict = kept.conflicts.find((entry) => entry.field === "text");
+  assert.deepEqual([conflict?.overridable, conflict?.keepable], [true, false], JSON.stringify(kept.conflicts));
+  assert.match(conflict.reason, /would not read back as written/u);
+  assert.ok(!kept.changes.some((change) => change.field === "text"), JSON.stringify(kept.changes));
+  // Taking the file's value is still offered and works.
+  await ok(call("POST", "/api/codebase/resolve", { nodeId: heading, field: "text", file: "Business" }), "take");
+  const after = await ok(call("GET", "/api/document"), "document");
+  assert.equal(after.document.nodes[heading].props.text, "Business");
+  assert.equal(readFileSync(file, "utf8"), before, "taking writes nothing to the file");
+});
