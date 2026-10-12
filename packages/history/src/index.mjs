@@ -178,6 +178,14 @@ function applyRestoreSubtree(document, operation) {
   if (!snapshotIds.has(operation.rootId)) {
     throw new TransactionError("restore-subtree.nodes does not contain rootId");
   }
+  if (snapshotIds.size !== snapshot.length) {
+    throw new TransactionError("Restore snapshot names a node more than once");
+  }
+  // The snapshot must be one tree under its root, as a removal records it: each other node
+  // listed by exactly one node, the one it names as its parent. Shared or looping child lists
+  // would otherwise reach the rest of the transaction, where walking them takes exponential
+  // time or never ends (#327); the whole document is checked only at the transaction's end.
+  const listedBy = new Map();
   for (const node of snapshot) {
     if (Object.hasOwn(document.nodes, node.id)) {
       throw new TransactionError(`Cannot restore existing node id ${node.id}`);
@@ -186,7 +194,29 @@ function applyRestoreSubtree(document, operation) {
       if (!snapshotIds.has(childId)) {
         throw new TransactionError(`Restore snapshot is missing child ${childId}`);
       }
+      if (childId === operation.rootId) {
+        throw new TransactionError(`Restore snapshot lists its root ${childId} as a child`);
+      }
+      if (listedBy.has(childId)) {
+        throw new TransactionError(`Restore snapshot lists node ${childId} under more than one parent`);
+      }
+      listedBy.set(childId, node.id);
     }
+  }
+  for (const node of snapshot) {
+    if (node.id !== operation.rootId && (listedBy.get(node.id) ?? null) !== node.parentId) {
+      throw new TransactionError(`Restore snapshot node ${node.id} is not under its root as its parentId says`);
+    }
+  }
+  const byId = new Map(snapshot.map((node) => [node.id, node]));
+  const pending = [operation.rootId];
+  let reached = 0;
+  while (pending.length > 0) {
+    reached += 1;
+    for (const childId of byId.get(pending.pop()).children) pending.push(childId);
+  }
+  if (reached !== snapshot.length) {
+    throw new TransactionError("Restore snapshot has nodes not under its root");
   }
   const parentId = operation.parentId ?? null;
   if (parentId !== null) getNode(document, parentId);

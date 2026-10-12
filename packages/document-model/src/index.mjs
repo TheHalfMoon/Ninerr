@@ -455,8 +455,13 @@ export function isDescendant(document, ancestorId, candidateId) {
   getNode(document, ancestorId);
   getNode(document, candidateId);
   let cursor = document.nodes[candidateId];
+  // A restored snapshot must be one tree (#327), so parents cannot name each other part-way
+  // through a transaction; the walk still refuses a cycle rather than loop for ever.
+  const seen = new Set();
   while (cursor.parentId !== null) {
     if (cursor.parentId === ancestorId) return true;
+    if (seen.has(cursor.id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(cursor.id)}`);
+    seen.add(cursor.id);
     cursor = getNode(document, cursor.parentId);
   }
   return false;

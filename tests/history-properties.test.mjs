@@ -222,9 +222,9 @@ test("replaying committed transactions in one batch gives exactly what applying 
   // A transaction that does not apply, or comes on the wrong revision, is named by its index.
   assert.throws(() => replayTransactions(start, [first, { id: "t2", actor: "u", baseRevision: 1, operations: [{ type: "remove-node", nodeId: "missing" }] }]), (error) => error.index === 1);
   assert.throws(() => replayTransactions(start, [first, { id: "t3", actor: "u", baseRevision: 0, operations: [{ type: "set-props", nodeId: "a", set: { x: 3 } }] }]), (error) => error.index === 1 && /Stale/u.test(error.message));
-  // Every operation applies, but the result is not a valid document (a restored node no
-  // parent or root list holds): the replay is refused as a whole, with no index.
-  const orphan = { id: "t4", actor: "u", baseRevision: 1, operations: [{ type: "restore-subtree", rootId: "r", parentId: null, index: 0, nodes: [{ id: "r", type: "frame" }, { id: "orphan", type: "frame" }] }] };
-  assert.throws(() => replayTransactions(start, [first, orphan]), (error) => error.index === undefined && /orphan/u.test(error.message));
+  // Every operation applies, but the result is not a valid document (a restored chain deeper
+  // than the limit): the replay is refused as a whole, with no index.
+  const tooDeep = { id: "t4", actor: "u", baseRevision: 1, operations: [{ type: "restore-subtree", rootId: "r", parentId: null, index: 0, nodes: Array.from({ length: 1025 }, (_, level) => ({ id: `r${level || ""}`, type: "frame", parentId: level === 0 ? null : `r${level - 1 || ""}`, children: level < 1024 ? [`r${level + 1}`] : [] })) }] };
+  assert.throws(() => replayTransactions(start, [first, tooDeep]), (error) => error.index === undefined && /deeper than 1024 levels/u.test(error.message));
   assert.equal(serializeDocument(start), serializeDocument(initialDocument()), "the input is not changed");
 });
