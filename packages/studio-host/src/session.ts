@@ -86,6 +86,24 @@ function earlierActorName(summary: JournalSummary, owner: StudioActor): string {
  * editor, an agent. An undo, redo or revert that would bring back such a sheet (from a project
  * written by hand) is refused as a conflict, under `conflictCode`.
  */
+/** The stylesheets a project's layers may hold in all (#299): a few full pages' worth. */
+export const MAX_PROJECT_STYLESHEET_BYTES = 16 * 1024 * 1024;
+
+/** The bytes of every layer's stylesheet in `document`. */
+function stylesheetBytes(document: any): number {
+  let total = 0;
+  for (const node of Object.values(document?.nodes ?? {}) as any[]) {
+    if (typeof node?.props?.stylesheet === "string") total += Buffer.byteLength(node.props.stylesheet, "utf8");
+  }
+  return total;
+}
+
+/** Whether `operations` set any layer's stylesheet, checked by assertSafeStylesheets. */
+function setsStylesheet(operations: unknown[]): boolean {
+  const has = (props: unknown) => props !== null && typeof props === "object" && Object.hasOwn(props, "stylesheet");
+  return (operations as any[]).some((operation) => (operation?.type === "insert-node" && has(operation.node?.props)) || (operation?.type === "set-props" && has(operation.set)) || (operation?.type === "restore-subtree" && Array.isArray(operation.nodes) && operation.nodes.some((node: any) => has(node?.props))));
+}
+
 function assertSafeStylesheets(operations: unknown[], conflictCode?: string): void {
   const refuse = (status: number, code: string, message: string) => {
     throw conflictCode === undefined ? new StudioError(status, code, message) : new StudioError(409, conflictCode, `the change can no longer be applied: ${message}`);
@@ -382,6 +400,16 @@ export class StudioSession {
       });
       const entry = result.history.past.at(-1);
       nextDocument = result.history.document;
+      // Stylesheets copied layer by layer (an agent's duplicate_layers) would grow the document
+      // and journal by up to 2 MiB a copy: past the project's budget, a change that grows them
+      // is refused; one that does not is never held back (#299).
+      if (setsStylesheet(input.operations)) {
+        const after = stylesheetBytes(nextDocument);
+        if (after > MAX_PROJECT_STYLESHEET_BYTES && after > stylesheetBytes(this.#baseHistory().document)) {
+          const message = `a project's stylesheets are limited to ${MAX_PROJECT_STYLESHEET_BYTES / 1024 / 1024} MiB in all`;
+          throw conflictCode === undefined ? new StudioError(413, "stylesheets-too-large", message) : new StudioError(409, conflictCode, `the change can no longer be applied: ${message}`);
+        }
+      }
       attributed = entry.transaction;
       inverse = entry.inverse.operations;
       affectedNodeIds = [...result.summary.affectedNodeIds];
