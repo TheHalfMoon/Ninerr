@@ -26,15 +26,17 @@ Since the exit record, independent P08 follow-ups have landed, each with a regre
 - a hung browser test fails by its name, and what it opened is closed after it, so the run ends (#305, PRs #307 and #311);
 - a page's `#id` rules apply on the canvas (#297, PR #309);
 - the import review says when a chosen stylesheet file answers a web address or several links, and an undo or revert that would bring back an unsafe stylesheet is refused (#299, PRs #308 and #313);
-- write-back no longer writes over a file style it cannot read exactly, a data-loss fix found in review (#291, PR #312).
+- write-back no longer writes over a file style it cannot read exactly, a data-loss fix found in review, and a conflict's choice that fails half-way leaves nothing to act on wrongly (#291, PRs #312, #317 and #318);
+- a page's @scope rules with ids apply, code export keeps every id unique in the export, and a guard bounds the cost of many id rules (#310, PRs #316, #319 and #322);
+- each frame's @keyframes apply to it alone, and a project's stylesheets have a 16 MiB budget in all (#299, PRs #320 and #321).
 
 One more decision is recorded: whether Ninerr may start Windows system tools to read a projects folder's access list, which its no-process rule forbids today (#268). Until then it stays the stated platform deviation.
 
 ## Canonical main
 
-`cba135192bc63c2b073cff2e18d8c16eef0f33f0`
+`93c3df47ec184779cd04981de63ace9e1703a7fa`
 
-This is the normal merge commit for PR #313 (#299, the import review's notes on linked stylesheets). It is the latest commit whose post-merge run was verified when this page was updated. The CI and Desktop workflows completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three.
+This is the normal merge commit for PR #322 (#310, a guard on the cost of many id rules). It is the latest commit whose post-merge run was verified when this page was updated. The CI and Desktop workflows completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three.
 
 ## Before the v1 tag
 1. **License.** Resolved: Ninerr is Apache-2.0 (`LICENSE`), after the A/B source-rights audit (`docs/evidence/N0_G7A_LICENSE_2026-10-09.md`).
