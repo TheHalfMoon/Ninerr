@@ -127,7 +127,10 @@ test("a store commits, reopens and refuses exactly as before with its own input 
 // and the order stands. These hold that path to the full one, and to its cost.
 test("setting props on a document history produced ends, or is refused, exactly as the full path (#252)", () => {
   const random = createPrng(2520);
-  const values = [1, "x", null, true, [1, 2], { a: { b: [3] } }, Number.NaN, undefined, Number.POSITIVE_INFINITY, new Map(), [1, , 3], { deep: JSON.parse("[".repeat(80) + "]".repeat(80)) }];
+  // Nested near the document's depth limit, where a node's own depth is counted from its place
+  // in the document (review of #252).
+  const nest = (levels) => JSON.parse("[".repeat(levels) + "]".repeat(levels));
+  const values = [1, "x", null, true, [1, 2], { a: { b: [3] } }, Number.NaN, undefined, Number.POSITIVE_INFINITY, new Map(), [1, , 3], { deep: nest(80) }, nest(251), nest(252), nest(253), nest(254), nest(255)];
   for (let round = 0; round < 300; round += 1) {
     const nodes = [{ id: "root", type: "frame", children: [], props: { name: "Root" } }];
     for (let index = 0; index < 1 + random.int(6); index += 1) {

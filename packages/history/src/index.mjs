@@ -325,8 +325,9 @@ export function getAffectedNodeIds(transaction) {
 /**
  * Apply `transaction` to a copy of `document`, validating both. `ownValidated` skips
  * validating the input, for a caller whose document was itself returned validated by this
- * module and has never been shared or changed since (a store's private state, #252). The
- * output is still fully validated, so a bad transaction is refused as before. A document that
+ * module and has never been shared or changed since (a store's private state, #252), with its
+ * nodes in canonical order. The output is validated: whole, or for a transaction that only
+ * sets props, the records it touched (the rest is as validated). A document that
  * was changed after validation must not be passed with it: the copy is made for validated
  * data, and would quietly turn a Map or a Date into {} rather than refuse it.
  */
@@ -431,6 +432,8 @@ export function applyCommittedTransaction(document, transaction) {
   if (!Array.isArray(transaction?.operations) || transaction.operations.length === 0) {
     throw new TransactionError("transaction.operations must be a non-empty array");
   }
+  // Changed in place: whatever it was, it is no longer a document this module validated.
+  PRODUCED.delete(document);
   const affectedNodeIds = new Set();
   for (const operation of transaction.operations) {
     collectAffectedNodeIds(document, operation, affectedNodeIds);

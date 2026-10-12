@@ -467,8 +467,10 @@ export function validateNodes(document, ids) {
     if (!Object.hasOwn(document.nodes, id)) throw new DocumentInvariantError(`Unknown node id ${shownId(id)}`);
     const node = document.nodes[id];
     assertNodeRecord(document.nodes, id, node);
-    const problem = jsonDataProblem(node);
-    if (problem !== null) throw new DocumentInvariantError(`document node ${shownId(id)} ${problem}`);
+    // A node lies two levels into the document (document.nodes[id]): its depth counts from
+    // there, as validateDocument's one walk counts it, with the same message.
+    const problem = jsonDataProblem(node, 2);
+    if (problem !== null) throw new DocumentInvariantError(`document ${problem}`);
   }
 }
 
