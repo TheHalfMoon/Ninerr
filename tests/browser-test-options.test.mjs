@@ -58,10 +58,16 @@ test("a load that times out names its step and what was still loading", browserT
   const { editorReady } = await import("./support/editor.mjs");
   await page.setContent('<span id="status">Ninerr could not start: refused</span><dialog open><h2>This Ninerr session has ended</h2></dialog>', { waitUntil: "domcontentloaded" });
   const stopped = await editorReady(page, pending, { timeout: 500 }).then(() => null, (error) => error);
-  assert.match(stopped?.message ?? "", /^the editor becoming ready timed out; still loading: .*; the page showed: status "Ninerr could not start: refused", dialog "This Ninerr session has ended"$/u);
+  assert.match(stopped?.message ?? "", /^the editor becoming ready timed out; still loading: .*; the page showed: status "Ninerr could not start: refused", dialog "This Ninerr session has ended", page \/page (?:loading|interactive|complete)$/u);
   await page.setContent('<p>blank</p><span id="revision">Revision 2</span>', { waitUntil: "domcontentloaded" });
   const quiet = await editorReady(page, null, { timeout: 200 }).then(() => null, (error) => error);
-  assert.equal(quiet?.message, 'the editor becoming ready timed out; the page showed: status "nothing", revision "Revision 2"');
+  assert.match(quiet?.message ?? "", /^the editor becoming ready timed out; the page showed: status "nothing", revision "Revision 2", page \/page (?:loading|interactive|complete)$/u);
+  // A page that cannot say what it shows does not hold the failure back, or hide it.
+  const silent = await step("waiting for the title", null, () => page.waitForFunction(() => document.title === "never", null, { timeout: 200 }), { describe: () => page.evaluate(() => new Promise(() => {})) }).then(() => null, (error) => error);
+  assert.equal(silent?.message, "waiting for the title timed out; the page showed: not known (no answer in 2 s)");
+  assert.equal(silent.cause?.name, "TimeoutError");
+  const failing = await step("waiting for the title", null, () => page.waitForFunction(() => document.title === "never", null, { timeout: 200 }), { describe: () => { throw new Error("first line\nsecond line"); } }).then(() => null, (error) => error);
+  assert.equal(failing?.message, "waiting for the title timed out; the page showed: not known (first line)");
   // A step with no watch names itself and nothing more.
   const unwatched = await step("waiting for the title", null, () => page.waitForFunction(() => document.title === "never", null, { timeout: 200 })).then(() => null, (error) => error);
   assert.equal(unwatched?.message, "waiting for the title timed out");

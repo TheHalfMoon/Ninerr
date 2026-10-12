@@ -78,7 +78,14 @@ export async function step(what, pending, action, { describe } = {}) {
     const open = pending?.() ?? null;
     const loading = open === null ? "" : `; still loading: ${open.length === 0 ? "nothing" : open.join(", ")}`;
     // What the page showed, if it can still say within a moment: it is a clue, not a step.
-    const shown = describe === undefined ? null : await Promise.race([describe().catch((failure) => `not known (${failure?.message ?? failure})`), new Promise((resolve) => setTimeout(resolve, 2_000, "not known (no answer in 2 s)"))]);
+    let timer;
+    const shown = describe === undefined ? null : await Promise.race([
+      Promise.resolve().then(describe).catch((failure) => `not known (${String(failure?.message ?? failure).split("\n")[0]})`),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 2_000, "not known (no answer in 2 s)");
+      }),
+    ]);
+    clearTimeout(timer);
     throw new Error(`${what} timed out${loading}${shown === null ? "" : `; the page showed: ${shown}`}`, { cause: error });
   }
 }
