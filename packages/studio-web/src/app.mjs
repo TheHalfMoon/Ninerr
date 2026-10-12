@@ -999,7 +999,9 @@ function handleEditError(error) {
       return;
     }
     if (error.code === "undo-conflict" || error.code === "redo-conflict") {
-      setStatus("A later change touches the same layers, so this cannot be undone or redone now.");
+      // A stylesheet that may not come back (unsafe, or past the project's budget) says why.
+      const sheet = /no longer be applied: ((?:a stylesheet|a project's stylesheets)[^]*)$/u.exec(error.message ?? "");
+      setStatus(sheet ? `This cannot be undone or redone now: ${sheet[1]}.` : "A later change touches the same layers, so this cannot be undone or redone now.");
       return;
     }
   }

@@ -80,18 +80,33 @@ function earlierActorName(summary: JournalSummary, owner: StudioActor): string {
   return "Another person";
 }
 
+/** The stylesheets a project's layers may hold in all (#299): a few full pages' worth. */
+export const MAX_PROJECT_STYLESHEET_BYTES = 16 * 1024 * 1024;
+
+/** The bytes of every layer's stylesheet in `document`. */
+function stylesheetBytes(document: any): number {
+  let total = 0;
+  for (const node of Object.values(document?.nodes ?? {}) as any[]) {
+    if (typeof node?.props?.stylesheet === "string") total += Buffer.byteLength(node.props.stylesheet, "utf8");
+  }
+  return total;
+}
+
 /**
  * A layer's stylesheet (#283) is text, at most MAX_FRAME_STYLESHEET_BYTES, that loads and
  * executes nothing and closes no block it did not open, whoever sets it: an import, the
  * editor, an agent. An undo, redo or revert that would bring back such a sheet (from a project
- * written by hand) is refused as a conflict, under `conflictCode`.
+ * written by hand) is refused as a conflict, under `conflictCode`. Returns whether the
+ * operations set any stylesheet, for the project's budget.
  */
-function assertSafeStylesheets(operations: unknown[], conflictCode?: string): void {
+function assertSafeStylesheets(operations: unknown[], conflictCode?: string): boolean {
+  let sets = false;
   const refuse = (status: number, code: string, message: string) => {
     throw conflictCode === undefined ? new StudioError(status, code, message) : new StudioError(409, conflictCode, `the change can no longer be applied: ${message}`);
   };
   const check = (props: unknown) => {
     if (props === null || typeof props !== "object" || !Object.hasOwn(props, "stylesheet")) return;
+    sets = true;
     const sheet = (props as Record<string, unknown>).stylesheet;
     if (typeof sheet !== "string") refuse(400, "unsafe-stylesheet", "a stylesheet must be text");
     else if (Buffer.byteLength(sheet, "utf8") > MAX_FRAME_STYLESHEET_BYTES) refuse(413, "stylesheet-too-large", `a stylesheet is limited to ${MAX_FRAME_STYLESHEET_BYTES / 1024 / 1024} MiB`);
@@ -105,6 +120,7 @@ function assertSafeStylesheets(operations: unknown[], conflictCode?: string): vo
       for (const node of operation.nodes) check(node?.props);
     }
   }
+  return sets;
 }
 
 export function assertProjectName(name: unknown): string {
@@ -356,7 +372,7 @@ export class StudioSession {
     let nextDocument: any;
     let inverse: unknown[];
     let affectedNodeIds: string[];
-    assertSafeStylesheets(input.operations, conflictCode);
+    const setsStylesheet = assertSafeStylesheets(input.operations, conflictCode);
     try {
       // Collaboration authorizes the actor and attributes the transaction. The room is built
       // per commit from the session's grants: its fact log is not kept (attribution lives in
@@ -382,6 +398,16 @@ export class StudioSession {
       });
       const entry = result.history.past.at(-1);
       nextDocument = result.history.document;
+      // Stylesheets copied layer by layer (an agent's duplicate_layers) would grow the document
+      // by up to 2 MiB a copy without end: past the project's budget, a change that grows them
+      // is refused; one that does not is never held back (#299).
+      if (setsStylesheet) {
+        const after = stylesheetBytes(nextDocument);
+        if (after > MAX_PROJECT_STYLESHEET_BYTES && after > stylesheetBytes(this.#baseHistory().document)) {
+          const message = `a project's stylesheets are limited to ${MAX_PROJECT_STYLESHEET_BYTES / 1024 / 1024} MiB in all`;
+          throw conflictCode === undefined ? new StudioError(413, "stylesheets-too-large", message) : new StudioError(409, conflictCode, `the change can no longer be applied: ${message}`);
+        }
+      }
       attributed = entry.transaction;
       inverse = entry.inverse.operations;
       affectedNodeIds = [...result.summary.affectedNodeIds];
