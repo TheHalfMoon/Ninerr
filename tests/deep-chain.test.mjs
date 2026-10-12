@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Worker } from "node:worker_threads";
 
 import { createDocument, getSubtreeNodeIds } from "../packages/document-model/src/index.mjs";
 import { applyTransaction } from "../packages/history/src/index.mjs";
@@ -29,4 +30,26 @@ test("a subtree's ids come in the same order as before: each node, then its chil
   assert.deepEqual(getSubtreeNodeIds(document, "a"), ["a", "b", "c", "d", "e", "f"]);
   assert.deepEqual(getSubtreeNodeIds(document, "e"), ["e", "f"]);
   assert.throws(() => getSubtreeNodeIds(document, "missing"), /missing/u);
+});
+
+test("a subtree whose child lists loop is refused at once, not walked until memory runs out", async () => {
+  // Not reachable through a transaction (#327 keeps restored snapshots one tree); guarded all
+  // the same. Run in a worker that is terminated, since a walk that never ends cannot time out.
+  const worker = new Worker(`
+    const { parentPort, workerData } = require("node:worker_threads");
+    import(workerData).then(({ getSubtreeNodeIds }) => {
+      const nodes = { a: { id: "a", parentId: null, children: ["b"] }, b: { id: "b", parentId: "a", children: ["a"] } };
+      try {
+        parentPort.postMessage(String(getSubtreeNodeIds({ nodes }, "a").length));
+      } catch (error) {
+        parentPort.postMessage(error.name + ": " + error.message);
+      }
+    });`, { eval: true, workerData: new URL("../packages/document-model/src/index.mjs", import.meta.url).href, resourceLimits: { maxOldGenerationSizeMb: 256 } });
+  const outcome = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve("did not finish in 5 s"), 5_000);
+    worker.once("message", (message) => { clearTimeout(timer); resolve(message); });
+    worker.once("error", (error) => { clearTimeout(timer); resolve(`worker failed: ${error.message}`); });
+  });
+  await worker.terminate();
+  assert.match(outcome, /^DocumentInvariantError: Cycle detected at node [ab]$/u);
 });

@@ -430,10 +430,15 @@ export function getSubtreeNodeIds(document, nodeId) {
   getNode(document, nodeId);
   // Each node, then its children's subtrees in order, without recursion: inside a transaction a
   // restored chain can be deeper than the stack (depth is checked only at its end, #329).
+  // A node met twice means child lists that loop, which a valid document cannot hold: refused
+  // at once, as the recursion it replaced failed, not walked until memory runs out.
   const result = [];
+  const seen = new Set();
   const pending = [nodeId];
   while (pending.length > 0) {
     const id = pending.pop();
+    if (seen.has(id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(id)}`);
+    seen.add(id);
     result.push(id);
     const { children } = document.nodes[id];
     for (let index = children.length - 1; index >= 0; index -= 1) pending.push(children[index]);
