@@ -163,6 +163,26 @@ export function drawnSelector(selector) {
   return drawn;
 }
 
+/** A short, stable hash of a layer's id, for names that must be the layer's own. */
+function frameHash(nodeId) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < nodeId.length; index += 1) hash = Math.imul(hash ^ nodeId.charCodeAt(index), 0x01000193) >>> 0;
+  return hash.toString(36);
+}
+
+const ANIMATION_DECLARATION = /(^|;\s*)(animation(?:-name)?\s*:\s*)([^;"']*)(?=;|$)/giu;
+const ANIMATION_NAME = /(^|[\s,])(-?[A-Za-z_][\w-]*)(?=$|[\s,!])/gu;
+
+/**
+ * Declarations (a rule's cssText as the browser writes it) with the animation names in
+ * `renamed` written as their frame's names, in animation and animation-name only; a quoted
+ * name and everything else are left as written.
+ */
+export function renamedAnimations(cssText, renamed) {
+  if (renamed.size === 0 || !/animation/iu.test(cssText)) return cssText;
+  return cssText.replace(ANIMATION_DECLARATION, (whole, start, property, value) => start + property + value.replace(ANIMATION_NAME, (token, before, name) => (renamed.has(name) ? before + renamed.get(name) : token)));
+}
+
 /** A CSS value with its viewport lengths as pixels of DESIGN_VIEWPORT; strings are left as written. */
 export function designViewportLengths(value) {
   if (!/v(?:h|w|b|i|min|max)\b/iu.test(value)) return value;
@@ -322,13 +342,24 @@ export function createRenderer(root) {
       stats.dropped += 1;
       return;
     }
-    // Rules that are global even inside @scope (@property, @font-face, @keyframes, @layer
-    // order, @page, …) would act on every frame: they are removed, the rest is kept.
+    // Rules that are global even inside @scope (@property, @font-face, @layer order, @page,
+    // …) would act on every frame: they are removed, the rest is kept. @keyframes are global
+    // too, but named: each is kept under a name of this frame's (grow becomes grow--n<hash>),
+    // and the sheet's animations name it so, so frames' animations never meet (#299).
     const kept = [view.CSSStyleRule, view.CSSMediaRule, view.CSSSupportsRule, view.CSSContainerRule, ScopeRule, view.CSSLayerBlockRule, view.CSSStartingStyleRule, view.CSSNestedDeclarations].filter((type) => type !== undefined);
+    const suffix = `--n${frameHash(nodeId)}`;
+    const animations = new Map();
     const prune = (group) => {
       for (let index = group.cssRules.length - 1; index >= 0; index -= 1) {
         const rule = group.cssRules[index];
-        if (!kept.some((type) => rule instanceof type)) {
+        if (view.CSSKeyframesRule !== undefined && rule instanceof view.CSSKeyframesRule) {
+          // Renamed once: a rule put back by a rebuild below is pruned again.
+          if (!rule.name.endsWith(suffix)) {
+            const renamed = `${rule.name}${suffix}`;
+            animations.set(rule.name, renamed);
+            rule.name = renamed;
+          }
+        } else if (!kept.some((type) => rule instanceof type)) {
           group.deleteRule(index);
           stats.dropped += 1;
         } else if (rule.cssRules !== undefined) prune(rule);
@@ -372,7 +403,7 @@ export function createRenderer(root) {
         // logical and physical pair, which changes which wins.
         if (rule.style !== undefined) {
           const written = rule.style.cssText;
-          const drawn = designViewportLengths(written);
+          const drawn = designViewportLengths(renamedAnimations(written, animations));
           if (drawn !== written) rule.style.cssText = drawn;
         }
         if (rule.cssRules !== undefined) lengths(rule, depth + 1);
