@@ -66,9 +66,10 @@ export function watchRequests(page) {
 
 /**
  * Run one step of a browser test (a load, a reload, a wait); if it times out, fail with the
- * step's name and, given `pending` (watchRequests), what was still loading (#300).
+ * step's name, given `pending` (watchRequests) what was still loading, and given `describe`
+ * what the page showed then (#300).
  */
-export async function step(what, pending, action) {
+export async function step(what, pending, action, { describe } = {}) {
   try {
     return await action();
   } catch (error) {
@@ -76,7 +77,16 @@ export async function step(what, pending, action) {
     // Without a watch, what was loading is not known, and is not said.
     const open = pending?.() ?? null;
     const loading = open === null ? "" : `; still loading: ${open.length === 0 ? "nothing" : open.join(", ")}`;
-    throw new Error(`${what} timed out${loading}`, { cause: error });
+    // What the page showed, if it can still say within a moment: it is a clue, not a step.
+    let timer;
+    const shown = describe === undefined ? null : await Promise.race([
+      Promise.resolve().then(describe).catch((failure) => `not known (${String(failure?.message ?? failure).split("\n")[0]})`),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 2_000, "not known (no answer in 2 s)");
+      }),
+    ]);
+    clearTimeout(timer);
+    throw new Error(`${what} timed out${loading}${shown === null ? "" : `; the page showed: ${shown}`}`, { cause: error });
   }
 }
 
