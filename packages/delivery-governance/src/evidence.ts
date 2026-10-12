@@ -1,5 +1,5 @@
 import { lstat, mkdir, realpath, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, parse, resolve, sep } from "node:path";
 import { DeliveryValidationError } from "./errors.ts";
 import {
   DELIVERY_SCHEMA_VERSION,
@@ -45,6 +45,11 @@ const errorCode = (error: unknown): string => String((error as NodeJS.ErrnoExcep
 async function canonicalThrough(path: string, what: string, { refuseLinks }: { refuseLinks: boolean }): Promise<string> {
   const segments: string[] = [];
   let cursor = resolve(path);
+  // On Windows a colon past the drive names an NTFS stream: "wt::$INDEX_ALLOCATION" is the
+  // folder "wt" spelled so that no comparison of names sees it (from the review of #270).
+  if (process.platform === "win32" && cursor.slice(parse(cursor).root.length).includes(":")) {
+    throw new DeliveryValidationError(`${what} ${path} names a stream, not a folder`);
+  }
   for (let depth = 0; depth < 64; depth += 1) {
     let link;
     try {
@@ -95,13 +100,7 @@ export async function createEvidenceStore(options: EvidenceStoreOptions): Promis
   if (typeof options.evidenceRoot !== "string" || options.evidenceRoot.trim() === "") {
     throw new DeliveryValidationError("evidence root must be a non-empty string");
   }
-  let root: string;
-  try {
-    root = await resolveThroughExisting(options.evidenceRoot);
-  } catch (error) {
-    if (error instanceof DeliveryValidationError) throw error;
-    throw new DeliveryValidationError(`evidence root cannot be resolved: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const root = await resolveThroughExisting(options.evidenceRoot);
   for (const disposable of options.disposableRoots ?? []) {
     // Canonical like the evidence root, through its nearest existing folder, so two spellings
     // of one place (a Windows short name, macOS's /var) cannot pass as two. A link whose

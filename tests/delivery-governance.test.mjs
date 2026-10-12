@@ -272,8 +272,11 @@ test("a path below a file, or through a dangling link, is refused as a validatio
     const file = join(dir, "file");
     await writeFile(file, "x");
     const refused = (error) => error instanceof DeliveryValidationError;
-    await assert.rejects(createEvidenceStore({ evidenceRoot: join(dir, "evidence"), disposableRoots: [join(file, "wt")] }), refused);
-    await assert.rejects(createEvidenceStore({ evidenceRoot: join(file, "evidence") }), refused);
+    // Windows reports a name below a file as missing, so the walk finds the file; POSIX says
+    // ENOTDIR at once. Either way, a validation error that says which.
+    const belowFile = (error) => refused(error) && (process.platform === "win32" ? /is below a file$/u : /cannot be resolved: ENOTDIR$/u).test(error.message);
+    await assert.rejects(createEvidenceStore({ evidenceRoot: join(dir, "evidence"), disposableRoots: [join(file, "wt")] }), belowFile);
+    await assert.rejects(createEvidenceStore({ evidenceRoot: join(file, "evidence") }), belowFile);
     // A link whose target is gone, part-way up a disposable worktree that does not exist.
     const dangling = join(dir, "gone-link");
     await symlink(join(dir, "gone"), dangling, "junction");
@@ -281,6 +284,20 @@ test("a path below a file, or through a dangling link, is refused as a validatio
       createEvidenceStore({ evidenceRoot: join(dir, "evidence"), disposableRoots: [join(dangling, "wt")] }),
       (error) => refused(error) && /cannot be resolved/u.test(error.message),
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a Windows path that names an NTFS stream past its drive is refused (#270)", { skip: process.platform !== "win32" && "NTFS streams are Windows'" }, async () => {
+  // "wt::$INDEX_ALLOCATION" is the folder "wt": mkdir would create the evidence inside it.
+  const dir = realpathSync.native(await mkdtemp(join(tmpdir(), "ninerr-delivery-stream-")));
+  try {
+    await assert.rejects(
+      createEvidenceStore({ evidenceRoot: join(dir, "wt::$INDEX_ALLOCATION", "evidence"), disposableRoots: [join(dir, "wt")] }),
+      (error) => error instanceof DeliveryValidationError && /names a stream, not a folder$/u.test(error.message),
+    );
+    assert.equal(existsSync(join(dir, "wt")), false, "nothing is created for a refused root");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
