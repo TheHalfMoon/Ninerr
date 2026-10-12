@@ -421,8 +421,13 @@ export function isDescendant(document, ancestorId, candidateId) {
   getNode(document, ancestorId);
   getNode(document, candidateId);
   let cursor = document.nodes[candidateId];
+  // A transaction can leave parents naming each other part-way (a restored snapshot is
+  // checked whole only at its end), so the walk refuses a cycle rather than loop for ever.
+  const seen = new Set();
   while (cursor.parentId !== null) {
     if (cursor.parentId === ancestorId) return true;
+    if (seen.has(cursor.id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(cursor.id)}`);
+    seen.add(cursor.id);
     cursor = getNode(document, cursor.parentId);
   }
   return false;
