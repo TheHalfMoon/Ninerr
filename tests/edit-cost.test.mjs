@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { DocumentInvariantError, cloneDocument, cloneValidated, createDocument, validateDocument } from "../packages/document-model/src/index.mjs";
-import { applyTransaction, createHistoryState } from "../packages/history/src/index.mjs";
+import { applyCommittedTransaction, applyTransaction, createHistoryState, replayTransactions } from "../packages/history/src/index.mjs";
 import { createProject, openProject } from "../packages/persistence/src/index.ts";
 import { createPrng } from "./support/prng.mjs";
 
@@ -183,4 +183,54 @@ test("setting props on a large produced document costs less than validating it o
   const edit = Math.min(...edits.slice(1));
   assert.equal(document.nodes.n123.props.text, "Edit 5");
   assert.ok(edit < validation, `an edit of one prop on 50,000 nodes took ${edit.toFixed(1)} ms; one validation ${validation.toFixed(1)} ms`);
+});
+
+test("a props edit copies only the records it sets, and every document stays as it was (#252)", () => {
+  const nodes = [{ id: "root", type: "frame", children: ["a", "b"], props: { name: "Root" } }, { id: "a", type: "text", parentId: "root", props: { text: "A", style: { color: "red" } } }, { id: "b", type: "text", parentId: "root", props: { text: "B" } }];
+  const first = createHistoryState(createDocument({ id: "cow", nodes })).document;
+  const snapshot = structuredClone(first);
+  const second = applyTransaction(first, { id: "t1", actor: "u", baseRevision: first.revision, operations: [{ type: "set-props", nodeId: "a", set: { text: "A2" }, unset: ["style"] }] }).document;
+  const third = applyTransaction(second, { id: "t2", actor: "u", baseRevision: second.revision, operations: [{ type: "set-props", nodeId: "a", set: { text: "A3" } }, { type: "set-props", nodeId: "b", set: { text: "B3" } }] }).document;
+  // Untouched records are shared; the ones set are copies.
+  assert.equal(second.nodes.b, first.nodes.b);
+  assert.equal(second.nodes.root, first.nodes.root);
+  assert.notEqual(second.nodes.a, first.nodes.a);
+  assert.notEqual(third.nodes.b, second.nodes.b);
+  // Every document is still what it was.
+  assert.deepStrictEqual(first, snapshot);
+  assert.deepStrictEqual([second.nodes.a.props, second.nodes.b.props.text], [{ text: "A2" }, "B"]);
+  assert.deepStrictEqual([third.nodes.a.props.text, third.nodes.b.props.text], ["A3", "B3"]);
+  // A structural edit on a document that shares records copies it whole, and changes none.
+  const fourth = applyTransaction(third, { id: "t3", actor: "u", baseRevision: third.revision, operations: [{ type: "remove-node", nodeId: "b" }] }).document;
+  assert.equal(fourth.nodes.b, undefined);
+  assert.equal(third.nodes.b.props.text, "B3");
+  assert.deepStrictEqual(first, snapshot);
+  // The in-place apply refuses a document history returned: it may share its records.
+  assert.throws(() => applyCommittedTransaction(third, { operations: [{ type: "set-props", nodeId: "a", set: { text: "x" } }] }), /shared value/u);
+  assert.equal(third.nodes.a.props.text, "A3");
+});
+
+// From the review of the copy on write: a set-props whose nodeId was not a string (5) found
+// node "5" by conversion, past the copy and the validation of the records set, and changed a
+// record the input shares, even in a transaction then refused. nodeId must be a string.
+test("a props edit's node is named by a string, and a refused transaction changes nothing (#252)", () => {
+  const nodes = [{ id: "root", type: "frame", children: ["5"], props: {} }, { id: "5", type: "text", parentId: "root", props: { text: "five" } }];
+  const document = createHistoryState(createDocument({ id: "ids", nodes })).document;
+  const snapshot = structuredClone(document);
+  for (const nodeId of [5, ["5"]]) {
+    assert.throws(() => applyTransaction(document, { id: "t", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId, set: { text: "CHANGED" } }] }), /set-props\.nodeId/u);
+  }
+  // One that applies, then one that does not: the transaction is refused, and nothing changed.
+  assert.throws(() => applyTransaction(document, { id: "t", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: "5", set: { text: "LEAK" } }, { type: "set-props", nodeId: "missing", set: { text: "x" } }] }), /Unknown node id missing/u);
+  assert.deepStrictEqual(document, snapshot);
+});
+
+test("a journal written before props edits needed a string node id still replays as committed (#252)", () => {
+  // From the second review: a set-props journaled by an earlier Ninerr with nodeId 5 (node
+  // "5", as getNode converted it) must still replay, or the project would not open.
+  const document = createDocument({ id: "old", nodes: [{ id: "root", type: "frame", children: ["5"], props: {} }, { id: "5", type: "text", parentId: "root", props: { text: "five" } }] });
+  const replayed = replayTransactions(document, [{ id: "old-1", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: 5, set: { text: "FIVE" } }] }]);
+  assert.equal(replayed.nodes["5"].props.text, "FIVE");
+  // A live commit still needs a string.
+  assert.throws(() => applyTransaction(document, { id: "new-1", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: 5, set: { text: "x" } }] }), /set-props\.nodeId/u);
 });

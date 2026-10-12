@@ -196,6 +196,9 @@ function applyRestoreSubtree(document, operation) {
 }
 
 function applySetProps(document, operation) {
+  // A string, as move-node and remove-node require: getNode would find node "5" for 5, which
+  // the copy and the validation of the records a transaction sets would not see (#252).
+  assertNonEmptyString(operation.nodeId, "set-props.nodeId");
   const node = getNode(document, operation.nodeId);
   const set = operation.set ?? {};
   const unset = operation.unset ?? [];
@@ -327,7 +330,8 @@ export function getAffectedNodeIds(transaction) {
  * validating the input, for a caller whose document was itself returned validated by this
  * module and has never been shared or changed since (a store's private state, #252), with its
  * nodes in canonical order. The output is validated: whole, or for a transaction that only
- * sets props, the records it touched (the rest is as validated). A document that
+ * sets props, the records it touched (the rest is as validated); such an output shares the
+ * records it did not set with the input, which must never be changed afterwards. A document that
  * was changed after validation must not be passed with it: the copy is made for validated
  * data, and would quietly turn a Map or a Date into {} rather than refuse it.
  */
@@ -348,7 +352,25 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
 
   // The input was validated above, so a private copy suffices; cloneDocument and
   // normalizeDocument would validate and copy it twice more.
-  const working = cloneValidated(document);
+  // Setting props, the common edit (typing, a value), changes neither the node keys nor the
+  // structure: on a validated, ordered input the order stands and only the touched records
+  // can be wrong. Anything else is copied whole, sorted and validated whole (#252).
+  const propsOnly = ours && normalizedTransaction.operations.every((operation) => operation.type === "set-props");
+  let working;
+  if (propsOnly) {
+    // Copy on write: the records it sets are copied, every other record (and the roots and
+    // metadata, which setting props does not touch) is shared with `document`. Documents this
+    // module returns are values, never changed in place, so sharing is safe.
+    working = { ...document, nodes: { ...document.nodes } };
+    for (const operation of normalizedTransaction.operations) {
+      const id = operation.nodeId;
+      if (typeof id === "string" && Object.hasOwn(document.nodes, id) && working.nodes[id] === document.nodes[id]) {
+        working.nodes[id] = cloneValidated(document.nodes[id]);
+      }
+    }
+  } else {
+    working = cloneValidated(document);
+  }
   const inverseOperations = [];
   const affectedNodeIds = new Set();
   for (const operation of normalizedTransaction.operations) {
@@ -357,11 +379,8 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
     inverseOperations.unshift(inverse);
   }
   working.revision = document.revision + 1;
-  // Setting props, the common edit (typing, a value), changes neither the node keys nor the
-  // structure: on a validated, ordered input the order stands and only the touched records
-  // can be wrong. Anything else is sorted and validated whole (#252).
   let normalizedDocument;
-  if (ours && normalizedTransaction.operations.every((operation) => operation.type === "set-props")) {
+  if (propsOnly) {
     normalizedDocument = working;
     validateNodes(normalizedDocument, affectedNodeIds);
   } else {
@@ -398,6 +417,16 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
  * two transactions is not caught; the result is fully validated. A transaction that does
  * not apply throws a TransactionError whose `index` names it.
  */
+/**
+ * An operation as it was applied when it was journaled. Before #252 a set-props named its node
+ * by any value, found as getNode converts it (5 names node "5"); a commit now needs a string,
+ * but a journal written before still replays as it was committed.
+ */
+function asJournaled(operation) {
+  if (operation?.type !== "set-props" || typeof operation.nodeId === "string" || typeof operation.nodeId === "symbol") return operation;
+  return { ...operation, nodeId: String(operation.nodeId) };
+}
+
 export function replayTransactions(document, transactions) {
   validateDocument(document);
   const working = cloneValidated(document);
@@ -407,7 +436,7 @@ export function replayTransactions(document, transactions) {
       if (normalized.baseRevision !== null && normalized.baseRevision !== working.revision) {
         throw new TransactionError(`Stale transaction ${normalized.id}: expected revision ${normalized.baseRevision}, current revision ${working.revision}`);
       }
-      for (const operation of normalized.operations) applyOperation(working, operation);
+      for (const operation of normalized.operations) applyOperation(working, asJournaled(operation));
     } catch (error) {
       const failure = new TransactionError(error instanceof Error ? error.message : String(error));
       failure.index = index;
@@ -432,8 +461,11 @@ export function applyCommittedTransaction(document, transaction) {
   if (!Array.isArray(transaction?.operations) || transaction.operations.length === 0) {
     throw new TransactionError("transaction.operations must be a non-empty array");
   }
-  // Changed in place: whatever it was, it is no longer a document this module validated.
-  PRODUCED.delete(document);
+  // It changes `document` in place: a document this module returned may share its records
+  // with others (copy on write), so it must never be changed this way (#252).
+  if (PRODUCED.has(document)) {
+    throw new TransactionError("a document history returned is a shared value; apply a transaction to it with applyTransaction");
+  }
   const affectedNodeIds = new Set();
   for (const operation of transaction.operations) {
     collectAffectedNodeIds(document, operation, affectedNodeIds);
