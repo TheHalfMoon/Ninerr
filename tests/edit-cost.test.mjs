@@ -4,8 +4,8 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DocumentInvariantError, cloneDocument, cloneValidated, createDocument } from "../packages/document-model/src/index.mjs";
-import { applyTransaction } from "../packages/history/src/index.mjs";
+import { DocumentInvariantError, cloneDocument, cloneValidated, createDocument, validateDocument } from "../packages/document-model/src/index.mjs";
+import { applyTransaction, createHistoryState } from "../packages/history/src/index.mjs";
 import { createProject, openProject } from "../packages/persistence/src/index.ts";
 import { createPrng } from "./support/prng.mjs";
 
@@ -120,4 +120,67 @@ test("a store commits, reopens and refuses exactly as before with its own input 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// #252, the common edit: setting props (typing, a value) changes neither the node keys nor
+// the structure, so on a document this module produced only the touched records are checked
+// and the order stands. These hold that path to the full one, and to its cost.
+test("setting props on a document history produced ends, or is refused, exactly as the full path (#252)", () => {
+  const random = createPrng(2520);
+  // Nested near the document's depth limit, where a node's own depth is counted from its place
+  // in the document (review of #252).
+  const nest = (levels) => JSON.parse("[".repeat(levels) + "]".repeat(levels));
+  const values = [1, "x", null, true, [1, 2], { a: { b: [3] } }, Number.NaN, undefined, Number.POSITIVE_INFINITY, new Map(), [1, , 3], { deep: nest(80) }, nest(251), nest(252), nest(253), nest(254), nest(255)];
+  for (let round = 0; round < 300; round += 1) {
+    const nodes = [{ id: "root", type: "frame", children: [], props: { name: "Root" } }];
+    for (let index = 0; index < 1 + random.int(6); index += 1) {
+      nodes[0].children.push(`n${index}`);
+      nodes.push({ id: `n${index}`, type: "element", parentId: "root", props: { text: `t${index}`, style: { color: "red" } } });
+    }
+    const produced = createHistoryState(createDocument({ id: `doc-${round}`, nodes })).document;
+    const plain = structuredClone(produced); // not produced by history: the full path
+    const target = random.pick([...nodes.map((node) => node.id), "missing"]);
+    const set = { [random.pick(["text", "style", "name", "__proto__", "z"])]: random.pick(values) };
+    const unset = random.int(3) === 0 ? [random.pick(["text", "style", "nope"])] : [];
+    const transaction = { id: `tx-${round}`, actor: "u", baseRevision: produced.revision, operations: [{ type: "set-props", nodeId: target, set, unset }] };
+    const attempt = (document) => {
+      try {
+        return { document: applyTransaction(document, transaction).document };
+      } catch (error) {
+        return { error: `${error.name}: ${error.message}` };
+      }
+    };
+    const fast = attempt(produced);
+    const full = attempt(plain);
+    assert.deepStrictEqual(fast, full, `round ${round}`);
+    if (fast.document) assert.equal(JSON.stringify(fast.document), JSON.stringify(full.document), `round ${round}: the same order`);
+  }
+});
+
+test("setting props on a large produced document costs less than validating it once (#252)", () => {
+  const nodes = [{ id: "root", type: "frame", children: [], props: { name: "Root" } }];
+  for (let index = 0; index < 49_999; index += 1) {
+    nodes[0].children.push(`n${index}`);
+    nodes.push({ id: `n${index}`, type: "text", parentId: "root", props: { tag: "p", text: `Text ${index}`, style: { padding: "4px" } } });
+  }
+  let document = createHistoryState(createDocument({ id: "large", nodes })).document;
+  const time = (task) => {
+    const started = performance.now();
+    task();
+    return performance.now() - started;
+  };
+  // Warm both paths, then take the best of five of each: the comparison is between two costs
+  // on the same machine at the same time, so a slow runner slows both.
+  const validations = [];
+  const edits = [];
+  for (let round = 0; round < 6; round += 1) {
+    validations.push(time(() => validateDocument(document)));
+    edits.push(time(() => {
+      document = applyTransaction(document, { id: `tx-${round}`, actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: "n123", set: { text: `Edit ${round}` } }] }).document;
+    }));
+  }
+  const validation = Math.min(...validations.slice(1));
+  const edit = Math.min(...edits.slice(1));
+  assert.equal(document.nodes.n123.props.text, "Edit 5");
+  assert.ok(edit < validation, `an edit of one prop on 50,000 nodes took ${edit.toFixed(1)} ms; one validation ${validation.toFixed(1)} ms`);
 });

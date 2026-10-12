@@ -8,8 +8,14 @@ import {
   isDescendant,
   jsonDataProblem,
   validateDocument,
+  validateNodes,
   withSortedNodes,
 } from "../../document-model/src/index.mjs";
+
+// The documents this module returned: validated, nodes in canonical order, and never changed
+// in place by Ninerr, which treats a document as a value (#252). Such an input is not
+// validated again.
+const PRODUCED = new WeakSet();
 
 export class TransactionError extends Error {
   constructor(message) {
@@ -319,13 +325,16 @@ export function getAffectedNodeIds(transaction) {
 /**
  * Apply `transaction` to a copy of `document`, validating both. `ownValidated` skips
  * validating the input, for a caller whose document was itself returned validated by this
- * module and has never been shared or changed since (a store's private state, #252). The
- * output is still fully validated, so a bad transaction is refused as before. A document that
+ * module and has never been shared or changed since (a store's private state, #252), with its
+ * nodes in canonical order. The output is validated: whole, or for a transaction that only
+ * sets props, the records it touched (the rest is as validated). A document that
  * was changed after validation must not be passed with it: the copy is made for validated
  * data, and would quietly turn a Map or a Date into {} rather than refuse it.
  */
 export function applyTransaction(document, transaction, { enforceBaseRevision = true, ownValidated = false } = {}) {
-  if (!ownValidated) validateDocument(document);
+  // A document this module returned was validated, with its nodes in canonical order (#252).
+  const ours = ownValidated || PRODUCED.has(document);
+  if (!ours) validateDocument(document);
   const normalizedTransaction = createTransaction(transaction);
   if (
     enforceBaseRevision
@@ -348,8 +357,18 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
     inverseOperations.unshift(inverse);
   }
   working.revision = document.revision + 1;
-  const normalizedDocument = withSortedNodes(working);
-  validateDocument(normalizedDocument);
+  // Setting props, the common edit (typing, a value), changes neither the node keys nor the
+  // structure: on a validated, ordered input the order stands and only the touched records
+  // can be wrong. Anything else is sorted and validated whole (#252).
+  let normalizedDocument;
+  if (ours && normalizedTransaction.operations.every((operation) => operation.type === "set-props")) {
+    normalizedDocument = working;
+    validateNodes(normalizedDocument, affectedNodeIds);
+  } else {
+    normalizedDocument = withSortedNodes(working);
+    validateDocument(normalizedDocument);
+  }
+  PRODUCED.add(normalizedDocument);
 
   const inverse = createTransaction({
     id: `undo:${normalizedTransaction.id}`,
@@ -413,6 +432,8 @@ export function applyCommittedTransaction(document, transaction) {
   if (!Array.isArray(transaction?.operations) || transaction.operations.length === 0) {
     throw new TransactionError("transaction.operations must be a non-empty array");
   }
+  // Changed in place: whatever it was, it is no longer a document this module validated.
+  PRODUCED.delete(document);
   const affectedNodeIds = new Set();
   for (const operation of transaction.operations) {
     collectAffectedNodeIds(document, operation, affectedNodeIds);
@@ -424,8 +445,10 @@ export function applyCommittedTransaction(document, transaction) {
 
 export function createHistoryState(document) {
   validateDocument(document);
+  const copy = withSortedNodes(cloneDocument(document));
+  PRODUCED.add(copy);
   return {
-    document: cloneDocument(document),
+    document: copy,
     past: [],
     future: [],
   };
