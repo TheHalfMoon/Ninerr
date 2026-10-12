@@ -8,8 +8,14 @@ import {
   isDescendant,
   jsonDataProblem,
   validateDocument,
+  validateNodes,
   withSortedNodes,
 } from "../../document-model/src/index.mjs";
+
+// The documents this module returned: validated, nodes in canonical order, and never changed
+// in place by Ninerr, which treats a document as a value (#252). Such an input is not
+// validated again.
+const PRODUCED = new WeakSet();
 
 export class TransactionError extends Error {
   constructor(message) {
@@ -325,7 +331,9 @@ export function getAffectedNodeIds(transaction) {
  * data, and would quietly turn a Map or a Date into {} rather than refuse it.
  */
 export function applyTransaction(document, transaction, { enforceBaseRevision = true, ownValidated = false } = {}) {
-  if (!ownValidated) validateDocument(document);
+  // A document this module returned was validated, with its nodes in canonical order (#252).
+  const ours = ownValidated || PRODUCED.has(document);
+  if (!ours) validateDocument(document);
   const normalizedTransaction = createTransaction(transaction);
   if (
     enforceBaseRevision
@@ -348,8 +356,18 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
     inverseOperations.unshift(inverse);
   }
   working.revision = document.revision + 1;
-  const normalizedDocument = withSortedNodes(working);
-  validateDocument(normalizedDocument);
+  // Setting props, the common edit (typing, a value), changes neither the node keys nor the
+  // structure: on a validated, ordered input the order stands and only the touched records
+  // can be wrong. Anything else is sorted and validated whole (#252).
+  let normalizedDocument;
+  if (ours && normalizedTransaction.operations.every((operation) => operation.type === "set-props")) {
+    normalizedDocument = working;
+    validateNodes(normalizedDocument, affectedNodeIds);
+  } else {
+    normalizedDocument = withSortedNodes(working);
+    validateDocument(normalizedDocument);
+  }
+  PRODUCED.add(normalizedDocument);
 
   const inverse = createTransaction({
     id: `undo:${normalizedTransaction.id}`,
@@ -424,8 +442,10 @@ export function applyCommittedTransaction(document, transaction) {
 
 export function createHistoryState(document) {
   validateDocument(document);
+  const copy = withSortedNodes(cloneDocument(document));
+  PRODUCED.add(copy);
   return {
-    document: cloneDocument(document),
+    document: copy,
     past: [],
     future: [],
   };

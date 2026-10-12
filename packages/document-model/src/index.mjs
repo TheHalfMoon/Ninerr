@@ -428,6 +428,50 @@ export function isDescendant(document, ancestorId, candidateId) {
   return false;
 }
 
+const shownId = (id) => {
+  const text = String(id);
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+};
+
+/** One node record's own checks, as validateDocument makes them for every node. */
+function assertNodeRecord(nodes, id, node) {
+  const lookup = (key) => (typeof key === "string" && Object.hasOwn(nodes, key) ? nodes[key] : undefined);
+  assertNonEmptyString(id, "document node key");
+  assertPlainObject(node, `node ${shownId(id)}`);
+  assertKnownFields(node, NODE_FIELD_SET, `node ${shownId(id)}`);
+  if (node.id !== id) {
+    throw new DocumentInvariantError(`Node record key ${shownId(id)} does not match node.id ${shownId(node.id)}`);
+  }
+  if (!NODE_TYPE_SET.has(node.type)) {
+    throw new DocumentInvariantError(`Node ${shownId(id)} has unsupported type ${shownId(node.type)}`);
+  }
+  if (node.parentId !== null && !lookup(node.parentId)) {
+    throw new DocumentInvariantError(`Node ${shownId(id)} references missing parent ${shownId(node.parentId)}`);
+  }
+  assertUniqueStrings(node.children, `node ${shownId(id)}.children`);
+  assertPlainObject(node.props, `node ${shownId(id)}.props`);
+  assertPlainObject(node.metadata, `node ${shownId(id)}.metadata`);
+}
+
+/**
+ * Validate only the records of `ids` in `document`, and its revision: for a document whose
+ * every other part is unchanged from one that was fully validated, and whose change left its
+ * structure as it was (its node keys, parents, children and roots), as setting props does
+ * (#252). Anything else must go through validateDocument.
+ */
+export function validateNodes(document, ids) {
+  if (!Number.isSafeInteger(document.revision) || document.revision < 0) {
+    throw new DocumentInvariantError("document.revision must be a non-negative safe integer");
+  }
+  for (const id of ids) {
+    if (!Object.hasOwn(document.nodes, id)) throw new DocumentInvariantError(`Unknown node id ${shownId(id)}`);
+    const node = document.nodes[id];
+    assertNodeRecord(document.nodes, id, node);
+    const problem = jsonDataProblem(node);
+    if (problem !== null) throw new DocumentInvariantError(`document node ${shownId(id)} ${problem}`);
+  }
+}
+
 export function validateDocument(document) {
   assertPlainObject(document, "document");
   assertKnownFields(document, DOCUMENT_FIELD_SET, "document");
@@ -467,21 +511,7 @@ export function validateDocument(document) {
   const rootSet = new Set(document.rootIds);
   const referenced = new Set();
   for (const [id, node] of Object.entries(nodes)) {
-    assertNonEmptyString(id, "document node key");
-    assertPlainObject(node, `node ${shown(id)}`);
-    assertKnownFields(node, NODE_FIELD_SET, `node ${shown(id)}`);
-    if (node.id !== id) {
-      throw new DocumentInvariantError(`Node record key ${shown(id)} does not match node.id ${shown(node.id)}`);
-    }
-    if (!NODE_TYPE_SET.has(node.type)) {
-      throw new DocumentInvariantError(`Node ${shown(id)} has unsupported type ${shown(node.type)}`);
-    }
-    if (node.parentId !== null && !lookup(node.parentId)) {
-      throw new DocumentInvariantError(`Node ${shown(id)} references missing parent ${shown(node.parentId)}`);
-    }
-    assertUniqueStrings(node.children, `node ${shown(id)}.children`);
-    assertPlainObject(node.props, `node ${shown(id)}.props`);
-    assertPlainObject(node.metadata, `node ${shown(id)}.metadata`);
+    assertNodeRecord(nodes, id, node);
 
     if (node.parentId === null && !rootSet.has(id)) {
       throw new DocumentInvariantError(`Root node ${shown(id)} is missing from document.rootIds`);
