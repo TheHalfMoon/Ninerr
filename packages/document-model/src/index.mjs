@@ -139,6 +139,30 @@ function sortNodeRecord(nodes) {
   );
 }
 
+/**
+ * withSortedNodes for a document whose nodes are in canonical order except for the keys in
+ * `added` (appended, or anywhere): those are merged into place in one pass, where sorting
+ * every key costs n log n (#252). Any key of `added` may already be in place; one no longer in
+ * the document is ignored. The result is the order sortNodeRecord gives.
+ */
+export function withAddedNodesSorted(document, added) {
+  const nodes = document.nodes;
+  const fresh = [...new Set(added)].filter((key) => typeof key === "string" && Object.hasOwn(nodes, key)).sort(compareCodeUnits);
+  const freshSet = new Set(fresh);
+  const entries = [];
+  let next = 0;
+  for (const key of Object.keys(nodes)) {
+    if (freshSet.has(key)) continue;
+    while (next < fresh.length && compareCodeUnits(fresh[next], key) < 0) {
+      entries.push([fresh[next], nodes[fresh[next]]]);
+      next += 1;
+    }
+    entries.push([key, nodes[key]]);
+  }
+  for (; next < fresh.length; next += 1) entries.push([fresh[next], nodes[fresh[next]]]);
+  return { ...document, nodes: Object.fromEntries(entries) };
+}
+
 const MAX_SERIALIZE_DEPTH = 256;
 
 function canonicalValue(value, depth) {
@@ -472,6 +496,96 @@ export function validateNodes(document, ids) {
     const problem = jsonDataProblem(node, 2);
     if (problem !== null) throw new DocumentInvariantError(`document ${problem}`);
   }
+}
+
+/**
+ * Whether `document` is certainly valid, checking only the records of `ids` and what links to
+ * them, for a document changed from a fully validated one only at those records (and records
+ * removed whole). `moved` names nodes whose subtrees changed place. It answers only "certainly
+ * valid" (true) or "not sure" (false); `added` says whether it added nodes: a caller that gets false must validate the document
+ * whole, which then decides, with its own message (#252). Ids are own string keys.
+ */
+export function changedPartIsValid(document, ids, moved = [], { added = true } = {}) {
+  if (!Number.isSafeInteger(document.revision) || document.revision < 0) return false;
+  const nodes = document.nodes;
+  const own = (id) => (typeof id === "string" && Object.hasOwn(nodes, id) ? nodes[id] : undefined);
+  // Only adding nodes can pass the node limit.
+  if (added && Object.keys(nodes).length > DOCUMENT_LIMITS.maxNodes) return false;
+  try {
+    assertUniqueStrings(document.rootIds, "document.rootIds");
+  } catch {
+    return false;
+  }
+  for (const rootId of document.rootIds) {
+    const root = own(rootId);
+    if (!root || root.parentId !== null) return false;
+  }
+  const rootSet = new Set(document.rootIds);
+  // Each parent's children as a set, built once: a parent with thousands of children is asked
+  // about many of them.
+  const childSets = new Map();
+  const lists = (parent, childId) => {
+    let set = childSets.get(parent);
+    if (set === undefined) {
+      set = new Set(parent.children);
+      childSets.set(parent, set);
+    }
+    return set.has(childId);
+  };
+  // The depth below which a walk need not count exactly: near the limit, the whole check decides.
+  const safeDepth = DOCUMENT_LIMITS.maxTreeDepth - 2;
+  // Its depth, walking up to a root through parents that list it; infinite if it does not get
+  // there within safeDepth (a cycle, a broken link, or too deep to call without the whole check).
+  const depthOf = (id) => {
+    let node = own(id);
+    if (node === undefined) return Number.POSITIVE_INFINITY;
+    let depth = 0;
+    while (node.parentId !== null) {
+      const parent = own(node.parentId);
+      if (!parent || !lists(parent, node.id)) return Number.POSITIVE_INFINITY;
+      node = parent;
+      depth += 1;
+      if (depth > safeDepth) return Number.POSITIVE_INFINITY;
+    }
+    return rootSet.has(node.id) ? depth : Number.POSITIVE_INFINITY;
+  };
+  for (const id of ids) {
+    const node = own(id);
+    if (node === undefined) {
+      if (typeof id !== "string") return false;
+      continue; // removed whole
+    }
+    try {
+      assertNodeRecord(nodes, id, node);
+    } catch {
+      return false;
+    }
+    if (jsonDataProblem(node, 2) !== null) return false;
+    for (const childId of node.children) {
+      const child = own(childId);
+      if (!child || child.parentId !== id) return false;
+    }
+    if (node.parentId === null) {
+      if (!rootSet.has(id)) return false;
+    } else {
+      const parent = own(node.parentId);
+      if (!parent || !lists(parent, id) || rootSet.has(id)) return false;
+    }
+    if (depthOf(id) === Number.POSITIVE_INFINITY) return false;
+  }
+  // A moved subtree's nodes keep their records but not their depth.
+  for (const id of moved) {
+    if (own(id) === undefined) continue; // moved, then removed
+    const start = depthOf(id);
+    if (start === Number.POSITIVE_INFINITY) return false;
+    const stack = [[id, start]];
+    while (stack.length > 0) {
+      const [current, depth] = stack.pop();
+      if (depth > safeDepth) return false;
+      for (const childId of own(current)?.children ?? []) stack.push([childId, depth + 1]);
+    }
+  }
+  return true;
 }
 
 export function validateDocument(document) {
