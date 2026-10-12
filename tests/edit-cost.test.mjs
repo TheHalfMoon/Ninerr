@@ -58,17 +58,17 @@ test("for tree-shaped validated data, the copy equals structuredClone's, includi
 test("random tree-shaped documents copy as structuredClone copies them (#252)", () => {
   const random = createPrng(252);
   const value = (depth) => {
-    const pick = random.int(depth > 3 ? 4 : 6);
+    const pick = random.int(0, depth > 3 ? 3 : 5);
     if (pick === 0) return null;
-    if (pick === 1) return random.int(2) === 0;
-    if (pick === 2) return random.int(1000) - 500 + (random.int(2) === 0 ? 0.5 : 0);
-    if (pick === 3) return `s${random.int(100)}`;
-    if (pick === 4) return Array.from({ length: random.int(4) }, () => value(depth + 1));
-    return Object.fromEntries(Array.from({ length: random.int(4) }, () => [random.pick(["a", "b", "__proto__", "toString", "z", "1", "0"]), value(depth + 1)]));
+    if (pick === 1) return random.int(0, 1) === 0;
+    if (pick === 2) return random.int(0, 999) - 500 + (random.int(0, 1) === 0 ? 0.5 : 0);
+    if (pick === 3) return `s${random.int(0, 99)}`;
+    if (pick === 4) return Array.from({ length: random.int(0, 3) }, () => value(depth + 1));
+    return Object.fromEntries(Array.from({ length: random.int(0, 3) }, () => [random.pick(["a", "b", "__proto__", "toString", "z", "1", "0"]), value(depth + 1)]));
   };
   for (let round = 0; round < 200; round += 1) {
     const nodes = [{ id: "root", type: "frame", children: [], props: { data: value(0) } }];
-    for (let index = 0; index < 1 + random.int(5); index += 1) {
+    for (let index = 0; index < 1 + random.int(0, 4); index += 1) {
       nodes[0].children.push(`n${index}`);
       nodes.push({ id: `n${index}`, type: "element", parentId: "root", props: { data: value(0) }, metadata: { m: value(0) } });
     }
@@ -133,7 +133,7 @@ test("setting props on a document history produced ends, or is refused, exactly 
   const values = [1, "x", null, true, [1, 2], { a: { b: [3] } }, Number.NaN, undefined, Number.POSITIVE_INFINITY, new Map(), [1, , 3], { deep: nest(80) }, nest(251), nest(252), nest(253), nest(254), nest(255)];
   for (let round = 0; round < 300; round += 1) {
     const nodes = [{ id: "root", type: "frame", children: [], props: { name: "Root" } }];
-    for (let index = 0; index < 1 + random.int(6); index += 1) {
+    for (let index = 0; index < 1 + random.int(0, 5); index += 1) {
       nodes[0].children.push(`n${index}`);
       nodes.push({ id: `n${index}`, type: "element", parentId: "root", props: { text: `t${index}`, style: { color: "red" } } });
     }
@@ -141,7 +141,7 @@ test("setting props on a document history produced ends, or is refused, exactly 
     const plain = structuredClone(produced); // not produced by history: the full path
     const target = random.pick([...nodes.map((node) => node.id), "missing"]);
     const set = { [random.pick(["text", "style", "name", "__proto__", "z"])]: random.pick(values) };
-    const unset = random.int(3) === 0 ? [random.pick(["text", "style", "nope"])] : [];
+    const unset = random.int(0, 2) === 0 ? [random.pick(["text", "style", "nope"])] : [];
     const transaction = { id: `tx-${round}`, actor: "u", baseRevision: produced.revision, operations: [{ type: "set-props", nodeId: target, set, unset }] };
     const attempt = (document) => {
       try {
@@ -233,4 +233,130 @@ test("a journal written before props edits needed a string node id still replays
   assert.equal(replayed.nodes["5"].props.text, "FIVE");
   // A live commit still needs a string.
   assert.throws(() => applyTransaction(document, { id: "new-1", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: 5, set: { text: "x" } }] }), /set-props\.nodeId/u);
+});
+
+// #252, structural changes: on a document history produced, a transaction that inserts,
+// removes, restores or moves is copied on write, checked in the part it changed (or whole when
+// that check is not sure) and sorted by merging the keys it added. These hold it to the full
+// path over random transactions, valid and not, chained, and the inputs unchanged throughout.
+test("structural changes on a document history produced end, or are refused, exactly as the full path (#252)", () => {
+  const random = createPrng(25202);
+  const nodes = [{ id: "root", type: "frame", children: ["a", "b", "5"], props: {} }, { id: "a", type: "frame", parentId: "root", children: ["a1"], props: {} }, { id: "a1", type: "text", parentId: "a", props: { text: "x" } }, { id: "b", type: "frame", parentId: "root", props: {} }, { id: "5", type: "element", parentId: "root", props: {} }];
+  let produced = createHistoryState(createDocument({ id: "struct", nodes })).document;
+  let counter = 0;
+  const ghost = { type: "restore-subtree", rootId: "g", parentId: "b", nodes: [{ id: "g", type: "frame", children: [], props: {} }, { id: "ghost", type: "element", parentId: "b", props: {} }] };
+  const operation = () => {
+    const ids = Object.keys(produced.nodes);
+    const pick = () => random.pick([...ids, "missing", "root"]);
+    switch (random.int(0, 8)) {
+      case 0: return { type: "insert-node", node: { id: random.int(0, 4) === 0 ? random.pick(ids) : `n${counter++}`, type: "element", props: { text: `t${counter}` } }, parentId: random.int(0, 5) === 0 ? null : random.int(0, 7) === 0 ? 5 : pick(), index: random.int(0, 3) };
+      case 1: return { type: "remove-node", nodeId: random.pick([...ids, "missing"]) };
+      case 2: return { type: "move-node", nodeId: random.pick(ids), parentId: random.int(0, 4) === 0 ? null : pick(), index: random.int(0, 2) };
+      case 3: return { type: "set-props", nodeId: random.pick([...ids, "missing"]), set: { text: `s${counter++}` } };
+      case 4: return { type: "restore-subtree", rootId: `r${counter}`, parentId: random.int(0, 3) === 0 ? null : pick(), nodes: [{ id: `r${counter}`, type: "frame", children: [`r${counter}c`], props: {} }, { id: `r${counter++}c`, type: "text", parentId: `r${counter - 1}`, props: { text: "c" } }] };
+      case 5: return ghost;
+      case 6: return { type: "insert-node", node: { id: `__proto__`, type: "element", props: {} }, parentId: "root" };
+      case 7: return { type: "move-node", nodeId: "root", parentId: random.pick(ids) };
+      default: return { type: "insert-node", node: { id: `${counter++}`, type: "element", props: {} }, parentId: "b" };
+    }
+  };
+  let applied = 0;
+  for (let round = 0; round < 600; round += 1) {
+    const operations = Array.from({ length: 1 + random.int(0, 2) }, operation);
+    const transaction = { id: `tx-${round}`, actor: "u", baseRevision: produced.revision, operations };
+    const snapshot = structuredClone(produced);
+    const attempt = (document) => {
+      try {
+        return { result: applyTransaction(document, transaction) };
+      } catch (error) {
+        return { error: `${error.name}: ${error.message}` };
+      }
+    };
+    const fast = attempt(produced);
+    const full = attempt(structuredClone(produced));
+    assert.deepStrictEqual(produced, snapshot, `round ${round}: the input is unchanged`);
+    assert.equal(fast.error, full.error, `round ${round}: ${JSON.stringify(operations).slice(0, 300)}`);
+    if (fast.result) {
+      assert.equal(JSON.stringify(fast.result.document), JSON.stringify(full.result.document), `round ${round}: the same document, in the same order`);
+      assert.equal(JSON.stringify(fast.result.inverse.operations), JSON.stringify(full.result.inverse.operations), `round ${round}: the same inverse`);
+      assert.deepStrictEqual(fast.result.affectedNodeIds, full.result.affectedNodeIds);
+      produced = fast.result.document;
+      applied += 1;
+    }
+  }
+  assert.ok(applied > 60, `${applied} transactions applied`);
+});
+
+// From the review of the structural path: cases the random rounds do not reach, each held to
+// the full path (the same document in the same key order, or the same refusal).
+test("structural changes at the limits end, or are refused, exactly as the full path (#252)", () => {
+  const same = (document, operations, label) => {
+    const transaction = { id: `tx-${label}`, actor: "u", baseRevision: document.revision, operations };
+    const attempt = (input) => {
+      try {
+        return { document: JSON.stringify(applyTransaction(input, transaction).document) };
+      } catch (error) {
+        return { error: `${error.name}: ${error.message}` };
+      }
+    };
+    const fast = attempt(document);
+    assert.deepStrictEqual(fast, attempt(structuredClone(document)), label);
+    return fast;
+  };
+  const produced = (nodes) => createHistoryState(createDocument({ id: "limits", nodes })).document;
+  // Integer-like keys enumerate first: a new key merges among the others all the same.
+  const keys = produced([{ id: "root", type: "frame", children: ["9", "1a"], props: {} }, { id: "9", type: "element", parentId: "root", props: {} }, { id: "1a", type: "element", parentId: "root", props: {} }]);
+  same(keys, [{ type: "insert-node", node: { id: "2a", type: "element", props: {} }, parentId: "root" }], "an id among digit-led ones");
+  // A restored snapshot whose nodes list each other: unreachable.
+  same(keys, [{ type: "restore-subtree", rootId: "x", parentId: "root", nodes: [{ id: "x", type: "frame", children: [], props: {} }, { id: "y", type: "frame", parentId: "z", children: ["z"], props: {} }, { id: "z", type: "frame", parentId: "y", children: ["y"], props: {} }] }], "a cycle in a snapshot");
+  // Around the depth limit: a chain, an insert at its end, a move of a subtree, a restored chain.
+  for (const length of [1020, 1022, 1023, 1024]) {
+    const chain = [{ id: "c0", type: "frame", children: ["c1"], props: {} }];
+    for (let index = 1; index < length; index += 1) chain.push({ id: `c${index}`, type: "frame", parentId: `c${index - 1}`, children: index + 1 < length ? [`c${index + 1}`] : [], props: {} });
+    chain.push({ id: "side", type: "frame", children: ["s1"], props: {} }, { id: "s1", type: "frame", parentId: "side", children: ["s2"], props: {} }, { id: "s2", type: "frame", parentId: "s1", children: [], props: {} });
+    let document;
+    try {
+      document = produced(chain);
+    } catch {
+      continue; // the chain itself is past the limit
+    }
+    same(document, [{ type: "insert-node", node: { id: "tip", type: "element", props: {} }, parentId: `c${length - 1}` }], `insert at depth ${length}`);
+    same(document, [{ type: "move-node", nodeId: "side", parentId: `c${length - 3}`, index: 0 }], `move to depth ${length}`);
+    const snapshot = [{ id: "r0", type: "frame", children: ["r1"], props: {} }];
+    for (let index = 1; index < length; index += 1) snapshot.push({ id: `r${index}`, type: "frame", parentId: `r${index - 1}`, children: index + 1 < length ? [`r${index + 1}`] : [], props: {} });
+    same(document, [{ type: "restore-subtree", rootId: "r0", parentId: "side", nodes: snapshot }], `restore a chain of ${length}`);
+  }
+  // The node limit: a document at it takes no more.
+  const full = [{ id: "root", type: "frame", children: [], props: {} }];
+  for (let index = 1; index < 100_000; index += 1) {
+    full[0].children.push(`k${index}`);
+    full.push({ id: `k${index}`, type: "element", parentId: "root", props: {} });
+  }
+  const atLimit = produced(full);
+  same(atLimit, [{ type: "insert-node", node: { id: "one-more", type: "element", props: {} }, parentId: "root" }], "past the node limit");
+  same(atLimit, [{ type: "remove-node", nodeId: "k1" }, { type: "insert-node", node: { id: "one-more", type: "element", props: {} }, parentId: "root" }], "removed, then one added");
+});
+
+test("undoing the removal of a large, deep subtree costs no more than checking it whole (#252)", () => {
+  // A chain 1,000 deep with 15 leaves on each level: an undo restores 16,000 nodes at once,
+  // deep enough that walking each up the whole way costs several times the whole check.
+  const nodes = [{ id: "top", type: "frame", children: ["d0"], props: {} }];
+  for (let level = 0; level < 1000; level += 1) {
+    const id = `d${level}`;
+    const children = Array.from({ length: 15 }, (_, leaf) => `${id}-l${leaf}`);
+    if (level + 1 < 1000) children.push(`d${level + 1}`);
+    nodes.push({ id, type: "frame", parentId: level === 0 ? "top" : `d${level - 1}`, children, props: {} });
+    for (let leaf = 0; leaf < 15; leaf += 1) nodes.push({ id: `${id}-l${leaf}`, type: "text", parentId: id, props: { text: "x" } });
+  }
+  const document = createHistoryState(createDocument({ id: "deep", nodes })).document;
+  const removed = applyTransaction(document, { id: "rm", actor: "u", baseRevision: document.revision, operations: [{ type: "remove-node", nodeId: "d0" }] });
+  const undo = { ...removed.inverse, baseRevision: removed.document.revision };
+  const time = (task) => {
+    const started = performance.now();
+    task();
+    return performance.now() - started;
+  };
+  const fast = Math.min(...[0, 1, 2].map(() => time(() => applyTransaction(removed.document, undo))));
+  const full = Math.min(...[0, 1, 2].map(() => time(() => applyTransaction(structuredClone(removed.document), undo))));
+  assert.ok(fast < full * 2, `restoring 16,000 nodes 1,000 deep: ${fast.toFixed(0)} ms, the whole check ${full.toFixed(0)} ms`);
 });
