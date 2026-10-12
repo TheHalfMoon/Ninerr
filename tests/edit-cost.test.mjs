@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { DocumentInvariantError, cloneDocument, cloneValidated, createDocument, validateDocument } from "../packages/document-model/src/index.mjs";
-import { applyTransaction, createHistoryState } from "../packages/history/src/index.mjs";
+import { applyCommittedTransaction, applyTransaction, createHistoryState } from "../packages/history/src/index.mjs";
 import { createProject, openProject } from "../packages/persistence/src/index.ts";
 import { createPrng } from "./support/prng.mjs";
 
@@ -183,4 +183,29 @@ test("setting props on a large produced document costs less than validating it o
   const edit = Math.min(...edits.slice(1));
   assert.equal(document.nodes.n123.props.text, "Edit 5");
   assert.ok(edit < validation, `an edit of one prop on 50,000 nodes took ${edit.toFixed(1)} ms; one validation ${validation.toFixed(1)} ms`);
+});
+
+test("a props edit copies only the records it sets, and every document stays as it was (#252)", () => {
+  const nodes = [{ id: "root", type: "frame", children: ["a", "b"], props: { name: "Root" } }, { id: "a", type: "text", parentId: "root", props: { text: "A", style: { color: "red" } } }, { id: "b", type: "text", parentId: "root", props: { text: "B" } }];
+  const first = createHistoryState(createDocument({ id: "cow", nodes })).document;
+  const snapshot = structuredClone(first);
+  const second = applyTransaction(first, { id: "t1", actor: "u", baseRevision: first.revision, operations: [{ type: "set-props", nodeId: "a", set: { text: "A2" }, unset: ["style"] }] }).document;
+  const third = applyTransaction(second, { id: "t2", actor: "u", baseRevision: second.revision, operations: [{ type: "set-props", nodeId: "a", set: { text: "A3" } }, { type: "set-props", nodeId: "b", set: { text: "B3" } }] }).document;
+  // Untouched records are shared; the ones set are copies.
+  assert.equal(second.nodes.b, first.nodes.b);
+  assert.equal(second.nodes.root, first.nodes.root);
+  assert.notEqual(second.nodes.a, first.nodes.a);
+  assert.notEqual(third.nodes.b, second.nodes.b);
+  // Every document is still what it was.
+  assert.deepStrictEqual(first, snapshot);
+  assert.deepStrictEqual([second.nodes.a.props, second.nodes.b.props.text], [{ text: "A2" }, "B"]);
+  assert.deepStrictEqual([third.nodes.a.props.text, third.nodes.b.props.text], ["A3", "B3"]);
+  // A structural edit on a document that shares records copies it whole, and changes none.
+  const fourth = applyTransaction(third, { id: "t3", actor: "u", baseRevision: third.revision, operations: [{ type: "remove-node", nodeId: "b" }] }).document;
+  assert.equal(fourth.nodes.b, undefined);
+  assert.equal(third.nodes.b.props.text, "B3");
+  assert.deepStrictEqual(first, snapshot);
+  // The in-place apply refuses a document history returned: it may share its records.
+  assert.throws(() => applyCommittedTransaction(third, { operations: [{ type: "set-props", nodeId: "a", set: { text: "x" } }] }), /shared value/u);
+  assert.equal(third.nodes.a.props.text, "A3");
 });

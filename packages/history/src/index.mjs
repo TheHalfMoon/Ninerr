@@ -348,7 +348,25 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
 
   // The input was validated above, so a private copy suffices; cloneDocument and
   // normalizeDocument would validate and copy it twice more.
-  const working = cloneValidated(document);
+  // Setting props, the common edit (typing, a value), changes neither the node keys nor the
+  // structure: on a validated, ordered input the order stands and only the touched records
+  // can be wrong. Anything else is copied whole, sorted and validated whole (#252).
+  const propsOnly = ours && normalizedTransaction.operations.every((operation) => operation.type === "set-props");
+  let working;
+  if (propsOnly) {
+    // Copy on write: the records it sets are copied, every other record (and the roots and
+    // metadata, which setting props does not touch) is shared with `document`. Documents this
+    // module returns are values, never changed in place, so sharing is safe.
+    working = { ...document, nodes: { ...document.nodes } };
+    for (const operation of normalizedTransaction.operations) {
+      const id = operation.nodeId;
+      if (typeof id === "string" && Object.hasOwn(document.nodes, id) && working.nodes[id] === document.nodes[id]) {
+        working.nodes[id] = cloneValidated(document.nodes[id]);
+      }
+    }
+  } else {
+    working = cloneValidated(document);
+  }
   const inverseOperations = [];
   const affectedNodeIds = new Set();
   for (const operation of normalizedTransaction.operations) {
@@ -357,11 +375,8 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
     inverseOperations.unshift(inverse);
   }
   working.revision = document.revision + 1;
-  // Setting props, the common edit (typing, a value), changes neither the node keys nor the
-  // structure: on a validated, ordered input the order stands and only the touched records
-  // can be wrong. Anything else is sorted and validated whole (#252).
   let normalizedDocument;
-  if (ours && normalizedTransaction.operations.every((operation) => operation.type === "set-props")) {
+  if (propsOnly) {
     normalizedDocument = working;
     validateNodes(normalizedDocument, affectedNodeIds);
   } else {
@@ -432,8 +447,11 @@ export function applyCommittedTransaction(document, transaction) {
   if (!Array.isArray(transaction?.operations) || transaction.operations.length === 0) {
     throw new TransactionError("transaction.operations must be a non-empty array");
   }
-  // Changed in place: whatever it was, it is no longer a document this module validated.
-  PRODUCED.delete(document);
+  // It changes `document` in place: a document this module returned may share its records
+  // with others (copy on write), so it must never be changed this way (#252).
+  if (PRODUCED.has(document)) {
+    throw new TransactionError("a document history returned is a shared value; apply a transaction to it with applyTransaction");
+  }
   const affectedNodeIds = new Set();
   for (const operation of transaction.operations) {
     collectAffectedNodeIds(document, operation, affectedNodeIds);
