@@ -54,15 +54,16 @@ test("an agent's copies of a page past the project's stylesheet budget are refus
   assert.equal((await ok(call("GET", "/api/document"), "document")).revision, revision, "nothing was committed");
 });
 
-test("a change that does not grow a project's stylesheets is never held back, even past the budget", async (t) => {
+/** A host with project "hand" open, holding `count` large sheets written past the host. */
+async function handWritten(t, count) {
   const { root, pool, running } = await host(t);
   await ok(running.call("POST", "/api/projects/create", { name: "hand" }), "create");
   await ok(running.call("POST", "/api/projects/close"), "close");
   await pool.close(running.host);
-  // Nine large sheets, written past the host (one change each): over the budget already.
   const store = openProject(join(root, "hand"), { owner: "by-hand", at: now() });
   try {
-    for (let index = 0; index < 9; index += 1) {
+    // One change each: a journal entry holds at most 4 MiB.
+    for (let index = 0; index < count; index += 1) {
       store.commit({ id: `tx-hand-${index}`, actor: "user-1", intent: "By hand", baseRevision: store.revision, operations: [{ type: "insert-node", parentId: null, index, node: { id: `page-${index}`, type: "frame", parentId: null, children: [], props: { name: `Page ${index}`, stylesheet: LARGE }, metadata: {} } }] });
     }
   } finally {
@@ -70,15 +71,43 @@ test("a change that does not grow a project's stylesheets is never held back, ev
   }
   const reopened = await pool.open(root);
   const { revision } = await ok(reopened.call("POST", "/api/projects/open", { name: "hand" }), "open");
-  // A smaller sheet, and an edit with no sheet at all, both go through.
-  await ok(reopened.call("POST", "/api/edit", { baseRevision: revision, intent: "Smaller", operations: [{ type: "set-props", nodeId: "page-0", set: { stylesheet: ".a{color:blue}" } }] }), "a smaller sheet");
-  await ok(reopened.call("POST", "/api/edit", { baseRevision: revision + 1, intent: "Rename", operations: [{ type: "set-props", nodeId: "page-1", set: { name: "Home" } }] }), "a rename");
-  // Eight large sheets are left (about 15.2 MB): a copy of one would pass the budget.
   const { token } = await ok(reopened.call("POST", "/api/agents/create", { name: "Copier" }), "connect an agent");
   const agent = mcpClient(reopened.host.mcpUrl, token);
   await agent.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "budget", version: "1" } });
+  return { call: reopened.call, agent, revision };
+}
+
+test("a change that does not grow a project's stylesheets is never held back, even past the budget", async (t) => {
+  // Ten large sheets (about 19 MB): over the budget, and still over it after one is shrunk.
+  const { call, agent, revision } = await handWritten(t, 10);
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Smaller", operations: [{ type: "set-props", nodeId: "page-0", set: { stylesheet: ".a{color:blue}" } }] }), "a smaller sheet, still over the budget");
+  await ok(call("POST", "/api/edit", { baseRevision: revision + 1, intent: "Rename", operations: [{ type: "set-props", nodeId: "page-1", set: { name: "Home" } }] }), "an edit with no sheet");
+  // Growing them is refused.
   const refused = await agent.tool("duplicate_layers", { nodeIds: ["page-1"] });
   assert.equal(refused.isError, true, JSON.stringify(refused).slice(0, 300));
   assert.match(JSON.stringify(refused), /stylesheets are limited to 16 MiB in all/u);
-  assert.equal((await ok(reopened.call("GET", "/api/document"), "document")).revision, revision + 2, "nothing was committed");
+  assert.equal((await ok(call("GET", "/api/document"), "document")).revision, revision + 2, "nothing was committed");
+});
+
+test("a revert that would bring a sheet back past the budget is refused as a conflict", async (t) => {
+  // Eight large sheets (about 15.2 MB). The agent deletes one (13.3 MB); the person adds two
+  // smaller ones (15.1 MB); the person's revert of the deletion would pass the budget.
+  const { call, agent, revision } = await handWritten(t, 8);
+  const deleting = agent.tool("delete_layers", { nodeIds: ["page-7"] });
+  deleting.catch(() => {}); // awaited below
+  let pending = [];
+  for (let tries = 0; tries < 200 && pending.length === 0; tries += 1) {
+    ({ pending } = await ok(call("GET", "/api/confirmations"), "confirmations"));
+    if (pending.length === 0) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await ok(call("POST", "/api/confirmations/decide", { id: pending[0].id, approve: true }), "accept");
+  assert.equal((await deleting).isError, undefined);
+  for (const [step, id] of [[1, "extra-1"], [2, "extra-2"]]) {
+    await ok(call("POST", "/api/edit", { baseRevision: revision + step, intent: "Fill", operations: [{ type: "insert-node", parentId: null, index: 0, node: { id, type: "frame", parentId: null, children: [], props: { name: id, stylesheet: ".c{color:red}".repeat(70_000) }, metadata: {} } }] }), id);
+  }
+  const deletion = (await ok(call("GET", "/api/history"), "history")).entries.find((entry) => entry.tool === "delete_layers");
+  const reverted = await call("POST", "/api/revert", { transactionId: deletion.transactionId });
+  assert.deepEqual([reverted.status, reverted.json?.error?.code], [409, "revert-conflict"], JSON.stringify(reverted.json));
+  assert.match(reverted.json.error.message, /stylesheets are limited to 16 MiB in all/u);
+  assert.equal((await ok(call("GET", "/api/document"), "document")).revision, revision + 3, "nothing was committed");
 });
