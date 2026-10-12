@@ -35,6 +35,12 @@ export function assertAllowedKeys(value: Record<string, unknown>, allowed: reado
   for (const key of Object.keys(value)) {
     if (!allow.has(key)) throw new ImportValidationError(`${label} contains unsupported field ${key}`);
   }
+  // Every normalizer reads its fields as value.field after this check: a field the object does
+  // not hold itself would be read from Object.prototype, which a polluted prototype could have
+  // set (a policy granting more than the caller asked for, #94). Refused, never inherited.
+  for (const key of allowed) {
+    if (!Object.hasOwn(value, key) && key in value) throw new ImportValidationError(`${label}.${key} must be the ${label.split(".").at(-1)}'s own field, not inherited`);
+  }
 }
 
 export function assertBoundedString(value: unknown, label: string, max = 4096): asserts value is string {
