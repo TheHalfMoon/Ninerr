@@ -345,16 +345,50 @@ test("an id is drawn under the canvas's own name, and id selectors are drawn to 
     ['[title="[*|id"]', '[title="[*|id"]'],
     [".plain > p", ".plain > p"],
   ]) assert.equal(drawnSelector(selector), drawn, selector);
-  // The code carries no drawn id: a control a label names keeps its id, as before (review of #297).
+  // The code carries no drawn id (review of #297), but every id the page has, unique in the
+  // export, so the exported stylesheet's #id rules match it (#310): a control a label names, as
+  // before, and any other layer; a copy's gets a suffix.
   const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children, props, metadata: {} });
   const doc = { id: "doc", rootIds: ["wrapper"], nodes: {
-    wrapper: node("wrapper", null, ["label", "input"], { tag: "div", attributes: { id: "wrapper", class: "x" } }),
+    wrapper: node("wrapper", null, ["label", "input", "copy"], { tag: "div", attributes: { id: "wrapper", class: "x" } }),
     label: node("label", "wrapper", [], { tag: "label", text: "Email", attributes: { for: "email" } }),
     input: node("input", "wrapper", [], { tag: "input", attributes: { id: "email", type: "text" } }),
+    copy: node("copy", "wrapper", [], { tag: "p", text: "Again", attributes: { id: "wrapper" } }),
   } };
   const { code } = exportJsx(doc, "wrapper");
   assert.doesNotMatch(code, /data-ninerr/u, code);
   assert.match(code, /htmlFor="email"[\s\S]*id="email"/u, code);
+  assert.match(code, /<div className="x" id="wrapper">/u, code);
+  assert.match(code, /<p id="wrapper-2">Again<\/p>/u, code);
+  // A plain id that a control's suffix took moves on, and labels still name their control.
+  const clash = { id: "doc", rootIds: ["form"], nodes: {
+    form: node("form", null, ["l1", "i1", "l2", "i2", "taken"], { tag: "form" }),
+    l1: node("l1", "form", [], { tag: "label", text: "A", attributes: { for: "email" } }),
+    i1: node("i1", "form", [], { tag: "input", attributes: { id: "email" } }),
+    l2: node("l2", "form", [], { tag: "label", text: "B", attributes: { for: "email" } }),
+    i2: node("i2", "form", [], { tag: "input", attributes: { id: "email" } }),
+    taken: node("taken", "form", [], { tag: "p", text: "C", attributes: { id: "email-2" } }),
+  } };
+  const clashed = exportJsx(clash, "form").code;
+  assert.deepEqual([...clashed.matchAll(/ (?:id|htmlFor)="([^"]+)"/gu)].map((match) => match[1]), ["email", "email", "email-2", "email-2", "email-2-2"], clashed);
+  // Thousands of layers sharing one id export quickly: each copy's suffix is not searched from 2.
+  const many = { id: "doc", rootIds: ["root"], nodes: { root: node("root", null, [], { tag: "div" }) } };
+  for (let index = 0; index < 49; index += 1) {
+    const row = `row${index}`;
+    many.nodes[row] = node(row, "root", [], { tag: "div", attributes: { id: "card" } });
+    many.nodes.root.children.push(row);
+    for (let cell = 0; cell < 99; cell += 1) {
+      const id = `c${index}-${cell}`;
+      many.nodes[id] = node(id, row, [], { tag: "p", attributes: { id: "card" } });
+      many.nodes[row].children.push(id);
+    }
+  }
+  exportJsx(many, "root");
+  const started = performance.now();
+  const manyCode = exportJsx(many, "root").code;
+  const elapsed = performance.now() - started;
+  assert.ok(manyCode.includes(' id="card-4900"'), "every copy has its own id");
+  assert.ok(elapsed < 600, `4,900 layers sharing one id exported in ${Math.round(elapsed)} ms`);
 });
 
 test("on the canvas, a page's id rules apply with an id's specificity, nested and after edits", browserTestOptions(), async () => {

@@ -54,11 +54,11 @@ function appliedStylesheet(document: any, nodeId: string): string | null {
 export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; stylesheet: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   let layers = 0;
-  // Labels and the controls they name (for → id). The canvas draws ids under a name of its
-  // own (DRAWN_ID), which the code never carries, but the code needs them: each control a
-  // label in this export points to keeps an id, unique in the export (a second copy of a
-  // form gets email-2), and its label points to that id. A label names the next control
-  // with its id in document order, or else the last before.
+  // Ids, and the labels that name controls by them (for → id). The canvas draws ids under a
+  // name of its own (DRAWN_ID), which the code never carries, but the code keeps them: each id
+  // is unique in the export (a second copy of a form gets email-2), and a label points to its
+  // control's. A label names the next control with its id in document order, or else the last
+  // before; the ids of controls named by a label are given first.
   const order: string[] = [];
   const walkOrder = (id: string, depth: number) => {
     if (depth > MAX_EXPORT_DEPTH || !document.nodes[id]) return;
@@ -73,9 +73,20 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
     const value = document.nodes[id]?.props?.attributes?.[name];
     return typeof value === "string" && SIMPLE_ID.test(value) ? value : null;
   };
-  const exportedId = new Map<string, string>(); // control node → id in the code
+  const exportedId = new Map<string, string>(); // layer → its id in the code
   const labelTarget = new Map<string, string>(); // label node → id in the code
   const taken = new Set<string>();
+  // An id unique in the export: as wanted, or with the next free suffix (email-2). The next
+  // suffix to try is kept per id, so many copies of one id cost linear time.
+  const nextSuffix = new Map<string, number>();
+  const unique = (wanted: string): string => {
+    let candidate = wanted;
+    let copy = nextSuffix.get(wanted) ?? 2;
+    while (taken.has(candidate)) candidate = `${wanted}-${copy++}`;
+    nextSuffix.set(wanted, copy);
+    taken.add(candidate);
+    return candidate;
+  };
   // Each id's positions in document order (ascending), so a label finds its control by
   // binary search: linear in the export, not labels × controls.
   const positionsOf = new Map<string, number[]>();
@@ -103,13 +114,17 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
     if (at < 0) return;
     const control = order[positions[at]];
     if (!exportedId.has(control)) {
-      let candidate = wanted;
-      for (let copy = 2; taken.has(candidate); copy += 1) candidate = `${wanted}-${copy}`;
-      taken.add(candidate);
-      exportedId.set(control, candidate);
+      exportedId.set(control, unique(wanted));
     }
     labelTarget.set(labelId, exportedId.get(control)!);
   });
+  // Every other layer with an id keeps it too, unique in the export like a control's, so the
+  // exported stylesheet's #id rules match the code (#310). A copy's gets a suffix (card-2).
+  for (const id of order) {
+    const wanted = attr(id, "id");
+    if (wanted === null || exportedId.has(id)) continue;
+    exportedId.set(id, unique(wanted));
+  }
   const convert = (id: string, depth: number): DesignDocNode => {
     if (depth > MAX_EXPORT_DEPTH) throw new StudioError(422, "export-too-deep", `layers nested more than ${MAX_EXPORT_DEPTH} deep cannot be exported`);
     layers += 1;
