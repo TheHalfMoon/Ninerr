@@ -583,9 +583,9 @@ test("a frame's animation names are renamed in animation declarations only, keyw
 });
 
 // #310 item 2 (from the review of #309): drawing #x as :is([…],#x) made a large page's style
-// recalculation one to two orders of magnitude slower (10,000 layers, 200 id rules: 9.8 s);
-// the form drawn now takes about half a second there. This bounds it, so the slow form, or one
-// like it, cannot come back unseen.
+// recalculation one to two orders of magnitude slower (10,000 layers, 200 id rules). This bounds
+// the page against itself without its id rules, drawn in the same browser, so a slow machine
+// slows both: the form drawn now costs about 3–4 times the control, the :is form 20–30 times.
 test("a large page with many id rules is drawn in bounded time", browserTestOptions(), async () => {
   const { readFileSync } = await import("node:fs");
   const { findBrowser, launchBrowser } = await import("./support/browser.mjs");
@@ -594,26 +594,40 @@ test("a large page with many id rules is drawn in bounded time", browserTestOpti
     const page = await browser.newPage();
     await page.setContent("<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>");
     const source = readFileSync(new URL("../packages/renderer/src/index.mjs", import.meta.url), "utf8");
-    await page.addScriptTag({ type: "module", content: `${source}\nwindow.rendererForTest = createRenderer(document.getElementById("root"));` });
-    await page.waitForFunction(() => window.rendererForTest !== undefined);
+    await page.addScriptTag({ type: "module", content: `${source}\nwindow.createRendererForTest = createRenderer;` });
+    await page.waitForFunction(() => window.createRendererForTest !== undefined);
     const measured = await page.evaluate(() => {
-      const css = Array.from({ length: 3000 }, (_, index) => `.c${index}{color:blue}`).concat(Array.from({ length: 200 }, (_, index) => `#n${index * 5} .nav-link{outline:1px solid red}`)).join("\n");
-      const node = (id, parentId, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children: [], props, metadata: {} });
-      const nodes = { page: node("page", null, { tag: "div", stylesheet: css }) };
-      for (let index = 0; index < 10_000; index += 1) {
-        const parent = index === 0 ? "page" : `k${Math.floor((index - 1) / 3)}`;
-        nodes[`k${index}`] = node(`k${index}`, parent, { tag: "div", text: "x", attributes: index % 5 === 0 ? { id: `n${index}`, class: "nav-link item" } : { class: "nav-link item" } });
-        nodes[parent].children.push(`k${index}`);
-      }
-      const started = performance.now();
-      window.rendererForTest.render({ rootIds: ["page"], nodes });
-      document.body.offsetHeight;
-      const elapsed = performance.now() - started;
-      const outlined = [...document.querySelectorAll(".nav-link")].filter((element) => getComputedStyle(element).outlineStyle === "solid").length;
-      return { elapsed, outlined };
+      const draw = (idRules) => {
+        const css = Array.from({ length: 3000 }, (_, index) => `.c${index}{color:blue}`).concat(Array.from({ length: idRules }, (_, index) => `#n${index * 5} .nav-link{outline:1px solid red}`)).join("\n");
+        const node = (id, parentId, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children: [], props, metadata: {} });
+        const nodes = { page: node("page", null, { tag: "div", stylesheet: css }) };
+        for (let index = 0; index < 10_000; index += 1) {
+          const parent = index === 0 ? "page" : `k${Math.floor((index - 1) / 3)}`;
+          nodes[`k${index}`] = node(`k${index}`, parent, { tag: "div", text: "x", attributes: index % 5 === 0 ? { id: `n${index}`, class: "nav-link item" } : { class: "nav-link item" } });
+          nodes[parent].children.push(`k${index}`);
+        }
+        // A renderer of its own each time, removed after, so one page never weighs on the other.
+        const container = document.createElement("div");
+        document.body.append(container);
+        const renderer = createRendererForTest(container);
+        const started = performance.now();
+        renderer.render({ rootIds: ["page"], nodes });
+        document.body.offsetHeight;
+        const elapsed = performance.now() - started;
+        const outlined = [...container.querySelectorAll(".nav-link")].filter((element) => getComputedStyle(element).outlineStyle === "solid").length;
+        renderer.render({ rootIds: [], nodes: {} });
+        container.remove();
+        return { elapsed, outlined };
+      };
+      draw(0); // warm the browser
+      const control = draw(0);
+      const ids = draw(200);
+      return { control, ids };
     });
-    assert.ok(measured.outlined > 0, "the id rules apply");
-    assert.ok(measured.elapsed < 3_000, `10,000 layers with 200 id rules drawn and styled in ${Math.round(measured.elapsed)} ms`);
+    // #n0 is the root: every layer below it matches.
+    assert.deepEqual([measured.control.outlined, measured.ids.outlined], [0, 9_999], "the id rules apply");
+    const ratio = measured.ids.elapsed / measured.control.elapsed;
+    assert.ok(ratio < 10, `200 id rules cost ${ratio.toFixed(1)} times the same page without them (${Math.round(measured.ids.elapsed)} ms against ${Math.round(measured.control.elapsed)} ms)`);
   } finally {
     await browser.close();
   }
