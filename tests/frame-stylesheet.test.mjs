@@ -581,3 +581,40 @@ test("a frame's animation names are renamed in animation declarations only, keyw
     ["transition: spin 1s; --x: spin;", "transition: spin 1s; --x: spin;"],
   ]) assert.equal(renamedAnimations(declarations, renamed), drawn, declarations);
 });
+
+// #310 item 2 (from the review of #309): drawing #x as :is([…],#x) made a large page's style
+// recalculation one to two orders of magnitude slower (10,000 layers, 200 id rules: 9.8 s);
+// the form drawn now takes about half a second there. This bounds it, so the slow form, or one
+// like it, cannot come back unseen.
+test("a large page with many id rules is drawn in bounded time", browserTestOptions(), async () => {
+  const { readFileSync } = await import("node:fs");
+  const { findBrowser, launchBrowser } = await import("./support/browser.mjs");
+  const browser = await launchBrowser({ executablePath: findBrowser(), headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>");
+    const source = readFileSync(new URL("../packages/renderer/src/index.mjs", import.meta.url), "utf8");
+    await page.addScriptTag({ type: "module", content: `${source}\nwindow.rendererForTest = createRenderer(document.getElementById("root"));` });
+    await page.waitForFunction(() => window.rendererForTest !== undefined);
+    const measured = await page.evaluate(() => {
+      const css = Array.from({ length: 3000 }, (_, index) => `.c${index}{color:blue}`).concat(Array.from({ length: 200 }, (_, index) => `#n${index * 5} .nav-link{outline:1px solid red}`)).join("\n");
+      const node = (id, parentId, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children: [], props, metadata: {} });
+      const nodes = { page: node("page", null, { tag: "div", stylesheet: css }) };
+      for (let index = 0; index < 10_000; index += 1) {
+        const parent = index === 0 ? "page" : `k${Math.floor((index - 1) / 3)}`;
+        nodes[`k${index}`] = node(`k${index}`, parent, { tag: "div", text: "x", attributes: index % 5 === 0 ? { id: `n${index}`, class: "nav-link item" } : { class: "nav-link item" } });
+        nodes[parent].children.push(`k${index}`);
+      }
+      const started = performance.now();
+      window.rendererForTest.render({ rootIds: ["page"], nodes });
+      document.body.offsetHeight;
+      const elapsed = performance.now() - started;
+      const outlined = [...document.querySelectorAll(".nav-link")].filter((element) => getComputedStyle(element).outlineStyle === "solid").length;
+      return { elapsed, outlined };
+    });
+    assert.ok(measured.outlined > 0, "the id rules apply");
+    assert.ok(measured.elapsed < 3_000, `10,000 layers with 200 id rules drawn and styled in ${Math.round(measured.elapsed)} ms`);
+  } finally {
+    await browser.close();
+  }
+});
