@@ -5,6 +5,7 @@ import { validateNavigationUrl, validateResolvedAddresses } from "./network.ts";
 import { fetchPinnedHttp, sanitizeReadOnlyRequestHeaders, type PinnedHttpResponse } from "./transport.ts";
 import type { AdapterResult, ImportProposal, ImportRequest } from "./types.ts";
 import { normalizeImportRequest } from "./validation.ts";
+import { ownField } from "./validation.ts";
 
 interface RequestLike {
   url(): string;
@@ -98,9 +99,9 @@ export async function captureDynamicHtml(
     return { status: "failed", reason: error instanceof Error ? error.message : String(error) };
   }
 
-  const resolveHost = dependencies.resolveHost ?? defaultResolveHost;
-  const fetchHttp = dependencies.fetchHttp ?? fetchPinnedHttp;
-  const now = dependencies.now ?? Date.now;
+  const resolveHost = ownField(dependencies, "resolveHost") ?? defaultResolveHost;
+  const fetchHttp = ownField(dependencies, "fetchHttp") ?? fetchPinnedHttp;
+  const now = ownField(dependencies, "now") ?? Date.now;
   let initial: URL;
   try {
     initial = validateNavigationUrl(rawUrl, request.policy, request.networkPolicy);
@@ -110,7 +111,7 @@ export async function captureDynamicHtml(
   }
 
   let playwright: PlaywrightLike;
-  try { playwright = await (dependencies.loadPlaywright ?? defaultLoadPlaywright)(); }
+  try { playwright = await (ownField(dependencies, "loadPlaywright") ?? defaultLoadPlaywright)(); }
   catch (error) {
     if (unavailablePlaywright(error)) return { status: "unavailable", reason: "Playwright is not installed" };
     return { status: "failed", reason: error instanceof Error ? error.message : String(error) };

@@ -30,6 +30,14 @@ export function assertPlainObject(value: unknown, label: string): asserts value 
   }
 }
 
+/**
+ * A field the object holds itself, or undefined: for optional arguments (dependencies, options)
+ * read by name, so a polluted Object.prototype cannot supply one (#94).
+ */
+export function ownField<T extends object, K extends keyof T>(bag: T, key: K): T[K] | undefined {
+  return Object.hasOwn(bag, key) ? bag[key] : undefined;
+}
+
 export function assertAllowedKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
   const allow = new Set(allowed);
   for (const key of Object.keys(value)) {

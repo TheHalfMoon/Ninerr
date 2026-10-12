@@ -88,7 +88,8 @@ test("a network policy is never inherited from the prototype chain", async () =>
   try {
     const { result, resolves, fetches } = await mirror(request("remote", REMOTE_SOURCE), "https://example.com/a.html");
     assert.equal(result.status, "failed");
-    assert.match(result.reason, /offline mode/u);
+    // Refused as inherited (#94), where it once fell back to offline: nothing is contacted either way.
+    assert.match(result.reason, /import\.request\.networkPolicy must be the request's own field, not inherited/u);
     assert.equal(resolves + fetches, 0);
   } finally {
     delete Object.prototype.networkPolicy;

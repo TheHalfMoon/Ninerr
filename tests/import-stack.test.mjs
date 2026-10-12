@@ -794,3 +794,14 @@ test("the pinned HTTP transport is not part of the import stack's public surface
   const surface = await import("../packages/import-stack/src/index.ts");
   for (const name of ["fetchPinnedHttp", "sanitizeReadOnlyRequestHeaders"]) assert.equal(Object.hasOwn(surface, name), false, name);
 });
+
+test("a request id named like a prototype member is recorded and reused as any other (#94)", () => {
+  for (const requestId of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    const proposal = importHtmlSnapshot(request({ requestId }), "<div>Hello</div>");
+    const first = recordImportRequest(createImportRequestLedger(), request({ requestId }), proposal.inputSha256, proposal.proposalId);
+    assert.equal(first.reused, false, requestId);
+    assert.equal(Object.getPrototypeOf(first.ledger.entries), Object.prototype, `${requestId}: the entries keep their prototype`);
+    assert.deepEqual(Object.keys(first.ledger.entries), [requestId]);
+    assert.equal(recordImportRequest(first.ledger, request({ requestId }), proposal.inputSha256, proposal.proposalId).reused, true, requestId);
+  }
+});
