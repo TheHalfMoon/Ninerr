@@ -30,10 +30,24 @@ export function assertPlainObject(value: unknown, label: string): asserts value 
   }
 }
 
+/**
+ * A field the object holds itself, or undefined: for optional arguments (dependencies, options)
+ * read by name, so a polluted Object.prototype cannot supply one (#94).
+ */
+export function ownField<T extends object, K extends keyof T>(bag: T, key: K): T[K] | undefined {
+  return Object.hasOwn(bag, key) ? bag[key] : undefined;
+}
+
 export function assertAllowedKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
   const allow = new Set(allowed);
   for (const key of Object.keys(value)) {
     if (!allow.has(key)) throw new ImportValidationError(`${label} contains unsupported field ${key}`);
+  }
+  // Every normalizer reads its fields as value.field after this check: a field the object does
+  // not hold itself would be read from Object.prototype, which a polluted prototype could have
+  // set (a policy granting more than the caller asked for, #94). Refused, never inherited.
+  for (const key of allowed) {
+    if (!Object.hasOwn(value, key) && key in value) throw new ImportValidationError(`${label}.${key} must be the ${label.split(".").at(-1)}'s own field, not inherited`);
   }
 }
 

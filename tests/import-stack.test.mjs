@@ -274,7 +274,7 @@ test("remote URL policy rejects local, reserved, credential, and secret-bearing 
     "http://2130706433/",
     "http://0x7f000001/",
     "http://127.1/",
-  ]) assert.throws(() => validateNavigationUrl(url, remote, NET_REMOTE));
+  ]) assert.throws(() => validateNavigationUrl(url, remote, NET_REMOTE), (error) => error instanceof ImportSecurityError || error instanceof ImportValidationError, url);
   assert.equal(validateNavigationUrl("https://example.com/a", remote, NET_REMOTE).hostname, "example.com");
 
   const local = defaultImportPolicy("local-app");
@@ -771,5 +771,37 @@ test("provenance pins permissive donors and keeps Firecrawl reference-only", () 
       assert.match(record, new RegExp(`^\\| \`${cited.replace(/[.]/g, "\\.")}\` \\| \`[0-9a-f]{40}\` \\|$`, "m"), cited);
       assert.ok(!existsSync(new URL(`../${cited}`, import.meta.url)), `${cited} is retired`);
     }
+  }
+});
+
+// #94, parked from the review of #83: defence in depth at the import stack's edges.
+test("a request field the request does not hold itself is refused, not read from a polluted prototype (#94)", () => {
+  const { policy: _policy, ...withoutPolicy } = request();
+  const remote = defaultImportPolicy("remote");
+  Object.defineProperty(Object.prototype, "policy", { value: remote, configurable: true, writable: true });
+  try {
+    assert.throws(() => importHtmlSnapshot(withoutPolicy, "<p>x</p>"), (error) => error instanceof ImportValidationError && /import\.request\.policy must be the request's own field/u.test(error.message));
+  } finally {
+    delete Object.prototype.policy;
+  }
+  // Without the pollution, a missing field is refused as it always was.
+  assert.throws(() => importHtmlSnapshot(withoutPolicy, "<p>x</p>"), ImportValidationError);
+});
+
+test("the pinned HTTP transport is not part of the import stack's public surface (#94)", async () => {
+  // It takes any address list with no network-policy decision; only the Playwright capture,
+  // which checks the policy first, may call it.
+  const surface = await import("../packages/import-stack/src/index.ts");
+  for (const name of ["fetchPinnedHttp", "sanitizeReadOnlyRequestHeaders"]) assert.equal(Object.hasOwn(surface, name), false, name);
+});
+
+test("a request id named like a prototype member is recorded and reused as any other (#94)", () => {
+  for (const requestId of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+    const proposal = importHtmlSnapshot(request({ requestId }), "<div>Hello</div>");
+    const first = recordImportRequest(createImportRequestLedger(), request({ requestId }), proposal.inputSha256, proposal.proposalId);
+    assert.equal(first.reused, false, requestId);
+    assert.equal(Object.getPrototypeOf(first.ledger.entries), Object.prototype, `${requestId}: the entries keep their prototype`);
+    assert.deepEqual(Object.keys(first.ledger.entries), [requestId]);
+    assert.equal(recordImportRequest(first.ledger, request({ requestId }), proposal.inputSha256, proposal.proposalId).reused, true, requestId);
   }
 });

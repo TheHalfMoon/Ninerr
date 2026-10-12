@@ -32,7 +32,9 @@ export function recordImportRequest(
     inputSha256,
     proposalId,
   };
-  const current = normalized.entries[request.requestId];
+  // Own entries only, and added as data: a request id may be any string, "constructor" or
+  // "__proto__" included, which a plain lookup or assignment would take from the prototype (#94).
+  const current = Object.hasOwn(normalized.entries, request.requestId) ? normalized.entries[request.requestId] : undefined;
   if (current) {
     if (
       current.intentSha256 !== next.intentSha256
@@ -43,7 +45,6 @@ export function recordImportRequest(
     }
     return { ledger: normalized, reused: true };
   }
-  normalized.entries[request.requestId] = next;
-  normalized.entries = Object.fromEntries(Object.entries(normalized.entries).sort(([a], [b]) => compareCodeUnits(a, b)));
+  normalized.entries = Object.fromEntries([...Object.entries(normalized.entries), [request.requestId, next]].sort(([a], [b]) => compareCodeUnits(a, b)));
   return { ledger: normalized, reused: false };
 }

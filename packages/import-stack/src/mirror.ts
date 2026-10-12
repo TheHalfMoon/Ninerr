@@ -18,7 +18,7 @@ import type {
   StaticMirrorResource,
   StaticMirrorResult,
 } from "./types.ts";
-import { assertAllowedKeys, assertBoundedString, assertPlainObject, canonicalImportStringify, compareCodeUnits, normalizeImportRequest, sha256Text } from "./validation.ts";
+import { assertAllowedKeys, assertBoundedString, assertPlainObject, canonicalImportStringify, compareCodeUnits, normalizeImportRequest, ownField, sha256Text } from "./validation.ts";
 
 export interface MirrorFetchResult { status: number; headers: Record<string, string>; body: Uint8Array; }
 export interface MirrorFetchOptions { addresses: string[]; timeoutMs: number; maxBytes: number; signal?: AbortSignal; }
@@ -171,9 +171,9 @@ export async function mirrorStaticSite(
     }
     const entry = fetchCanonical(validateNavigationUrl(rawUrl, request.policy, request.networkPolicy));
     const prefix = scopePrefix(entry);
-    const resolveHost = dependencies.resolveHost ?? defaultResolveHost;
-    const fetchResource = dependencies.fetchResource ?? defaultFetchResource;
-    const now = dependencies.now ?? Date.now;
+    const resolveHost = ownField(dependencies, "resolveHost") ?? defaultResolveHost;
+    const fetchResource = ownField(dependencies, "fetchResource") ?? defaultFetchResource;
+    const now = ownField(dependencies, "now") ?? Date.now;
     const job = await createImportJobDirectory(options.workRoot, "mirror", options.jobId);
     workRoot = job.workRoot;
     jobDirectory = job.jobDirectory;

@@ -5,6 +5,7 @@ import { ImportAdapterError, ImportSecurityError, ImportValidationError } from "
 import { canonicalFileWithinRoots, createImportJobDirectory, readSingleLinkFile, safeRemoveImportJobDirectory } from "./filesystem.ts";
 import type { AdapterResult, DocumentAdapterOutput, ImportPolicy } from "./types.ts";
 import { normalizeImportJson } from "./validation.ts";
+import { ownField } from "./validation.ts";
 
 const ALLOWED_FORMATS = new Set(["pdf", "html", "docx", "pptx", "xlsx", "md", "csv"]);
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024;
@@ -143,7 +144,7 @@ export async function runLocalDocling(
       "--no-enable-remote-services",
       "--no-allow-external-plugins",
     ];
-    const execute = dependencies.execute ?? defaultExecute;
+    const execute = ownField(dependencies, "execute") ?? defaultExecute;
     let result: DoclingCommandResult;
     try {
       result = await execute("docling", args, {
