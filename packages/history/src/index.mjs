@@ -196,6 +196,9 @@ function applyRestoreSubtree(document, operation) {
 }
 
 function applySetProps(document, operation) {
+  // A string, as move-node and remove-node require: getNode would find node "5" for 5, which
+  // the copy and the validation of the records a transaction sets would not see (#252).
+  assertNonEmptyString(operation.nodeId, "set-props.nodeId");
   const node = getNode(document, operation.nodeId);
   const set = operation.set ?? {};
   const unset = operation.unset ?? [];
@@ -327,7 +330,8 @@ export function getAffectedNodeIds(transaction) {
  * validating the input, for a caller whose document was itself returned validated by this
  * module and has never been shared or changed since (a store's private state, #252), with its
  * nodes in canonical order. The output is validated: whole, or for a transaction that only
- * sets props, the records it touched (the rest is as validated). A document that
+ * sets props, the records it touched (the rest is as validated); such an output shares the
+ * records it did not set with the input, which must never be changed afterwards. A document that
  * was changed after validation must not be passed with it: the copy is made for validated
  * data, and would quietly turn a Map or a Date into {} rather than refuse it.
  */

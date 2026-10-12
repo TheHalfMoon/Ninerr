@@ -209,3 +209,18 @@ test("a props edit copies only the records it sets, and every document stays as 
   assert.throws(() => applyCommittedTransaction(third, { operations: [{ type: "set-props", nodeId: "a", set: { text: "x" } }] }), /shared value/u);
   assert.equal(third.nodes.a.props.text, "A3");
 });
+
+// From the review of the copy on write: a set-props whose nodeId was not a string (5) found
+// node "5" by conversion, past the copy and the validation of the records set, and changed a
+// record the input shares, even in a transaction then refused. nodeId must be a string.
+test("a props edit's node is named by a string, and a refused transaction changes nothing (#252)", () => {
+  const nodes = [{ id: "root", type: "frame", children: ["5"], props: {} }, { id: "5", type: "text", parentId: "root", props: { text: "five" } }];
+  const document = createHistoryState(createDocument({ id: "ids", nodes })).document;
+  const snapshot = structuredClone(document);
+  for (const nodeId of [5, ["5"]]) {
+    assert.throws(() => applyTransaction(document, { id: "t", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId, set: { text: "CHANGED" } }] }), /set-props\.nodeId/u);
+  }
+  // One that applies, then one that does not: the transaction is refused, and nothing changed.
+  assert.throws(() => applyTransaction(document, { id: "t", actor: "u", baseRevision: document.revision, operations: [{ type: "set-props", nodeId: "5", set: { text: "LEAK" } }, { type: "set-props", nodeId: "missing", set: { text: "x" } }] }), /Unknown node id missing/u);
+  assert.deepStrictEqual(document, snapshot);
+});
