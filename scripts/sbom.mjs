@@ -219,11 +219,23 @@ export function checkPolicy(lockText, policy, notices, { nodeModules = join(ROOT
     if (!allowed.has(override.license)) problems.push(`override for ${override.name}@${override.version} resolves to disallowed ${override.license}`);
   }
   const seen = new Set();
+  // The SBOM names one hash for a name@version, taken from its first hashed copy: copies whose
+  // hashes differ are not the same package, and would go unnoticed (#135).
+  const copies = new Map();
   for (const pkg of externalPackages(lock)) {
     const id = `${pkg.name}@${pkg.version}`;
     // A bundled dependency ships inside its parent's tarball, which the lockfile hashes.
-    if (integrityHashes(pkg.integrity).length === 0 && !(pkg.inBundle && hashedByEnclosingPackage(lock.packages, pkg.path))) {
+    const hashes = integrityHashes(pkg.integrity);
+    if (hashes.length === 0 && !(pkg.inBundle && hashedByEnclosingPackage(lock.packages, pkg.path))) {
       problems.push(`${id} at ${pkg.path}: no sha512 integrity in the lockfile${pkg.inBundle ? " (marked inBundle, but no enclosing package is hashed)" : ""}`);
+    }
+    if (hashes.length > 0) {
+      const first = copies.get(id);
+      if (first === undefined) copies.set(id, { hash: hashes[0].content, path: pkg.path, reported: false });
+      else if (first.hash !== hashes[0].content && !first.reported) {
+        first.reported = true;
+        problems.push(`${id}: copies carry different sha512 integrity (${[first.path, pkg.path].sort().join(", ")})`);
+      }
     }
     if (seen.has(id)) continue;
     seen.add(id);

@@ -203,3 +203,14 @@ test("lockfile shapes beyond today's are handled, and unsafe shapes fail closed"
   assert.equal(copies.hashes.length, 1);
   assert.equal((copies.properties ?? []).some((property) => property.name === "npm:inBundle"), false);
 });
+
+test("copies of one package version whose integrity hashes differ are reported (#135)", () => {
+  const other = `sha512-${Buffer.alloc(64, 9).toString("base64")}`;
+  const check = (packages) => checkPolicy(lockWith(packages), policy, "`ok@1.0.0` `host@1.0.0`", { nodeModules: join(ROOT, "no-such-dir") });
+  const nested = { "node_modules/ok": pkg("MIT"), "node_modules/host": pkg("MIT") };
+  // The same bytes twice are fine; the SBOM names one hash for one name@version.
+  assert.deepEqual(check({ ...nested, "node_modules/host/node_modules/ok": pkg("MIT") }), []);
+  const problems = check({ ...nested, "node_modules/host/node_modules/ok": pkg("MIT", { integrity: other }) });
+  assert.equal(problems.length, 1, problems.join("\n"));
+  assert.match(problems[0], /^ok@1\.0\.0: copies carry different sha512 integrity \(node_modules\/host\/node_modules\/ok, node_modules\/ok\)$/u);
+});
