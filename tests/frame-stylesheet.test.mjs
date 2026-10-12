@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { frameStylesheet } from "../packages/import-stack/src/index.ts";
-import { designViewportLengths, drawnSelector, planElement } from "../packages/renderer/src/index.mjs";
+import { designViewportLengths, drawnSelector, planElement, renamedAnimations } from "../packages/renderer/src/index.mjs";
 import { exportJsx } from "../packages/studio-host/src/code.ts";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, reloadEditor, waitRevision } from "./support/editor.mjs";
@@ -499,4 +499,85 @@ test("a page's @scope with ids, and [*|id], apply on the canvas", browserTestOpt
   } finally {
     await browser.close();
   }
+});
+
+// #299 item 1: @keyframes are global even inside @scope, so frames' animations of one name
+// would meet, and the canvas removed them: an imported page's animations never ran. Each
+// frame's keyframes are now kept under a name of its own, and its animations name them so.
+test("each frame's @keyframes apply to that frame alone, under a name of its own", browserTestOptions(), async () => {
+  const { readFileSync } = await import("node:fs");
+  const { findBrowser, launchBrowser } = await import("./support/browser.mjs");
+  const browser = await launchBrowser({ executablePath: findBrowser(), headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent("<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>");
+    const source = readFileSync(new URL("../packages/renderer/src/index.mjs", import.meta.url), "utf8");
+    await page.addScriptTag({ type: "module", content: `${source}\nwindow.rendererForTest = createRenderer(document.getElementById("root"));` });
+    await page.waitForFunction(() => window.rendererForTest !== undefined);
+    const drawn = await page.evaluate(() => {
+      const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children, props, metadata: {} });
+      // Paused at its start, an animation draws its first keyframe.
+      const sheet = (opacity) => `@keyframes pulse { from { opacity: ${opacity} } to { opacity: ${opacity} } } .p { animation: pulse 10s paused }`;
+      const doc = {
+        rootIds: ["a", "b", "c"],
+        nodes: {
+          a: node("a", null, ["a-p"], { tag: "div", stylesheet: sheet(0.25) }),
+          "a-p": node("a-p", "a", [], { tag: "p", text: "A", attributes: { class: "p" } }),
+          b: node("b", null, ["b-p"], { tag: "div", stylesheet: sheet(0.75) }),
+          "b-p": node("b-p", "b", [], { tag: "p", text: "B", attributes: { class: "p" } }),
+          // Inside a scope rebuilt for its id, and named once.
+          c: node("c", null, ["card"], { tag: "div", stylesheet: "@scope (#card) { @keyframes pulse { from { opacity: 0.5 } to { opacity: 0.5 } } .p { animation-name: pulse; animation-duration: 10s; animation-play-state: paused } }" }),
+          card: node("card", "c", ["c-p"], { tag: "div", attributes: { id: "card" } }),
+          "c-p": node("c-p", "card", [], { tag: "p", text: "C", attributes: { class: "p" } }),
+        },
+      };
+      window.rendererForTest.render(doc);
+      const opacity = (id) => getComputedStyle(document.querySelector(`[data-ninerr-id="${id}"]`)).opacity;
+      const names = [...document.querySelectorAll("style[data-ninerr-sheet]")].flatMap((element) => [...element.textContent.matchAll(/@keyframes ([\w-]+)/gu)].map((match) => match[1]));
+      const live = [...document.querySelectorAll("style[data-ninerr-sheet]")].flatMap((element) => {
+        const walk = (rules) => [...rules].flatMap((rule) => (rule instanceof CSSKeyframesRule ? [rule.name] : rule.cssRules ? walk(rule.cssRules) : []));
+        return walk(element.sheet.cssRules);
+      });
+      return { a: opacity("a-p"), b: opacity("b-p"), c: opacity("c-p"), written: names, live, dropped: window.rendererForTest.stats.dropped };
+    });
+    assert.deepEqual([drawn.a, drawn.b, drawn.c, drawn.dropped], ["0.25", "0.75", "0.5", 0]);
+    assert.deepEqual(drawn.written, ["pulse", "pulse", "pulse"], "the sheets keep what was written");
+    assert.equal(new Set(drawn.live).size, 3, `one name per frame: ${drawn.live}`);
+    assert.ok(drawn.live.every((name) => /^pulse--n[0-9a-z]+$/u.test(name)), String(drawn.live));
+    // From the review: a keyframes name that is also an animation keyword (running) renames
+    // only the name in a shorthand, which the browser writes with its keywords; and two frames
+    // whose ids a 32-bit hash would confuse still get names of their own.
+    const more = await page.evaluate(() => {
+      const node = (id, parentId, children, props) => ({ id, type: parentId === null ? "frame" : "element", parentId, children, props, metadata: {} });
+      const sheet = (opacity) => `@keyframes running { from { opacity: ${opacity} } to { opacity: ${opacity} } } @keyframes spin { from { opacity: 0.4 } to { opacity: 0.4 } } .p { animation: spin 10s linear paused } .q { animation-name: running; animation-duration: 10s; animation-play-state: paused }`;
+      const doc = { rootIds: ["import-node:53e8f", "import-node:ce5f0"], nodes: {} };
+      for (const [id, opacity] of [["import-node:53e8f", 0.25], ["import-node:ce5f0", 0.75]]) {
+        doc.nodes[id] = node(id, null, [`${id}/p`, `${id}/q`], { tag: "div", stylesheet: sheet(opacity) });
+        doc.nodes[`${id}/p`] = node(`${id}/p`, id, [], { tag: "p", text: "P", attributes: { class: "p" } });
+        doc.nodes[`${id}/q`] = node(`${id}/q`, id, [], { tag: "p", text: "Q", attributes: { class: "q" } });
+      }
+      window.rendererForTest.render(doc);
+      const opacity = (id) => getComputedStyle(document.querySelector(`[data-ninerr-id="${CSS.escape(id)}"]`)).opacity;
+      return ["import-node:53e8f", "import-node:ce5f0"].flatMap((id) => [opacity(`${id}/p`), opacity(`${id}/q`)]);
+    });
+    assert.deepEqual(more, ["0.4", "0.25", "0.4", "0.75"]);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("a frame's animation names are renamed in animation declarations only, keywords aside", () => {
+  const renamed = new Map([["spin", "spin--n1"], ["running", "running--n1"], ["none", "none--n1"], ["\\31 abc", "\\31 abc--n1"]]);
+  for (const [declarations, drawn] of [
+    ["animation: 10s ease 0s 1 normal none running spin;", "animation: 10s ease 0s 1 normal none running spin--n1;"],
+    ["animation: 1s steps(2, end) 0s 1 normal none running spin, 2s ease 0s 1 normal none paused running;", "animation: 1s steps(2, end) 0s 1 normal none running spin--n1, 2s ease 0s 1 normal none paused running--n1;"],
+    ["animation-name: running, other ! important;", "animation-name: running--n1, other ! important;"],
+    ["animation-name: none;", "animation-name: none;"],
+    ["animation: 0s ease 0s 1 normal none running none;", "animation: 0s ease 0s 1 normal none running none;"],
+    ["animation: 10s ease 0s 1 normal none running \\31 abc;", "animation: 10s ease 0s 1 normal none running \\31 abc--n1;"],
+    ["-webkit-animation-name: spin;", "-webkit-animation-name: spin--n1;"],
+    ["animation-name: var(--n);", "animation-name: var(--n);"],
+    ["animation-name: \"spin\";", "animation-name: \"spin\";"],
+    ["transition: spin 1s; --x: spin;", "transition: spin 1s; --x: spin;"],
+  ]) assert.equal(renamedAnimations(declarations, renamed), drawn, declarations);
 });
