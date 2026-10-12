@@ -1,4 +1,4 @@
-import { lstat, mkdir, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { DeliveryValidationError } from "./errors.ts";
 import {
@@ -25,40 +25,51 @@ function insideDirectory(candidate: string, root: string): boolean {
  * never sees through them.
  */
 async function resolveThroughExisting(path: string): Promise<string> {
-  const segments: string[] = [];
-  let cursor = resolve(path);
-  for (let depth = 0; depth < 64; depth += 1) {
-    let stat;
-    try {
-      stat = await lstat(cursor);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      segments.unshift(basename(cursor));
-      cursor = dirname(cursor);
-      continue;
-    }
-    if (stat.isSymbolicLink()) throw new DeliveryValidationError("evidence path must not traverse a symbolic link");
-    const canonical = await realpath(cursor);
-    return segments.length === 0 ? canonical : join(canonical, ...segments);
-  }
-  throw new DeliveryValidationError("evidence path is nested too deeply");
+  return canonicalThrough(path, "evidence path", { refuseLinks: true });
 }
 
 /** The canonical form of a path that may not exist yet, following links in its existing part. */
 async function canonicalThroughExisting(path: string): Promise<string> {
+  return canonicalThrough(path, "disposable worktree path", { refuseLinks: false });
+}
+
+const errorCode = (error: unknown): string => String((error as NodeJS.ErrnoException)?.code ?? (error instanceof Error ? error.message : error));
+
+/**
+ * Walk up to the nearest existing folder, canonicalise it, and append the missing names. Every
+ * way this can fail is a validation error that says which (#270): a drive or volume that does
+ * not exist (the walk reaches a root that is missing, where it once ran to its step limit), a
+ * link whose target is gone (it exists to lstat but has no real path), an existing part that
+ * is a file, or any other file-system error.
+ */
+async function canonicalThrough(path: string, what: string, { refuseLinks }: { refuseLinks: boolean }): Promise<string> {
   const segments: string[] = [];
   let cursor = resolve(path);
   for (let depth = 0; depth < 64; depth += 1) {
+    let link;
     try {
-      const canonical = await realpath(cursor);
-      return segments.length === 0 ? canonical : join(canonical, ...segments);
+      link = await lstat(cursor);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new DeliveryValidationError(`${what} ${path} cannot be resolved: ${errorCode(error)}`);
+      if (dirname(cursor) === cursor) throw new DeliveryValidationError(`${what} ${path} is on a drive or volume that does not exist`);
       segments.unshift(basename(cursor));
       cursor = dirname(cursor);
+      continue;
     }
+    if (refuseLinks && link.isSymbolicLink()) throw new DeliveryValidationError("evidence path must not traverse a symbolic link");
+    let canonical;
+    let target;
+    try {
+      canonical = await realpath(cursor);
+      target = await stat(canonical);
+    } catch (error) {
+      throw new DeliveryValidationError(`${what} ${path} cannot be resolved: ${errorCode(error)}`);
+    }
+    if (segments.length === 0) return canonical;
+    if (!target.isDirectory()) throw new DeliveryValidationError(`${what} ${path} is below a file`);
+    return join(canonical, ...segments);
   }
-  throw new DeliveryValidationError("disposable worktree path is nested too deeply");
+  throw new DeliveryValidationError(`${what} ${path} is nested too deeply`);
 }
 
 export interface EvidenceStoreOptions {
@@ -92,20 +103,14 @@ export async function createEvidenceStore(options: EvidenceStoreOptions): Promis
     throw new DeliveryValidationError(`evidence root cannot be resolved: ${error instanceof Error ? error.message : String(error)}`);
   }
   for (const disposable of options.disposableRoots ?? []) {
-    let canonicalDisposable: string;
-    try {
-      canonicalDisposable = await realpath(disposable);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      const link = await lstat(disposable).catch(() => null);
-      if (link !== null) {
-        throw new DeliveryValidationError(`disposable worktree ${disposable} cannot be resolved`);
-      }
-      // Canonical like the evidence root, through its nearest existing folder, so two
-      // spellings of one place (a Windows short name, macOS's /var) cannot pass as two.
-      canonicalDisposable = await canonicalThroughExisting(disposable);
-    }
-    if (insideDirectory(root, canonicalDisposable)) {
+    // Canonical like the evidence root, through its nearest existing folder, so two spellings
+    // of one place (a Windows short name, macOS's /var) cannot pass as two. A link whose
+    // target is gone, anywhere on the way, is refused.
+    const canonicalDisposable = await canonicalThroughExisting(disposable);
+    // Missing names are compared as written; on a case-insensitive file system "WT" is the
+    // "wt" to be created. Refusing without regard to case keeps evidence out of it everywhere
+    // (#270): at worst a distinct folder differing only in case is refused too.
+    if (insideDirectory(root.toLowerCase(), canonicalDisposable.toLowerCase())) {
       throw new DeliveryValidationError(`evidence root must persist outside disposable worktree ${disposable}`);
     }
   }
