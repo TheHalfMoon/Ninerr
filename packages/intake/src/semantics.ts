@@ -37,7 +37,7 @@ interface WalkContext {
 }
 
 function nativeRole(node: ImportNode, linkNodes: ReadonlySet<string>, context: WalkContext): Native {
-  if (node.kind === "image" || node.tag === "img") {
+  if (node.kind === "image" || (node.tag !== undefined && asciiLower(node.tag) === "img")) {
     // An empty alt marks the image as decorative (presentational).
     if (node.attributes.alt === "") return null;
     return { role: "img", source: "tag:img" };

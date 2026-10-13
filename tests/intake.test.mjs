@@ -99,6 +99,17 @@ test("a role that removes native semantics is recorded as an override, whichever
   }
 });
 
+test("tag names are matched ASCII case-insensitively, in a proposal not built by the parser (#89)", () => {
+  // The HTML import lowercases tags itself; a proposal built otherwise may not.
+  const p = proposal('<ul><li>x</li></ul><span title="pic">p</span>');
+  for (const node of Object.values(p.nodes)) if (node.tag !== undefined) node.tag = node.tag.toUpperCase();
+  const span = Object.values(p.nodes).find((node) => node.tag === "SPAN");
+  span.tag = "IMG";
+  span.attributes.alt = "a picture";
+  const roles = inferSemantics(p).records.map((record) => record.role).sort();
+  assert.deepEqual(roles, ["img", "list", "listitem"]);
+});
+
 test("an anchor without an href resource is not a link", () => {
   const p = proposal("<p><a>not a link</a></p>");
   assert.equal(inferSemantics(p).records.some((record) => record.role === "link"), false);
