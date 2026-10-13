@@ -566,6 +566,8 @@ function planSummary(plan) {
 // and write a component's edits back to its file after previewing them (PC11).
 function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, project }) {
   const section = el("section", { id: "codebase", "aria-labelledby": "codebase-title" }, el("h3", { id: "codebase-title" }, "Codebase"));
+  // Links set aside as untrusted, or kept unread for now, are said, not dropped silently (#268).
+  if (codebase?.problem) section.append(el("p", { class: "error", role: "status" }, `The saved codebase links could not be used: ${codebase.problem}`));
   const busy = (button, task) => async () => {
     error.textContent = "";
     button.disabled = true;

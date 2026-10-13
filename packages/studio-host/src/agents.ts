@@ -88,7 +88,8 @@ export class AgentRegistry {
       // Ninerr, so a "newer" legacy registry is only ignored, like a damaged one.
       if (error instanceof StudioError && error.code === "agents-newer" && !source.legacy) this.#newer = error;
       // A registry that could not be read just now is kept as it is, the same way (#268).
-      if (error instanceof StudioError && error.code === "agents-unavailable" && !source.legacy) this.#newer = error;
+      // That holds for a legacy registry too, which must not be skipped by a first save (#268).
+      if (error instanceof StudioError && error.code === "agents-unavailable") this.#newer = error;
       // A damaged registry must not stop Ninerr: it is set aside (kept for inspection) and
       // every agent has to be connected again. Failing closed means no agent gets access.
       // A damaged legacy registry is only ignored; it is not ours to move.

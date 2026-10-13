@@ -77,6 +77,8 @@ export function formatSid(bytes: Buffer): string {
   return `S-${parts.join("-")}`;
 }
 
+// Koffi's functions and types are untyped JavaScript values, so they are `any` here; each
+// one's signature is the C prototype it is bound with in bind().
 interface Bindings {
   koffi: any;
   CreateFileW: any;

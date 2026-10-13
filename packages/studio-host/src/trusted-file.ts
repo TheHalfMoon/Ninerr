@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, closeSync, constants, fstatSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeSync } from "node:fs";
-import { createPrivateFile, currentUserSid, readWithSecurity, type WindowsFileSecurity } from "./windows-security.ts";
+import { createPrivateFile, currentUserSid, FileBusyError, readWithSecurity, type WindowsFileSecurity } from "./windows-security.ts";
 
 // The files in the projects folder that Ninerr trusts: the relay discovery file, which tells an
 // MCP relay where to send an agent's credential; the agent registry; and the codebase links. A
@@ -72,7 +72,10 @@ export function readTrustedFile(path: string, maxBytes: number): Buffer | null {
     const code = (error as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT" || code === "ENOTDIR") return null;
     if (code === "ELOOP") throw new UntrustedFileError("it is a link");
-    throw new TrustedFileUnavailableError(`it could not be opened (${code ?? "unknown error"})`);
+    // Only a file held by another program right now is worth trying again later; a file
+    // this user cannot open at all is not trusted, and is set aside like one.
+    if (code === "EAGAIN" || code === "EBUSY") throw new TrustedFileUnavailableError(`it is in use by another program (${code})`);
+    throw new UntrustedFileError(`it could not be opened (${code ?? "unknown error"})`);
   }
   try {
     const entry = fstatSync(fd);
@@ -100,7 +103,9 @@ function readTrustedWindows(path: string, maxBytes: number): Buffer | null {
     read = readWithSecurity(path, maxBytes);
     userSid = currentUserSid();
   } catch (error) {
-    throw new TrustedFileUnavailableError(`its owner and access list could not be read (${error instanceof Error ? error.message : String(error)})`);
+    const reason = `its owner and access list could not be read (${error instanceof Error ? error.message : String(error)})`;
+    // Only a file held by another program right now is worth trying again later.
+    throw error instanceof FileBusyError ? new TrustedFileUnavailableError(reason) : new UntrustedFileError(reason);
   }
   if (read === null) return null;
   if (!read.regularFile) throw new UntrustedFileError("it is not a regular file (a folder or a link)");

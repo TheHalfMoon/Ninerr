@@ -109,13 +109,21 @@ export class CodebaseLinks {
     this.#path = join(projectsRoot, ".ninerr-codebases.json");
     // The links file from before the rename (legacy.ts) is read when there is no Ninerr
     // file yet, and left as it was; the next change saves the Ninerr file.
-    const source = registrySource(projectsRoot, ".ninerr-codebases.json", LEGACY_CODEBASE_LINKS_FILE);
+    // Links set aside as untrusted count as the legacy ones having been used: the legacy file
+    // is not read again, so links removed since cannot come back (#268).
+    let setAsideBefore = true;
+    try {
+      setAsideBefore = readdirSync(projectsRoot).some((name) => name.startsWith(".ninerr-codebases.json.unreadable-"));
+    } catch {
+      // stays true: a folder that cannot be listed does not bring back legacy links
+    }
+    const source = setAsideBefore ? { path: this.#path, legacy: false } : registrySource(projectsRoot, ".ninerr-codebases.json", LEGACY_CODEBASE_LINKS_FILE);
     const read = readLinks(source.path);
     this.#links = read.links;
     // A legacy file is never written by a newer Ninerr, so a "newer" one is only ignored.
     this.#newer = read.newer === null || source.legacy ? null : new StudioError(409, "codebases-newer", `the codebase links were saved by a newer version of Ninerr (links version ${read.newer}); they are left unchanged until that version is used`);
     // Links that could not be read just now are kept as they are and not overwritten (#268).
-    if (read.unavailable !== null && !source.legacy) this.#newer = new StudioError(503, "codebases-unavailable", `the codebase links could not be read just now, so they are left unchanged until Ninerr is started again: ${read.unavailable}`);
+    if (read.unavailable !== null) this.#newer = new StudioError(503, "codebases-unavailable", `the codebase links could not be read just now, so they are left unchanged until Ninerr is started again: ${read.unavailable}`);
     // Links that are not trusted (another account may have written them) are set aside, kept
     // for inspection, and reported: never followed, and never lost without a word (#268). A
     // legacy file is not ours to move; it is only ignored.
