@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { referenceProblems, renderMarkdown } from "../scripts/gate13-reference.mjs";
+import { failureOf, judgeRuns, referenceProblems, renderMarkdown, verdictOf } from "../scripts/gate13-reference.mjs";
 import { GATE13_BUDGETS, judgeReference, overruns, regressions, summarize } from "./support/gate13.mjs";
 
 // #275, the founder's decision of 2026-10-13: gate 13's budgets are judged on the reference
@@ -62,9 +62,11 @@ test("in CI, overruns and regressions above half again the runner's baseline are
 
 test("a record says whether it was taken on the reference configuration", () => {
   const reference = { os: "win32 10.0.26300 (Windows 11 Home)", cpu: "13th Gen Intel(R) Core(TM) i5-13420H", logicalCores: 12, memoryGiB: 16, node: "v24.19.0", browserPath: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" };
-  assert.deepEqual(referenceProblems(reference, "141.0.3537.71"), []);
-  assert.deepEqual(referenceProblems({ ...reference, os: "win32 10.0.19045 (Windows 10 Pro)" }, "141.0"), ["not Windows 11: win32 10.0.19045 (Windows 10 Pro)"]);
-  assert.equal(referenceProblems({ ...reference, cpu: "Apple M1", logicalCores: 8, node: "v22.23.3", browserPath: "/usr/bin/chromium" }, "141.0").length, 4);
+  assert.deepEqual(referenceProblems(reference), []);
+  assert.deepEqual(referenceProblems({ ...reference, os: "win32 10.0.19045 (Windows 10 Pro)" }), ["not Windows 11: win32 10.0.19045 (Windows 10 Pro)"]);
+  assert.equal(referenceProblems({ ...reference, cpu: "Apple M1", logicalCores: 8, node: "v22.23.3", browserPath: "/usr/bin/chromium" }).length, 4);
+  assert.deepEqual(referenceProblems({ ...reference, browserPath: "C:/Program Files/Google/Chrome/Application/chrome.exe" }), ["not Microsoft Edge: C:/Program Files/Google/Chrome/Application/chrome.exe"]);
+  assert.deepEqual(referenceProblems({ ...reference, browserPath: null }), ["not Microsoft Edge: null"]);
 });
 
 test("the record's Markdown gives the verdict, each budget and all five runs", () => {
@@ -73,11 +75,34 @@ test("the record's Markdown gives the verdict, each budget and all five runs", (
     commit: "1987c771882fd93cdb682c4b3cb301dbf7cf9bd1", tree: "0".repeat(40), date: "2026-10-13T00:00:00.000Z",
     machine: { os: "win32 10.0.26300 (Windows 11 Home)", cpu: "i5-13420H", logicalCores: 12, memoryGiB: 16, node: "v24.19.0", browserPath: "msedge.exe" },
     browser: "141.0", power: "plugged in, best performance", referenceProblems: [],
-    runs: runs.map((measures, index) => ({ index: index + 1, status: 0, measures })), judgement: judgeReference(runs), verdict: "pass: every budget holds",
+    runs: runs.map((measures, index) => ({ index: index + 1, status: 0, failure: null, openWallMs: 1500, measures })), judgement: judgeReference(runs), verdict: "pass: every budget holds",
   };
   const text = renderMarkdown(record);
   assert.match(text, /^# Gate 13 on the reference machine: `1987c77`/u);
   assert.match(text, /\*\*Verdict: pass: every budget holds\.\*\*/u);
   assert.match(text, /\| deleting a layer in the editor \| p95 \| 750 ms \| 4 of 5 \| 250 ms \| yes \|/u);
-  assert.match(text, /\| 5 \| 500 \| 5 \/ 12 \/ 14 \(n 40\) \|.*\| 500 \/ 800 \/ 900 \(n 20\) \|/u);
+  assert.match(text, /\| 5 \| 1500 \| 500 \| 5 \/ 12 \/ 14 \(n 40\) \|.*\| 500 \/ 800 \/ 900 \(n 20\) \|/u);
+  assert.match(text, /already running.*its start is not counted/u);
+  assert.doesNotMatch(text, /Runs that failed/u);
+});
+
+test("a failed run keeps what it measured, says why, and fails the record", () => {
+  // TAP puts a multi-line assertion message on the line after its block marker.
+  assert.equal(failureOf({ status: 1, stdout: "not ok 1 - x\n  error: |-\n    every gate-13 budget holds\n" }), "every gate-13 budget holds");
+  assert.equal(failureOf({ status: 1, stdout: "  error: 'the editor becoming ready timed out'\n" }), "'the editor becoming ready timed out'");
+  assert.equal(failureOf({ status: 7, stdout: "" }), "exit 7");
+  assert.equal(failureOf({ status: 0, stdout: "" }), "the run recorded nothing");
+  const all = [run(), run(), run(), run(), run()].map((measures, index) => ({ index: index + 1, failure: null, measures }));
+  assert.equal(verdictOf([], all, judgeRuns(all)), "pass: every budget holds");
+  // A run failed after recording: its figures still count, and the record fails.
+  const late = all.map((item) => (item.index === 3 ? { ...item, failure: "editor.errors" } : item));
+  assert.equal(judgeRuns(late).every((item) => item.pass), true);
+  assert.equal(verdictOf([], late, judgeRuns(late)), "fail: run(s) 3 failed");
+  // A run that measured nothing: the others are still shown, and nothing passes.
+  const missing = all.map((item) => (item.index === 2 ? { index: 2, failure: "exit 1" } : item));
+  const partial = judgeRuns(missing);
+  assert.deepEqual(partial.map((item) => [item.held, item.pass]), partial.map(() => [4, false]));
+  assert.equal(verdictOf(["not Windows 11"], all, judgeRuns(all)), "no verdict: not the reference machine");
+  const over = [run(), run(), run({ edit: { n: 30, p50: 700, p95: 800, max: 900 } }), run({ edit: { n: 30, p50: 700, p95: 800, max: 900 } }), run()].map((measures, index) => ({ index: index + 1, failure: null, measures }));
+  assert.equal(verdictOf([], over, judgeRuns(over)), "fail: end-to-end edit in the editor");
 });
