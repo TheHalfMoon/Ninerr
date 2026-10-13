@@ -9,7 +9,6 @@ const RAW_TEXT = new Set(["noscript", "xmp", "iframe", "noembed", "noframes", "p
 // The parser drops one line feed right after these start tags, so a text that starts with
 // one needs another in front.
 const LEADING_LF_DROPPED = new Set(["pre", "textarea", "listing"]);
-const PLAINTEXT_END = "\ue000plaintext-end\ue000";
 
 const escapeText = (value) => value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/\u00a0/gu, "&nbsp;");
 const escapeAttribute = (value) => value.replace(/&/gu, "&amp;").replace(/"/gu, "&quot;").replace(/\u00a0/gu, "&nbsp;");
@@ -29,30 +28,40 @@ function attributesOf(proposal, node) {
 const FOREIGN_ROOTS = new Set(["svg", "math"]);
 const HTML_INTEGRATION = new Set(["foreignobject", "desc", "title"]);
 
+// A node's HTML, and whether output stops there: <plaintext> has no end tag (everything after
+// it is its text), so nothing may follow it, not even its ancestors' end tags. The stop is a
+// signal rather than a marker in the text, which imported text could contain (#132).
 function serializeNode(proposal, id, rawText = false, foreign = false) {
   const node = proposal.nodes[id];
-  if (node.kind === "text") return rawText ? node.text : escapeText(node.text);
+  if (node.kind === "text") return { html: rawText ? node.text : escapeText(node.text), stop: false };
   const attributes = attributesOf(proposal, node).map(([name, value]) => ` ${name}="${escapeAttribute(value)}"`).join("");
-  if (!foreign && VOID.has(node.tag)) return `<${node.tag}${attributes}>`;
+  if (!foreign && VOID.has(node.tag)) return { html: `<${node.tag}${attributes}>`, stop: false };
   // Raw text only in HTML: inside SVG a <noscript> is an ordinary element.
   const raw = !foreign && RAW_TEXT.has(node.tag);
   const childForeign = FOREIGN_ROOTS.has(node.tag) || (foreign && !HTML_INTEGRATION.has(node.tag));
   const first = node.children.length > 0 ? proposal.nodes[node.children[0]] : undefined;
   const lead = !foreign && LEADING_LF_DROPPED.has(node.tag) && first?.kind === "text" && first.text.startsWith("\n") ? "\n" : "";
-  const inner = node.children.map((child) => serializeNode(proposal, child, raw, childForeign)).join("");
-  // <plaintext> has no end tag: everything after it is its text, so output stops there
-  // (proposalToHtml cuts at the marker, dropping the ancestors' end tags).
-  if (!foreign && node.tag === "plaintext") return `<plaintext${attributes}>${inner}${PLAINTEXT_END}`;
-  return `<${node.tag}${attributes}>${lead}${inner}</${node.tag}>`;
+  const { html: inner, stop } = serializeList(proposal, node.children, raw, childForeign);
+  if (stop) return { html: `<${node.tag}${attributes}>${lead}${inner}`, stop: true };
+  if (!foreign && node.tag === "plaintext") return { html: `<plaintext${attributes}>${inner}`, stop: true };
+  return { html: `<${node.tag}${attributes}>${lead}${inner}</${node.tag}>`, stop: false };
+}
+
+function serializeList(proposal, ids, rawText = false, foreign = false) {
+  let html = "";
+  for (const id of ids) {
+    const part = serializeNode(proposal, id, rawText, foreign);
+    html += part.html;
+    if (part.stop) return { html, stop: true };
+  }
+  return { html, stop: false };
 }
 
 export function proposalToHtml(proposal) {
   const links = proposal.resources.filter((resource) => resource.kind === "stylesheet" && resource.nodeId === undefined)
     .map((resource) => `<link rel="stylesheet" href="${escapeAttribute(resource.uri)}">`);
   const styles = proposal.stylesheets.map((sheet) => `<style>${sheet.cssText}</style>`);
-  const html = [...links, ...styles, ...proposal.rootIds.map((id) => serializeNode(proposal, id))].join("");
-  const end = html.indexOf(PLAINTEXT_END);
-  return end < 0 ? html : html.slice(0, end);
+  return [...links, ...styles].join("") + serializeList(proposal, proposal.rootIds).html;
 }
 
 // What an import means, without ids or source bindings: the tree, the stylesheets in

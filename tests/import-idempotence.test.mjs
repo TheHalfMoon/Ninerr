@@ -34,22 +34,33 @@ const zeroSecurity = (proposal) => Object.values(proposal.security).every((count
 // <textarea> and <listing>, and <plaintext>, which has no end tag (everything after it
 // is its text).
 const LEADING_LF = new Set(["pre", "textarea", "listing"]);
+const HTML_NS = "http://www.w3.org/1999/xhtml";
+// The source normalized as above, or null when no HTML string expresses its parse. A
+// <plaintext> takes everything after its start tag as text, so a parsed one is expressible
+// only when it holds text alone and nothing follows it in document order (#132); then the
+// end tags its serialization adds after it are cut.
 function normalized(html) {
   const tree = parseFragment(html);
+  const order = [];
   const pending = [tree];
   while (pending.length > 0) {
     const node = pending.pop();
+    order.push(node);
     const first = node.childNodes?.[0];
-    if (LEADING_LF.has(node.tagName) && node.namespaceURI === "http://www.w3.org/1999/xhtml" && first?.nodeName === "#text" && first.value.startsWith("\n")) first.value = `\n${first.value}`;
-    pending.push(...(node.content?.childNodes ?? []), ...(node.childNodes ?? []));
+    if (LEADING_LF.has(node.tagName) && node.namespaceURI === HTML_NS && first?.nodeName === "#text" && first.value.startsWith("\n")) first.value = `\n${first.value}`;
+    pending.push(...[...(node.childNodes ?? [])].reverse(), ...[...(node.content?.childNodes ?? [])].reverse());
   }
+  const at = order.findIndex((node) => node.tagName === "plaintext" && node.namespaceURI === HTML_NS);
+  if (at < 0) return serialize(tree);
+  const plaintext = order[at];
+  const after = order.slice(at + 1);
+  if (after.some((node) => node.nodeName !== "#text" || node.parentNode !== plaintext)) return null;
   const out = serialize(tree);
-  const plaintext = out.lastIndexOf("</plaintext>");
-  return /<plaintext[\s>]/u.test(out) && plaintext >= 0 ? out.slice(0, plaintext) : out;
+  return out.slice(0, out.lastIndexOf("</plaintext>"));
 }
 function representable(html) {
   const once = normalized(html);
-  return normalized(once) === once;
+  return once !== null && normalized(once) === once;
 }
 
 // Why re-importing `html` is not a fixpoint, or null.
@@ -98,7 +109,7 @@ test("realistic pages re-import to themselves", () => {
 
 // Seeded generated markup over context-sensitive tags (tables, forms, SVG and MathML,
 // templates, select, raw-text elements) with hostile attributes and text.
-const TAGS = ["div", "span", "p", "a", "i", "img", "svg", "table", "tbody", "tr", "td", "caption", "ul", "ol", "li", "dl", "dt", "dd", "b", "nobr", "button", "label", "input", "select", "option", "optgroup", "textarea", "template", "form", "h1", "h2", "h3", "pre", "listing", "br", "noscript", "xmp", "title", "desc", "math", "mi", "foreignobject", "circle", "use", "style", "meta", "link", "script", "iframe", "object", "marquee"];
+const TAGS = ["div", "span", "p", "a", "i", "img", "svg", "table", "tbody", "tr", "td", "caption", "ul", "ol", "li", "dl", "dt", "dd", "b", "nobr", "button", "label", "input", "select", "option", "optgroup", "textarea", "template", "form", "h1", "h2", "h3", "pre", "listing", "br", "noscript", "xmp", "title", "desc", "math", "mi", "foreignobject", "circle", "use", "style", "meta", "link", "script", "iframe", "object", "marquee", "plaintext"];
 const ATTRS = ["class", "id", "title", "href", "src", "style", "alt", "data-x", "onclick", "viewbox", "fill", "name", "value", "type", "xlink:href", "srcset", "action", "formaction"];
 const VALUES = ["a", "b c", "#frag", "https://example.com/x.png", "javascript:alert(1)", "color:red", "color: red; background:url(x)", "&amp;", "&quot;q&quot;", "&lt;b&gt;", "x&amp;y", "/rel/path", "data:text/html,x"];
 const TEXTS = ["hi", " ", "  x  ", "&amp;", "&lt;", "&gt;", "&lt;b&gt;", "&nbsp;", "a\nb", "\t", "{}", "'", "\"", "\nlead", "\n\nlead"];
@@ -166,7 +177,9 @@ test("the string shrinker reports a minimal failing input", () => {
 });
 
 test("only inputs whose own parse is unrepresentable are out of scope", () => {
-  for (const html of ["<a><table><a>x</a></table></a>", "<a><b><table><a>x", "<button><table><button>x</button></table></button>", "<div><a>x<table><form></form></table></div>q<table><a>y</a></table>"]) {
+  // A <plaintext> holding an element (formatting reopened inside it), or followed by anything
+  // (foster-parented before a table), has no HTML string either (#132).
+  for (const html of ["<a><table><a>x</a></table></a>", "<a><b><table><a>x", "<button><table><button>x</button></table></button>", "<div><a>x<table><form></form></table></div>q<table><a>y</a></table>", "<p><b><plaintext>m", "<table><plaintext>x</table>", "<table><tr><td>a</td></tr><plaintext>x"]) {
     assert.equal(representable(html), false, html);
   }
   // Expressible nestings, foreign nesting and the shapes the review found are in scope.
@@ -214,4 +227,14 @@ test("an unwrapped form's attributes are counted, and a foreign link is dropped"
   // Every attribute an unwrapped form carried is counted as the <div> path would count it.
   const counted = importHtmlSnapshot(request(), "<svg><form xml:base=\"https://evil.test/\" href=\"javascript:x()\" style=\"background:url(x)\" srcset=\"a 1x\" onclick=\"y()\"><circle></circle></form></svg>");
   assert.deepEqual([counted.security.dangerousUrlsRemoved, counted.security.unsafeStylesRemoved, counted.security.eventHandlersRemoved], [3, 1, 1]);
+});
+
+test("text that looks like the serializer's old stop marker re-imports exactly (#132)", () => {
+  // The serializer once cut its output at a private-use marker; imported text holding that
+  // sequence was truncated. It stops by signal now.
+  const marker = String.fromCodePoint(0xe000) + "plaintext-end" + String.fromCodePoint(0xe000);
+  for (const html of [`<p>a${marker}b</p>`, `<p>a${marker}b</p><plaintext>raw`]) {
+    assert.equal(representable(html), true, JSON.stringify(html));
+    assertFixpoint(html, JSON.stringify(html));
+  }
 });
