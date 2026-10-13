@@ -1,5 +1,5 @@
 import { validateImportProposal, type ImportNode, type ImportProposal } from "@ninerr/import-stack";
-import { SEMANTIC_ROLES, type SemanticRecord, type SemanticReport, type SemanticRole } from "./types.ts";
+import { SEMANTIC_ROLES, type RemovingRole, type SemanticRecord, type SemanticReport, type SemanticRole } from "./types.ts";
 
 const ROLE_SET: ReadonlySet<string> = new Set(SEMANTIC_ROLES);
 const PRESENTATIONAL = new Set(["presentation", "none"]);
@@ -43,7 +43,7 @@ function nativeRole(node: ImportNode, linkNodes: ReadonlySet<string>, context: W
     return { role: "img", source: "tag:img" };
   }
   if (node.kind !== "element" || node.tag === undefined) return null;
-  const tag = node.tag.toLowerCase();
+  const tag = asciiLower(node.tag);
   const heading = /^h([1-6])$/u.exec(tag);
   if (heading) return { role: "heading", source: `tag:${tag}`, level: Number(heading[1]) };
   switch (tag) {
@@ -104,10 +104,11 @@ function headingLevel(node: ImportNode, fallback: number | undefined): number | 
 /**
  * Derive web semantics from markup only, walking the tree in document order so scoping and
  * list membership are known. Every record is OBSERVED evidence with its source. The first
- * allow-listed token of an ARIA role list overrides native semantics (recorded as an
- * override); presentational roles remove semantics, and `article` removes them while scoping
- * header/footer; unknown tokens are reported and never applied. Grain 6 removes <form> elements, so a form landmark can only come from an
- * explicit role="form".
+ * allow-listed token of an ARIA role list overrides native semantics; presentational roles
+ * remove them, and `article` removes them while scoping header/footer. Each replacement or
+ * removal of a native role is recorded as an override. Unknown tokens are reported and never
+ * applied. Grain 6 removes <form> elements, so a form landmark can only come from an explicit
+ * role="form".
  */
 export function inferSemantics(proposalInput: ImportProposal): SemanticReport {
   const proposal = validateImportProposal(proposalInput);
@@ -142,6 +143,8 @@ export function inferSemantics(proposalInput: ImportProposal): SemanticReport {
         unknownRoles.push({ nodeId: id, role: token.slice(0, 64) });
       }
       if (chosen !== undefined && (PRESENTATIONAL.has(chosen) || SCOPING_ARIA_TOKENS.has(chosen))) {
+        // Removing native semantics is an override a reviewer must see, like replacing them (#89).
+        if (native) overrides.push({ nodeId: id, native: native.role, aria: chosen as RemovingRole });
         role = null;
         ariaScopes = SCOPING_ARIA_TOKENS.has(chosen);
       } else if (chosen !== undefined) {
@@ -162,7 +165,7 @@ export function inferSemantics(proposalInput: ImportProposal): SemanticReport {
       if (role === "img") record.hasAlt = Object.hasOwn(node.attributes, "alt");
       records.push(record);
     }
-    const tag = node.tag?.toLowerCase();
+    const tag = node.tag === undefined ? undefined : asciiLower(node.tag);
     const childContext: WalkContext = {
       scoped: context.scoped || ariaScopes || (tag !== undefined && SCOPING_TAGS.has(tag)) || (role !== null && SCOPING_ROLES.has(role)),
       parentRole: role,
