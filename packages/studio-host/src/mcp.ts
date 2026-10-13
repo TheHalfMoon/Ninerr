@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
+import { textLayerOf } from "@ninerr/document-model";
 import { exportJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
@@ -226,12 +227,14 @@ const TOOLS: Tool[] = [
   {
     name: "set_text",
     title: "Set text",
-    description: "Replace a layer's text.",
+    description: "Replace a layer's text. For an element whose only content is a text layer, that layer's text.",
     inputSchema: object({ nodeId: { type: "string" }, text: { type: "string", maxLength: 100000 } }, ["nodeId", "text"]),
     run: ({ session, edit }, args) => {
       const node = nodeOf(session, args.nodeId);
       if (typeof args.text !== "string") throw new ToolError("text must be a string");
-      return edit([{ type: "set-props", nodeId: node.id, set: { text: args.text } }], "Set text");
+      // The words a person sees: an element's own text, or its only text layer's (#235).
+      const target = textLayerOf(session.document, node.id) ?? node.id;
+      return edit([{ type: "set-props", nodeId: target, set: { text: args.text } }], "Set text");
     },
   },
   {
