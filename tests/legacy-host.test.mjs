@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { AgentRegistry, CodebaseLinks, resolveProjectsFolder, startStudioHost } from "../packages/studio-host/src/index.ts";
+import { writeTrustedFile } from "../packages/studio-host/src/trusted-file.ts";
 
 // N0-G2 (#190): the host files from before the rename keep working. Registries are read
 // when no Ninerr file exists, saved under the Ninerr name, and never changed; a legacy
@@ -19,7 +20,8 @@ const owner = { actorId: "person-1", kind: "user", accessClass: "member", displa
 const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), "ninerr-legacy-host-")));
 const LEGACY_TOKEN = `lilac_agent_${"A".repeat(43)}`;
 const LEGACY_AGENT = { agentId: "agent-00000000-0000-4000-8000-000000000001", displayName: "Old agent", tokenSha256: createHash("sha256").update(LEGACY_TOKEN, "utf8").digest("hex"), createdAt: AT };
-const writeOwnerOnly = (path, text) => writeFileSync(path, text, { mode: 0o600 });
+// A file only this user can change: owner-only on POSIX, a private access list on Windows (#268).
+const writeOwnerOnly = (path, text) => writeTrustedFile(path, text);
 
 function withRoot(callback) {
   const root = scratch();

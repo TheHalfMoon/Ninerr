@@ -205,6 +205,17 @@ function showReopen(message) {
 
 // ---------- agents and their confirmations ----------
 
+// Why the list of connected agents cannot be used, in the words its cause needs.
+function agentsProblem(listing) {
+  if (listing.problemCode === "agents-newer") {
+    return el("p", { class: "error" }, "The list of connected agents was saved by a newer version of Ninerr. It is left unchanged, so no agent can connect here until that version opens this projects folder again.");
+  }
+  if (listing.problemCode === "agents-unavailable") {
+    return el("p", { class: "error" }, `The list of connected agents could not be read just now (${listing.problem}). It is left unchanged; start Ninerr again to use it.`);
+  }
+  return el("p", { class: "error" }, `The list of connected agents could not be read (${listing.problem}), so none is connected. Connect them again.`);
+}
+
 async function openAgentsDialog() {
   let listing = { agents: [], mcpUrl: "" };
   let loadError = null;
@@ -217,9 +228,7 @@ async function openAgentsDialog() {
   showDialog("Agents", (close) => {
     const error = el("p", { class: "error", role: "alert" });
     const name = el("input", { id: "agent-name", name: "agentName", autocomplete: "off", maxlength: 60 });
-    const problem = !listing.problem ? null : listing.problemCode === "agents-newer"
-      ? el("p", { class: "error" }, "The list of connected agents was saved by a newer version of Ninerr. It is left unchanged, so no agent can connect here until that version opens this projects folder again.")
-      : el("p", { class: "error" }, `The list of connected agents could not be read (${listing.problem}), so none is connected. Connect them again.`);
+    const problem = !listing.problem ? null : agentsProblem(listing);
     const list = listing.agents.length === 0
       ? el("p", {}, loadError ?? "No agents are connected. A connected agent can read and edit the open project through MCP; every change it makes is attributed to it and can be undone, and it must ask you before deleting anything.")
       : el("ul", { class: "project-list", "aria-label": "Connected agents" }, listing.agents.map((agent) => el("li", { class: "agent-row" },
@@ -559,6 +568,8 @@ function planSummary(plan) {
 // and write a component's edits back to its file after previewing them (PC11).
 function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, project }) {
   const section = el("section", { id: "codebase", "aria-labelledby": "codebase-title" }, el("h3", { id: "codebase-title" }, "Codebase"));
+  // Links set aside as untrusted, or kept unread for now, are said, not dropped silently (#268).
+  if (codebase?.problem) section.append(el("p", { class: "error", role: "status" }, `The saved codebase links could not be used: ${codebase.problem}`));
   const busy = (button, task) => async () => {
     error.textContent = "";
     button.disabled = true;

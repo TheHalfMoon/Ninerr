@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { chmodSync, closeSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StudioError } from "./errors.ts";
+import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
 import { LEGACY_AGENT_REGISTRY_FILE, LEGACY_AGENT_TOKEN_PREFIX, existing, registrySource } from "./legacy.ts";
 import type { StudioActor } from "./session.ts";
 
@@ -86,6 +87,9 @@ export class AgentRegistry {
       // A newer Ninerr's registry is kept as it is. A legacy file is never written by a newer
       // Ninerr, so a "newer" legacy registry is only ignored, like a damaged one.
       if (error instanceof StudioError && error.code === "agents-newer" && !source.legacy) this.#newer = error;
+      // A registry that could not be read just now is kept as it is, the same way (#268).
+      // That holds for a legacy registry too, which must not be skipped by a first save (#268).
+      if (error instanceof StudioError && error.code === "agents-unavailable") this.#newer = error;
       // A damaged registry must not stop Ninerr: it is set aside (kept for inspection) and
       // every agent has to be connected again. Failing closed means no agent gets access.
       // A damaged legacy registry is only ignored; it is not ours to move.
@@ -181,40 +185,30 @@ export class AgentRegistry {
   }
 
   #writeRegistry(next: AgentRecord[]): void {
-    const temporary = `${this.#path}.${randomUUID()}.tmp`;
     try {
-      const fd = openSync(temporary, "wx", 0o600);
-      try {
-        writeSync(fd, `${JSON.stringify({ version: REGISTRY_VERSION, agents: next }, null, 2)}\n`);
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      chmodSync(temporary, 0o600);
-      renameSync(temporary, this.#path);
+      writeTrustedFile(this.#path, `${JSON.stringify({ version: REGISTRY_VERSION, agents: next }, null, 2)}\n`);
     } catch {
-      rmSync(temporary, { force: true });
       throw new StudioError(500, "agents-unwritable", "the agent registry could not be saved");
     }
   }
 }
 
 function readRegistry(path: string): AgentRecord[] {
-  let entry;
+  // Only a small regular file this user owns, and that no one else can change, is trusted as
+  // the registry (#268): on Windows its owner and access list are checked too.
+  let bytes;
   try {
-    entry = lstatSync(path);
-  } catch {
-    return [];
+    bytes = readTrustedFile(path, 256 * 1024);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    // Not readable just now (another program holds it): kept as it is, not set aside.
+    if (error instanceof TrustedFileUnavailableError) throw new StudioError(503, "agents-unavailable", `the agent registry could not be read just now, so no agent can connect and the agent list cannot be changed until Ninerr is started again: ${reason}`);
+    throw new StudioError(500, "agents-unreadable", `the agent registry is not trusted: ${reason}`);
   }
-  // A link or anything but a small regular file is not trusted as the registry.
-  if (!entry.isFile() || entry.size > 256 * 1024) throw new StudioError(500, "agents-unreadable", "the agent registry is not a regular file");
-  // Only a registry this user owns, and that no one else can write, is trusted.
-  if (typeof process.getuid === "function" && (entry.uid !== process.getuid() || (entry.mode & 0o022) !== 0)) {
-    throw new StudioError(500, "agents-unreadable", "the agent registry is not owned by this user or is writable by others");
-  }
+  if (bytes === null) return [];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw new StudioError(500, "agents-unreadable", "the agent registry is not valid JSON");
   }

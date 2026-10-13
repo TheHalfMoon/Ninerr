@@ -23,7 +23,7 @@ npm ci --ignore-scripts
 npm start
 ```
 
-`npm start` runs the studio host and prints a link to the editor. Projects live in a "Ninerr Projects" folder in your home folder unless `NINERR_PROJECTS` or `npm start -- --projects <folder>` names another. `docs/DESKTOP.md` covers the projects folder and settings from earlier versions, and `docs/MIGRATION.md` covers converting older projects.
+`npm start` runs the studio host and prints a link to the editor. Projects live in a "Ninerr Projects" folder in your home folder unless `NINERR_PROJECTS` or `npm start -- --projects <folder>` names another. The projects folder must be one only you can change (on Windows, on NTFS, outside OneDrive's online-only files): `docs/DESKTOP.md` says why, and covers the projects folder and settings from earlier versions, and `docs/MIGRATION.md` covers converting older projects.
 
 To connect an MCP client, run `npm run mcp`, with the agent credential Ninerr shows you set as `NINERR_MCP_TOKEN`.
 
