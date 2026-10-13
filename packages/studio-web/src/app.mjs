@@ -1263,7 +1263,7 @@ function buildLayerItem(id, level, selected = new Set(state.selection)) {
     "aria-selected": selected.has(id) ? "true" : "false",
     "aria-expanded": expanded === null ? null : String(expanded),
     tabindex: id === state.focusedLayer ? "0" : "-1",
-  }, el("span", { class: "row", style: `padding-left:${6 + (level - 1) * 14}px` },
+  }, el("span", { class: "row", draggable: "true", style: `padding-left:${6 + (level - 1) * 14}px` },
     el("span", { class: "twisty", "aria-hidden": "true" }, expanded === null ? "" : expanded ? "▾" : "▸"),
     el("span", { class: "label" }, layerLabel(node))));
   if (expanded) item.append(el("ul", { role: "group", class: "children" }, node.children.filter((child) => doc.nodes[child]).map((child) => buildLayerItem(child, level + 1, selected))));
@@ -1377,6 +1377,11 @@ function onLayersKey(event) {
     event.preventDefault();
     event.stopPropagation();
   };
+  if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.startsWith("Arrow")) {
+    handled();
+    moveByKey(current.id, event.key);
+    return;
+  }
   switch (event.key) {
     case "ArrowDown":
       handled();
@@ -1426,6 +1431,190 @@ function onLayersKey(event) {
       break;
     default:
   }
+}
+
+// ---------- moving and grouping layers (P09) ----------
+
+/** Where `id` sits: its parent (null for a page) and its index among its siblings. */
+function placeOf(doc, id) {
+  const parentId = doc.nodes[id].parentId ?? null;
+  const siblings = parentId === null ? doc.rootIds : doc.nodes[parentId].children;
+  return { parentId, index: siblings.indexOf(id), siblings };
+}
+
+/**
+ * Why moving `id` under `parentId` is refused, or null. Pages stay at the top and layers
+ * stay on pages; nothing goes inside a text layer or inside itself.
+ */
+function moveProblem(doc, id, parentId) {
+  const isPage = (doc.nodes[id].parentId ?? null) === null;
+  if (isPage && parentId !== null) return "A page stays at the top level.";
+  if (!isPage && parentId === null) return "A layer stays on a page.";
+  if (parentId === null) return null;
+  if (doc.nodes[parentId].type === "text") return "A text layer holds no other layers.";
+  for (let cursor = parentId; cursor !== null && cursor !== undefined; cursor = doc.nodes[cursor]?.parentId ?? null) {
+    if (cursor === id) return "A layer cannot go inside itself.";
+  }
+  return null;
+}
+
+/** Move `id` to `index` under `parentId` (counted after it leaves its place), as one change. */
+function moveLayer(id, parentId, index, intent) {
+  const doc = state.document;
+  const problem = moveProblem(doc, id, parentId);
+  if (problem !== null) {
+    setStatus(problem);
+    return Promise.resolve(null);
+  }
+  const from = placeOf(doc, id);
+  if (from.parentId === parentId && from.index === index) return Promise.resolve(null);
+  return commit([{ type: "move-node", nodeId: id, parentId, index }], intent).then((event) => {
+    if (event !== null) focusLayer(id);
+    return event;
+  });
+}
+
+function moveByKey(id, key) {
+  const doc = state.document;
+  if (doc === null) return;
+  const { parentId, index, siblings } = placeOf(doc, id);
+  if (key === "ArrowUp") {
+    if (index === 0) setStatus("This layer is already first among its siblings.");
+    else moveLayer(id, parentId, index - 1, "Move layer up");
+  } else if (key === "ArrowDown") {
+    if (index === siblings.length - 1) setStatus("This layer is already last among its siblings.");
+    else moveLayer(id, parentId, index + 1, "Move layer down");
+  } else if (key === "ArrowRight") {
+    // Into the layer above it, as its last child.
+    if (index === 0) setStatus("There is no layer above this one to move it into.");
+    else {
+      const into = siblings[index - 1];
+      moveLayer(id, into, doc.nodes[into].children.length, "Move layer into the layer above");
+    }
+  } else if (key === "ArrowLeft") {
+    // Out of its parent, just after it.
+    if (parentId === null) setStatus("A page stays at the top level.");
+    else {
+      const outer = placeOf(doc, parentId);
+      moveLayer(id, outer.parentId, outer.index + 1, "Move layer out of its parent");
+    }
+  }
+}
+
+/** Group the selected layers (or the focused one) in a new layer where the first of them was. */
+function groupSelection() {
+  const doc = state.document;
+  if (doc === null) return Promise.resolve(null);
+  const chosen = new Set(state.selection.length > 0 ? state.selection : state.focusedLayer === null ? [] : [state.focusedLayer]);
+  // A selected layer inside another selected one moves with it; in the tree's order.
+  const order = [];
+  const walk = (ids) => {
+    for (const id of ids) {
+      if (!doc.nodes[id]) continue;
+      if (chosen.has(id)) order.push(id);
+      else walk(doc.nodes[id].children);
+    }
+  };
+  walk(doc.rootIds);
+  if (order.length === 0) {
+    setStatus("Select the layers to group.");
+    return Promise.resolve(null);
+  }
+  const { parentId, index } = placeOf(doc, order[0]);
+  if (parentId === null || order.some((id) => (doc.nodes[id].parentId ?? null) === null)) {
+    setStatus("Pages are not grouped; select layers on a page.");
+    return Promise.resolve(null);
+  }
+  const groupId = newId("group");
+  // Positioned layers keep their place in a group that fills the parent; others flow in it.
+  const positioned = order.every((id) => doc.nodes[id].props?.style?.position === "absolute");
+  const operations = insertNode(parentId, index, positioned
+    ? { id: groupId, type: "element", tag: "div", style: { position: "absolute", left: "0px", top: "0px", width: "100%", height: "100%" } }
+    : { id: groupId, type: "element", tag: "div" });
+  order.forEach((id, at) => operations.push({ type: "move-node", nodeId: id, parentId: groupId, index: at }));
+  const pending = { ids: [groupId], applied: false };
+  state.selectOnApply = pending;
+  return commit(operations, order.length === 1 ? "Group layer" : "Group layers").then((event) => {
+    if (pending.applied) return event;
+    if (event === null) {
+      if (state.selectOnApply === pending) state.selectOnApply = null;
+      return event;
+    }
+    if (state.revision < event.revision) return event;
+    if (state.selectOnApply === pending) state.selectOnApply = null;
+    selectLayers([groupId]);
+    return event;
+  });
+}
+
+// Dragging a row: above its top quarter, before it; below its bottom quarter, after it;
+// otherwise into it.
+let draggedLayer = null;
+
+function dropTarget(event) {
+  const row = event.target.closest?.("[role=treeitem] > .row");
+  if (!row || draggedLayer === null || state.document === null) return null;
+  const targetId = row.parentElement.dataset.nodeId;
+  const doc = state.document;
+  if (!doc.nodes[targetId] || !doc.nodes[draggedLayer]) return null;
+  const box = row.getBoundingClientRect();
+  const y = (event.clientY - box.top) / box.height;
+  const zone = y < 0.25 ? "before" : y > 0.75 ? "after" : "inside";
+  let parentId;
+  let index;
+  if (zone === "inside") {
+    parentId = targetId;
+    index = doc.nodes[targetId].children.filter((child) => child !== draggedLayer).length;
+  } else {
+    const target = placeOf(doc, targetId);
+    parentId = target.parentId;
+    index = target.index + (zone === "after" ? 1 : 0);
+    // Counted after the dragged layer leaves its place.
+    const from = placeOf(doc, draggedLayer);
+    if (from.parentId === parentId && from.index < index) index -= 1;
+  }
+  if (targetId === draggedLayer || moveProblem(doc, draggedLayer, parentId) !== null) return { row, zone, parentId: undefined, index };
+  return { row, zone, parentId, index };
+}
+
+function clearDropMarks() {
+  for (const row of $("layers").querySelectorAll(".drop-before, .drop-after, .drop-inside")) row.classList.remove("drop-before", "drop-after", "drop-inside");
+}
+
+function onLayersDragStart(event) {
+  const item = event.target.closest?.("[role=treeitem]");
+  if (!item || state.document === null) return;
+  draggedLayer = item.dataset.nodeId;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", draggedLayer);
+}
+
+function onLayersDragOver(event) {
+  const target = dropTarget(event);
+  clearDropMarks();
+  if (target === null || target.parentId === undefined) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "move";
+  target.row.classList.add(`drop-${target.zone}`);
+}
+
+function onLayersDrop(event) {
+  const target = dropTarget(event);
+  clearDropMarks();
+  const id = draggedLayer;
+  draggedLayer = null;
+  if (target === null || id === null) return;
+  event.preventDefault();
+  if (target.parentId === undefined) {
+    setStatus(moveProblem(state.document, id, target.zone === "inside" ? target.row.parentElement.dataset.nodeId : placeOf(state.document, target.row.parentElement.dataset.nodeId).parentId) ?? "A layer cannot go there.");
+    return;
+  }
+  moveLayer(id, target.parentId, target.index, target.zone === "inside" ? "Move layer into another" : "Move layer");
+}
+
+function onLayersDragEnd() {
+  draggedLayer = null;
+  clearDropMarks();
 }
 
 function onLayersClick(event) {
@@ -1538,6 +1727,7 @@ function renderToolbar() {
   $("action-insert-box").disabled = !open;
   $("action-insert-text").disabled = !open;
   $("action-delete").disabled = !open || state.selection.length === 0;
+  $("action-group").disabled = !open || state.selection.length === 0;
   $("action-save").disabled = !open;
   $("action-import").disabled = !open;
   $("action-code").disabled = !open;
@@ -1577,6 +1767,9 @@ function onGlobalKey(event) {
   } else if (key === "s") {
     event.preventDefault();
     save();
+  } else if (key === "g" && !event.shiftKey && !event.altKey) {
+    event.preventDefault();
+    groupSelection();
   }
 }
 
@@ -1617,6 +1810,14 @@ async function main() {
   $("action-agents").addEventListener("click", openAgentsDialog);
   $("layers").addEventListener("keydown", onLayersKey);
   $("layers").addEventListener("click", onLayersClick);
+  $("layers").addEventListener("dragstart", onLayersDragStart);
+  $("layers").addEventListener("dragover", onLayersDragOver);
+  $("layers").addEventListener("drop", onLayersDrop);
+  $("layers").addEventListener("dragend", onLayersDragEnd);
+  $("layers").addEventListener("dragleave", (event) => {
+    if (!$("layers").contains(event.relatedTarget)) clearDropMarks();
+  });
+  $("action-group").addEventListener("click", () => groupSelection());
   $("inspector").addEventListener("change", onInspectorChange);
   $("inspector").addEventListener("submit", (event) => event.preventDefault());
   document.addEventListener("keydown", onGlobalKey);
