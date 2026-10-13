@@ -82,6 +82,7 @@ export function readTrustedFile(path: string, maxBytes: number): Buffer | null {
   try {
     const entry = fstatSync(fd);
     if (!entry.isFile()) throw new UntrustedFileError("it is not a regular file");
+    if (entry.nlink > 1) throw new UntrustedFileError(HARD_LINK);
     if (entry.size > maxBytes) throw new UntrustedFileError(`it is larger than ${maxBytes} bytes`);
     if (typeof process.getuid === "function" && entry.uid !== process.getuid()) throw new UntrustedFileError("it is not owned by this user");
     if ((entry.mode & 0o022) !== 0) throw new UntrustedFileError("other accounts may change it");
@@ -121,12 +122,17 @@ function readTrustedWindows(path: string, maxBytes: number): Buffer | null {
     throw new TrustedFileUnavailableError(reason);
   }
   if (read === null) return null;
-  if (!read.regularFile) throw new UntrustedFileError("it is not a regular file (a folder or a link)");
+  if (!read.regularFile) throw new UntrustedFileError("it is not a regular file (a folder, a link or a device)");
+  if (read.links > 1) throw new UntrustedFileError(HARD_LINK);
   if (read.size > maxBytes || read.bytes === null) throw new UntrustedFileError(`it is larger than ${maxBytes} bytes`);
   const problem = windowsTrustProblem(read.security, userSid);
   if (problem !== null) throw new UntrustedFileError(problem);
   return read.bytes;
 }
+
+// A file with a second name is one someone may have linked in from elsewhere: its owner and
+// access list are a file this user owns, not one Ninerr wrote here (from the review of #346).
+const HARD_LINK = "it has another name elsewhere (a hard link)";
 
 /**
  * Replace the trusted file at `path` with `text`, private to this user from the moment it

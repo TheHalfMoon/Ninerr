@@ -95,6 +95,7 @@ process.binding = (name) => {
 // own installed copy, by its exact path; studio-host binds through it only the advapi32.dll and
 // kernel32.dll functions listed in windows-security.ts (a test holds it to them).
 const dlopen = process.dlopen;
+const KOFFI_LIBRARIES = new Set(["advapi32.dll", "kernel32.dll"]);
 const KOFFI = require("node:url").fileURLToPath(new URL(`../../node_modules/@koromix/koffi-${process.platform}-${process.arch}/${process.platform}_${process.arch}/koffi.node`, import.meta.url));
 // Node may name the file with Windows's long-path prefix; paths compare without it, and without
 // case on Windows.
@@ -110,6 +111,17 @@ process.dlopen = (module, filename, ...rest) => {
     allowed = false;
   }
   if (!allowed) throw report(`process.dlopen ${String(filename)}`);
-  return dlopen.call(process, module, filename, ...rest);
+  const loaded = dlopen.call(process, module, filename, ...rest);
+  // Koffi can open any library, a network one too, without process.dlopen: through it, only the
+  // two the native boundary binds may be opened (from the review of #346). Wrapped here, before
+  // Koffi's own loader reads the function.
+  const load = module.exports?.load;
+  if (typeof load === "function") {
+    module.exports.load = (name, ...args) => {
+      if (!KOFFI_LIBRARIES.has(String(name).toLowerCase())) throw report(`koffi.load ${String(name)}`);
+      return load.call(module.exports, name, ...args);
+    };
+  }
+  return loaded;
 };
 syncBuiltinESMExports();

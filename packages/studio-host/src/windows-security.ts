@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { randomBytes } from "node:crypto";
+import { unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 
 // The native boundary to the Windows security API (#268, the founder's decision of 2026-10-13).
@@ -20,8 +21,10 @@ export interface WindowsFileSecurity {
 /** What a trusted read found, before the content is judged. */
 export interface WindowsTrustedRead {
   security: WindowsFileSecurity;
-  /** Whether the opened object is a regular file: not a directory and not a reparse point. */
+  /** Whether the opened object is a regular file on disk: not a directory, a reparse point or a device. */
   regularFile: boolean;
+  /** How many names the file has: more than one is a hard link to it from elsewhere. */
+  links: number;
   size: number;
   bytes: Buffer | null;
 }
@@ -35,6 +38,8 @@ const CREATE_NEW = 1;
 const FILE_ATTRIBUTE_NORMAL = 0x80;
 const FILE_ATTRIBUTE_DIRECTORY = 0x10;
 const FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
+const FILE_ATTRIBUTE_DEVICE = 0x40;
+const FILE_TYPE_DISK = 1;
 const FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
 const FILE_FLAG_WRITE_THROUGH = 0x80000000;
 const FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
@@ -89,6 +94,7 @@ interface Bindings {
   WriteFile: any;
   FlushFileBuffers: any;
   GetFileInformationByHandle: any;
+  GetFileType: any;
   GetSecurityInfo: any;
   GetLengthSid: any;
   IsValidSid: any;
@@ -147,6 +153,7 @@ function bind(): Bindings {
     WriteFile: kernel.func("bool __stdcall WriteFile(NINERR_HANDLE h, const uint8_t *buffer, uint32 size, _Out_ uint32 *written, void *overlapped)"),
     FlushFileBuffers: kernel.func("bool __stdcall FlushFileBuffers(NINERR_HANDLE h)"),
     GetFileInformationByHandle: kernel.func("bool __stdcall GetFileInformationByHandle(NINERR_HANDLE h, _Out_ NINERR_BY_HANDLE_FILE_INFORMATION *info)"),
+    GetFileType: kernel.func("uint32 __stdcall GetFileType(NINERR_HANDLE h)"),
     GetSecurityInfo: advapi.func("uint32 __stdcall GetSecurityInfo(NINERR_HANDLE h, int type, uint32 info, _Out_ void **owner, _Out_ void **group, _Out_ void **dacl, _Out_ void **sacl, _Out_ void **descriptor)"),
     GetLengthSid: advapi.func("uint32 __stdcall GetLengthSid(void *sid)"),
     IsValidSid: advapi.func("bool __stdcall IsValidSid(void *sid)"),
@@ -242,13 +249,15 @@ export function readWithSecurity(path: string, maxBytes: number): WindowsTrusted
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
   try {
-    const info: { attributes?: number; sizeHigh?: number; sizeLow?: number } = {};
+    const info: { attributes?: number; sizeHigh?: number; sizeLow?: number; links?: number } = {};
     if (!api.GetFileInformationByHandle(handle, info)) throw new WindowsSecurityError("GetFileInformationByHandle", api.GetLastError());
     const attributes = info.attributes ?? 0;
-    const regularFile = (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) === 0;
+    // A pipe or device reached through a link in a parent folder is no regular file either.
+    const regularFile = (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DEVICE)) === 0 && api.GetFileType(handle) === FILE_TYPE_DISK;
+    const links = info.links ?? 0;
     const size = (info.sizeHigh ?? 0) * 2 ** 32 + (info.sizeLow ?? 0);
     const security = securityOf(api, handle);
-    if (!regularFile || size > maxBytes) return { security, regularFile, size, bytes: null };
+    if (!regularFile || size > maxBytes) return { security, regularFile, links, size, bytes: null };
     const bytes = Buffer.alloc(size);
     let offset = 0;
     while (offset < size) {
@@ -259,7 +268,7 @@ export function readWithSecurity(path: string, maxBytes: number): WindowsTrusted
       chunk.copy(bytes, offset, 0, read[0]);
       offset += read[0];
     }
-    return { security, regularFile, size, bytes: bytes.subarray(0, offset) };
+    return { security, regularFile, links, size, bytes: bytes.subarray(0, offset) };
   } finally {
     api.CloseHandle(handle);
   }
@@ -291,12 +300,22 @@ export function createPrivateFile(path: string, bytes: Buffer): string {
     const attributes = { nLength: api.securityAttributesSize, lpSecurityDescriptor: descriptor[0], bInheritHandle: 0 };
     const handle = api.CreateFileW(longPath(temporary), GENERIC_WRITE, 0, attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, null);
     if (isInvalid(api, handle)) throw new WindowsSecurityError("CreateFileW", api.GetLastError());
+    let complete = false;
     try {
       const written = [0];
       if (bytes.length > 0 && (!api.WriteFile(handle, bytes, bytes.length, written, null) || written[0] !== bytes.length)) throw new WindowsSecurityError("WriteFile", api.GetLastError());
       if (!api.FlushFileBuffers(handle)) throw new WindowsSecurityError("FlushFileBuffers", api.GetLastError());
+      complete = true;
     } finally {
       api.CloseHandle(handle);
+      // A replacement that could not be written whole is not left behind (from the review of #346).
+      if (!complete) {
+        try {
+          unlinkSync(longPath(temporary));
+        } catch {
+          // Gone already, or held: the write's own error is the one to report.
+        }
+      }
     }
     return temporary;
   } finally {

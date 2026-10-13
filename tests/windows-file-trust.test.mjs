@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,7 +87,7 @@ test("the native boundary binds only advapi32.dll and kernel32.dll, and starts n
   const source = readFileSync(new URL("../packages/studio-host/src/windows-security.ts", import.meta.url), "utf8");
   assert.deepEqual([...source.matchAll(/koffi\.load\("([^"]+)"\)/gu)].map((match) => match[1]).sort(), ["advapi32.dll", "kernel32.dll"]);
   const bound = [...source.matchAll(/(?:advapi|kernel)\.func\("[^"(]*?(\w+)\(/gu)].map((match) => match[1]).sort();
-  assert.deepEqual(bound, ["CloseHandle", "ConvertStringSecurityDescriptorToSecurityDescriptorW", "CreateFileW", "FlushFileBuffers", "GetAce", "GetAclInformation", "GetCurrentProcess", "GetFileInformationByHandle", "GetLastError", "GetLengthSid", "GetSecurityInfo", "GetTokenInformation", "IsValidSid", "LocalFree", "OpenProcessToken", "ReadFile", "WriteFile"]);
+  assert.deepEqual(bound, ["CloseHandle", "ConvertStringSecurityDescriptorToSecurityDescriptorW", "CreateFileW", "FlushFileBuffers", "GetAce", "GetAclInformation", "GetCurrentProcess", "GetFileInformationByHandle", "GetFileType", "GetLastError", "GetLengthSid", "GetSecurityInfo", "GetTokenInformation", "IsValidSid", "LocalFree", "OpenProcessToken", "ReadFile", "WriteFile"]);
   for (const file of ["windows-security.ts", "trusted-file.ts"]) {
     assert.doesNotMatch(readFileSync(new URL(`../packages/studio-host/src/${file}`, import.meta.url), "utf8"), /child_process|spawn|execFile|icacls|whoami|powershell/iu, file);
   }
@@ -216,7 +216,7 @@ test("a link, junction or folder in the trusted file's place is refused, and lon
   const target = join(root, "target");
   mkdirSync(target);
   symlinkSync(target, join(root, ".ninerr-studio.json"), "junction");
-  assert.throws(() => readTrustedFile(join(root, ".ninerr-studio.json"), 1024), /not a regular file \(a folder or a link\)/u);
+  assert.throws(() => readTrustedFile(join(root, ".ninerr-studio.json"), 1024), /not a regular file \(a folder, a link or a device\)/u);
   mkdirSync(join(root, ".ninerr-agents.json"));
   assert.throws(() => readTrustedFile(join(root, ".ninerr-agents.json"), 1024), /not a regular file/u);
   // Past Windows's 260-character path limit.
@@ -279,4 +279,14 @@ test("links set aside as untrusted end the legacy links' import: removed links c
   writeTrustedFile(join(root, LEGACY_CODEBASE_LINKS_FILE), JSON.stringify({ version: 1, links: { site: root } }));
   writeFileSync(join(root, ".ninerr-codebases.json.unreadable-1"), "{}");
   assert.equal(new CodebaseLinks(root).get("site"), null);
+}));
+
+test("a hard link to a file elsewhere is refused, though this user owns it", () => withFolder((root) => {
+  // A file of this user's, private and Ninerr-written, given a second name in the projects folder.
+  const elsewhere = join(root, "elsewhere.json");
+  writeTrustedFile(elsewhere, "{\"version\":1}");
+  assert.equal(readTrustedFile(elsewhere, 1024).toString(), "{\"version\":1}");
+  linkSync(elsewhere, join(root, ".ninerr-studio.json"));
+  assert.throws(() => readTrustedFile(join(root, ".ninerr-studio.json"), 1024), /another name elsewhere \(a hard link\)/u);
+  assert.throws(() => readTrustedFile(elsewhere, 1024), /hard link/u, "both names are refused");
 }));
