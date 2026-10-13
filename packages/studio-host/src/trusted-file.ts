@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, closeSync, constants, fstatSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeSync } from "node:fs";
-import { createPrivateFile, currentUserSid, FileBusyError, readWithSecurity, type WindowsFileSecurity } from "./windows-security.ts";
+import { createPrivateFile, currentUserSid, FileBusyError, readWithSecurity, WindowsSecurityError, type WindowsFileSecurity } from "./windows-security.ts";
 
 // The files in the projects folder that Ninerr trusts: the relay discovery file, which tells an
 // MCP relay where to send an agent's credential; the agent registry; and the codebase links. A
@@ -75,6 +75,8 @@ export function readTrustedFile(path: string, maxBytes: number): Buffer | null {
     // Only a file held by another program right now is worth trying again later; a file
     // this user cannot open at all is not trusted, and is set aside like one.
     if (code === "EAGAIN" || code === "EBUSY") throw new TrustedFileUnavailableError(`it is in use by another program (${code})`);
+    // Nor is a shortage of the system's own resources any evidence against the file.
+    if (code === "EMFILE" || code === "ENFILE" || code === "EIO" || code === "ENOMEM") throw new TrustedFileUnavailableError(`it could not be opened just now (${code})`);
     throw new UntrustedFileError(`it could not be opened (${code ?? "unknown error"})`);
   }
   try {
@@ -97,15 +99,26 @@ export function readTrustedFile(path: string, maxBytes: number): Buffer | null {
 }
 
 function readTrustedWindows(path: string, maxBytes: number): Buffer | null {
-  let read;
+  // Who this process runs as, first: when Ninerr cannot tell (the native boundary or a system DLL failed to
+  // load, the process token could not be read), nothing about the file is known, and it is
+  // kept, not set aside.
   let userSid;
   try {
-    read = readWithSecurity(path, maxBytes);
     userSid = currentUserSid();
   } catch (error) {
+    throw new TrustedFileUnavailableError(`Ninerr could not read which account it runs as, so it cannot check the file (${error instanceof Error ? error.message : String(error)})`);
+  }
+  let read;
+  try {
+    read = readWithSecurity(path, maxBytes);
+  } catch (error) {
     const reason = `its owner and access list could not be read (${error instanceof Error ? error.message : String(error)})`;
-    // Only a file held by another program right now is worth trying again later.
-    throw error instanceof FileBusyError ? new TrustedFileUnavailableError(reason) : new UntrustedFileError(reason);
+    // A file held by another program right now is worth trying again later; any other error
+    // the system reports on the file itself (access denied, a file system without security)
+    // leaves it unproven, and so not trusted. An error of Ninerr's own is no evidence either way.
+    if (error instanceof FileBusyError) throw new TrustedFileUnavailableError(reason);
+    if (error instanceof WindowsSecurityError) throw new UntrustedFileError(reason);
+    throw new TrustedFileUnavailableError(reason);
   }
   if (read === null) return null;
   if (!read.regularFile) throw new UntrustedFileError("it is not a regular file (a folder or a link)");

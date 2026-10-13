@@ -242,3 +242,40 @@ test("on POSIX a link, a file of another owner or one others can write is refuse
   execFileSync("mkfifo", [join(root, "fifo.json")]);
   assert.throws(() => readTrustedFile(join(root, "fifo.json"), 1024), /not a regular file/u);
 }));
+
+test("a registry this user cannot read is not trusted: it is reported, not used", onWindows, async () => withFolder(async (root) => {
+  const { setAccessList } = await import("./support/windows-acl.mjs");
+  const path = join(root, ".ninerr-agents.json");
+  writeTrustedFile(path, JSON.stringify({ version: 1, agents: [] }));
+  // Another account could leave a file this user may not read (only SYSTEM listed here).
+  setAccessList(path, "D:P(A;;FA;;;SY)");
+  try {
+    const registry = new AgentRegistry(root, "test");
+    assert.match(registry.problem ?? "", /not trusted: its owner and access list could not be read \(CreateFileW failed \(Windows error 5\)\)/u);
+    assert.notEqual(registry.problemCode, "agents-unavailable", "not merely busy");
+  } finally {
+    setAccessList(path, `D:P(A;;FA;;;${currentUserSid()})`);
+  }
+}));
+
+test("a busy legacy registry blocks saves too, so its import is never skipped", onWindows, () => withFolder((root) => {
+  const legacy = join(root, ".lilac-agents.json");
+  writeTrustedFile(legacy, `${JSON.stringify({ version: 1, agents: [] })}\n`);
+  const held = openSync(legacy, "r+");
+  let busy;
+  try {
+    busy = new AgentRegistry(root, "test");
+  } finally {
+    closeSync(held);
+  }
+  assert.equal(busy.problemCode, "agents-unavailable");
+  assert.throws(() => busy.create("Early", "2026-10-13T00:00:00.000Z"), /could not be read just now/u);
+  assert.equal(existsSync(join(root, ".ninerr-agents.json")), false, "no Ninerr registry was written past the legacy one");
+}));
+
+test("links set aside as untrusted end the legacy links' import: removed links cannot come back", async () => withFolder(async (root) => {
+  // Legacy links from before the rename, and a Ninerr links file set aside earlier.
+  writeTrustedFile(join(root, ".lilac-codebases.json"), JSON.stringify({ version: 1, links: { site: root } }));
+  writeFileSync(join(root, ".ninerr-codebases.json.unreadable-1"), "{}");
+  assert.equal(new CodebaseLinks(root).get("site"), null);
+}));
