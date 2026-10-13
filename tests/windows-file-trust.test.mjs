@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { AgentRegistry, CodebaseLinks, discoverMcpUrl, startStudioHost } from "../packages/studio-host/src/index.ts";
 import { readTrustedFile, UntrustedFileError, windowsTrustProblem, writeTrustedFile } from "../packages/studio-host/src/trusted-file.ts";
 import { currentUserSid, formatSid, longPath, privateSddl, readWithSecurity } from "../packages/studio-host/src/windows-security.ts";
+import { LEGACY_AGENT_REGISTRY_FILE, LEGACY_CODEBASE_LINKS_FILE } from "../packages/studio-host/src/legacy.ts";
 
 // #268, the founder's decision of 2026-10-13: Ninerr trusts the files in its projects folder
 // that steer an agent's credential (the relay's discovery file), list the agents, or link
@@ -259,7 +260,7 @@ test("a registry this user cannot read is not trusted: it is reported, not used"
 }));
 
 test("a busy legacy registry blocks saves too, so its import is never skipped", onWindows, () => withFolder((root) => {
-  const legacy = join(root, ".lilac-agents.json");
+  const legacy = join(root, LEGACY_AGENT_REGISTRY_FILE);
   writeTrustedFile(legacy, `${JSON.stringify({ version: 1, agents: [] })}\n`);
   const held = openSync(legacy, "r+");
   let busy;
@@ -275,7 +276,7 @@ test("a busy legacy registry blocks saves too, so its import is never skipped", 
 
 test("links set aside as untrusted end the legacy links' import: removed links cannot come back", async () => withFolder(async (root) => {
   // Legacy links from before the rename, and a Ninerr links file set aside earlier.
-  writeTrustedFile(join(root, ".lilac-codebases.json"), JSON.stringify({ version: 1, links: { site: root } }));
+  writeTrustedFile(join(root, LEGACY_CODEBASE_LINKS_FILE), JSON.stringify({ version: 1, links: { site: root } }));
   writeFileSync(join(root, ".ninerr-codebases.json.unreadable-1"), "{}");
   assert.equal(new CodebaseLinks(root).get("site"), null);
 }));
