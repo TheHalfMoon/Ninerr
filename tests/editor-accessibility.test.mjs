@@ -106,6 +106,10 @@ test("every editor state audits clean, with the colours actually painted", brows
     await audit(page, "the approval dialog");
     await page.locator("#dialog[open] button", { hasText: "Decline" }).click();
     await pending;
+    // An agent's change, offered for undo next to Undo (P09).
+    await fetch(host.mcpUrl, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "set_styles", arguments: { updates: [{ nodeId: box, styles: { background: "#123456" } }] } } }) });
+    await page.waitForFunction(() => !document.getElementById("action-undo-agent").hidden);
+    await audit(page, "an agent's change offered for undo");
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();
