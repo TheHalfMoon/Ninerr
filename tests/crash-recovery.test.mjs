@@ -419,12 +419,24 @@ test("staging directories of an interrupted create are removed on open, a live o
     writeFileSync(join(dead, "project.json"), "{}");
     const live = staged(process.pid);
     mkdirSync(live);
+    // Another running process (this test's parent) keeps its own too.
+    const parent = staged(process.ppid);
+    mkdirSync(parent);
+    // A link under a staging name is never followed or removed, whatever its pid says.
+    const target = join(root, "kept-target");
+    mkdirSync(target);
+    writeFileSync(join(target, "precious.txt"), "keep");
+    const linked = staged(deadPid);
+    linkDirectory(target, linked);
     // Look-alikes that are not staging directories stay too.
     const unrelated = [join(root, `${PROJECT_FILES.directory}.tmp-${deadPid}-not-a-uuid`), join(root, `notes.tmp-${deadPid}-${randomUUID()}`)];
     for (const path of unrelated) mkdirSync(path);
     const store = open(root);
     assert.equal(existsSync(dead), false, "the dead process's staging directory is removed");
     assert.equal(existsSync(live), true, "a staging directory whose process runs is kept");
+    assert.equal(existsSync(parent), true, "another running process's staging directory is kept");
+    assert.equal(existsSync(linked), true, "a link is not removed");
+    assert.equal(readFileSync(join(target, "precious.txt"), "utf8"), "keep", "nor anything it leads to");
     for (const path of unrelated) assert.equal(existsSync(path), true, path);
     assert.equal(store.recovery.staleTemporaryFiles, 1);
     store.close();
