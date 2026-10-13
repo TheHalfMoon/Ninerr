@@ -1737,6 +1737,12 @@ function renderInspector() {
     return el("label", { for: id }, label, input);
   };
   const children = [field("name", "Layer name", typeof node.props?.name === "string" ? node.props.name : "")];
+  // The element's classes, which its page's stylesheet styles it by (P09).
+  const classes = node.props?.attributes?.class;
+  const classesField = field("classes", "Classes, separated by spaces", typeof classes === "string" ? classes : "");
+  // The longest attribute value the canvas draws.
+  classesField.querySelector("input").maxLength = 2000;
+  children.push(classesField);
   if (node.type === "text" || typeof node.props?.text === "string") children.push(field("text", "Text", typeof node.props?.text === "string" ? node.props.text : "", true));
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
@@ -1772,6 +1778,17 @@ function onInspectorChange(event) {
   input.dataset.original = input.value;
   if (input.name === "name") commit([{ type: "set-props", nodeId, ...(value === "" ? { set: {}, unset: ["name"] } : { set: { name: value } }) }], "Rename layer");
   else if (input.name === "text") commit(setText(nodeId, input.value), "Edit text");
+  else if (input.name === "classes") {
+    // Each class once, in the order given; HTML separates them by ASCII whitespace only.
+    const names = [...new Set(value.split(/[\t\n\f\r ]+/u).filter((name) => name !== ""))].join(" ");
+    input.value = names;
+    input.dataset.original = names;
+    const attributes = { ...(state.document.nodes[nodeId].props?.attributes ?? {}) };
+    if ((attributes.class ?? "") === names) return;
+    if (names === "") delete attributes.class;
+    else attributes.class = names;
+    commit([{ type: "set-props", nodeId, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) }], names === "" ? "Remove classes" : "Change classes");
+  }
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);
     const normalized = /^-?\d+(\.\d+)?$/u.test(value) && property !== "background" && property !== "color" ? `${value}px` : value;
