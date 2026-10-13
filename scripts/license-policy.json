@@ -1,11 +1,258 @@
 {
   "schemaVersion": 1,
-  "allowed": ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT"],
+  "allowed": [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT"
+  ],
   "overrides": [
-    { "name": "@impeccable/cli-darwin-arm64", "version": "0.1.5", "declared": "SEE LICENSE IN LICENSE", "license": "Apache-2.0", "licenseFile": "LICENSE", "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812", "evidence": "Byte-identical to the Apache License 2.0 text shipped in impeccable@4.1.0 (same sha256), verified on the installed linux-x64 sibling; same publisher and release." },
-    { "name": "@impeccable/cli-darwin-x64", "version": "0.1.5", "declared": "SEE LICENSE IN LICENSE", "license": "Apache-2.0", "licenseFile": "LICENSE", "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812", "evidence": "Byte-identical to the Apache License 2.0 text shipped in impeccable@4.1.0 (same sha256), verified on the installed linux-x64 sibling; same publisher and release." },
-    { "name": "@impeccable/cli-linux-arm64", "version": "0.1.5", "declared": "SEE LICENSE IN LICENSE", "license": "Apache-2.0", "licenseFile": "LICENSE", "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812", "evidence": "Byte-identical to the Apache License 2.0 text shipped in impeccable@4.1.0 (same sha256), verified on the installed linux-x64 sibling; same publisher and release." },
-    { "name": "@impeccable/cli-linux-x64", "version": "0.1.5", "declared": "SEE LICENSE IN LICENSE", "license": "Apache-2.0", "licenseFile": "LICENSE", "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812", "evidence": "Installed on linux-x64 CI; LICENSE is the Apache License 2.0 text, byte-identical to impeccable@4.1.0's." },
-    { "name": "@impeccable/cli-windows-x64", "version": "0.1.5", "declared": "SEE LICENSE IN LICENSE", "license": "Apache-2.0", "licenseFile": "LICENSE", "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812", "evidence": "Byte-identical to the Apache License 2.0 text shipped in impeccable@4.1.0 (same sha256), verified on the installed linux-x64 sibling; same publisher and release." }
+    {
+      "name": "@impeccable/cli-darwin-arm64",
+      "version": "0.1.5",
+      "declared": "SEE LICENSE IN LICENSE",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "evidence": "Byte-identical to the Apache License 2.0 text shipped in impeccable@4.1.0 (same sha256), verified on the installed linux-x64 sibling; same publisher and release."
+    },
+    {
+      "name": "@impeccable/cli-darwin-x64",
+      "version": "0.1.5",
+      "declared": "SEE LICENSE IN LICENSE",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "evidence": "Byte-identical to the Apache License 2.0 text shipped in impeccable@4.1.0 (same sha256), verified on the installed linux-x64 sibling; same publisher and release."
+    },
+    {
+      "name": "@impeccable/cli-linux-arm64",
+      "version": "0.1.5",
+      "declared": "SEE LICENSE IN LICENSE",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "evidence": "Byte-identical to the Apache License 2.0 text shipped in impeccable@4.1.0 (same sha256), verified on the installed linux-x64 sibling; same publisher and release."
+    },
+    {
+      "name": "@impeccable/cli-linux-x64",
+      "version": "0.1.5",
+      "declared": "SEE LICENSE IN LICENSE",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "evidence": "Installed on linux-x64 CI; LICENSE is the Apache License 2.0 text, byte-identical to impeccable@4.1.0's."
+    },
+    {
+      "name": "@impeccable/cli-windows-x64",
+      "version": "0.1.5",
+      "declared": "SEE LICENSE IN LICENSE",
+      "license": "Apache-2.0",
+      "licenseFile": "LICENSE",
+      "licenseSha256": "02bb8c3b4e70190e3986c0404ad2fd8d639b4f534252d82379cc1b502b6d1812",
+      "evidence": "Byte-identical to the Apache License 2.0 text shipped in impeccable@4.1.0 (same sha256), verified on the installed linux-x64 sibling; same publisher and release."
+    },
+    {
+      "name": "@koromix/koffi-android-arm64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-android-x64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-darwin-arm64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-darwin-x64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-freebsd-arm64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-freebsd-ia32",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-freebsd-x64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-linux-arm",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-linux-arm64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-linux-ia32",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-linux-loong64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-linux-ppc64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-linux-riscv64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-linux-x64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-openbsd-arm64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-openbsd-ia32",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-openbsd-x64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-win32-arm64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-win32-ia32",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    },
+    {
+      "name": "@koromix/koffi-win32-x64",
+      "version": "3.3.2",
+      "declared": "MIT",
+      "license": "MIT",
+      "licenseFrom": "koffi",
+      "licenseFile": "LICENSE.txt",
+      "licenseSha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290",
+      "evidence": "A prebuilt module of koffi@3.3.2, installed only on its own platform, declaring MIT in its package.json and shipping no license file; the MIT text is koffi@3.3.2's LICENSE.txt, same publisher and release (#268)."
+    }
   ]
 }

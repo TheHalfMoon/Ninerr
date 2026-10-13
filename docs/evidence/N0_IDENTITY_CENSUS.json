@@ -10,7 +10,7 @@
     "PERSISTED_DATA": 0,
     "LEGACY_COMPATIBILITY": 98,
     "TEST_FIXTURE": 0,
-    "THIRD_PARTY_INDEPENDENT_OBLIGATION": 254,
+    "THIRD_PARTY_INDEPENDENT_OBLIGATION": 259,
     "IMMUTABLE_HISTORICAL_FACT": 982,
     "REMOVE_ENTIRELY": 0
   },
@@ -28,7 +28,7 @@
     "docling": 137,
     "design-resources": 18,
     "firecrawl": 31,
-    "impeccable": 179,
+    "impeccable": 184,
     "ui-tars": 31
   },
   "byRule": {
@@ -59,7 +59,7 @@
     "provenance-test-import-stack": 5,
     "provenance-test-license-register": 19,
     "public-env": 1,
-    "third-party-notices": 66
+    "third-party-notices": 71
   },
-  "censusSha256": "59397ca5bcc102169f4e794567dc19f454400587f5f228e38ae7d586d2e37288"
+  "censusSha256": "5769d76a1ebfe795789e6067118ced9fccabc549eb558380b5d38abeb2abca04"
 }
