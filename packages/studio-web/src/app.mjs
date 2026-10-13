@@ -1192,20 +1192,26 @@ function insert(kind) {
   operations.push(...(kind === "text"
     ? insertNode(parentId, index, { id, type: "text", tag: "p", text: "Text", style: { position: "absolute", left: "32px", top: "32px", margin: "0px", "font-size": "16px" } })
     : insertNode(parentId, index, { id, type: "element", tag: "div", style: { position: "absolute", left: "32px", top: "32px", width: "160px", height: "100px", background: "#d9d2ff" } })));
+  commitAndSelect(operations, kind === "text" ? "Insert text" : "Insert box", id);
+}
+
+/** Commit a change that adds layer `id`, and select it once the change is applied. */
+function commitAndSelect(operations, intent, id) {
   const pending = { ids: [id], applied: false };
   state.selectOnApply = pending;
-  commit(operations, kind === "text" ? "Insert text" : "Insert box").then((event) => {
+  return commit(operations, intent).then((event) => {
     // Selected when its change was applied, or later by the person: leave it.
-    if (pending.applied) return;
+    if (pending.applied) return event;
     // Skipped or refused: nothing to select.
     if (event === null) {
       if (state.selectOnApply === pending) state.selectOnApply = null;
-      return;
+      return event;
     }
     // Held for a refresh: the refresh selects it once the copy has it.
-    if (state.revision < event.revision) return;
+    if (state.revision < event.revision) return event;
     if (state.selectOnApply === pending) state.selectOnApply = null;
     selectLayers([id]);
+    return event;
   });
 }
 
@@ -1446,12 +1452,19 @@ function placeOf(doc, id) {
  * Why moving `id` under `parentId` is refused, or null. Pages stay at the top and layers
  * stay on pages; nothing goes inside a text layer or inside itself.
  */
+// Elements that hold no content of their own.
+const LEAF_TAGS = new Set(["img", "input", "br", "hr", "area", "base", "col", "embed", "link", "meta", "source", "track", "wbr", "textarea", "select"]);
+
+function holdsLayers(node) {
+  return !["text", "image", "vector"].includes(node.type) && !LEAF_TAGS.has(node.props?.tag);
+}
+
 function moveProblem(doc, id, parentId) {
   const isPage = (doc.nodes[id].parentId ?? null) === null;
   if (isPage && parentId !== null) return "A page stays at the top level.";
   if (!isPage && parentId === null) return "A layer stays on a page.";
   if (parentId === null) return null;
-  if (doc.nodes[parentId].type === "text") return "A text layer holds no other layers.";
+  if (!holdsLayers(doc.nodes[parentId])) return "That layer holds no other layers.";
   for (let cursor = parentId; cursor !== null && cursor !== undefined; cursor = doc.nodes[cursor]?.parentId ?? null) {
     if (cursor === id) return "A layer cannot go inside itself.";
   }
@@ -1468,6 +1481,10 @@ function moveLayer(id, parentId, index, intent) {
   }
   const from = placeOf(doc, id);
   if (from.parentId === parentId && from.index === index) return Promise.resolve(null);
+  // Into a collapsed layer: it opens, so the moved layer, and the focus, stay in view.
+  let opened = false;
+  for (let cursor = parentId; cursor !== null && cursor !== undefined; cursor = doc.nodes[cursor]?.parentId ?? null) opened = state.collapsed.delete(cursor) || opened;
+  if (opened) renderLayers();
   return commit([{ type: "move-node", nodeId: id, parentId, index }], intent).then((event) => {
     if (event !== null) focusLayer(id);
     return event;
@@ -1526,25 +1543,41 @@ function groupSelection() {
     return Promise.resolve(null);
   }
   const groupId = newId("group");
-  // Positioned layers keep their place in a group that fills the parent; others flow in it.
-  const positioned = order.every((id) => doc.nodes[id].props?.style?.position === "absolute");
-  const operations = insertNode(parentId, index, positioned
-    ? { id: groupId, type: "element", tag: "div", style: { position: "absolute", left: "0px", top: "0px", width: "100%", height: "100%" } }
-    : { id: groupId, type: "element", tag: "div" });
-  order.forEach((id, at) => operations.push({ type: "move-node", nodeId: id, parentId: groupId, index: at }));
-  const pending = { ids: [groupId], applied: false };
-  state.selectOnApply = pending;
-  return commit(operations, order.length === 1 ? "Group layer" : "Group layers").then((event) => {
-    if (pending.applied) return event;
-    if (event === null) {
-      if (state.selectOnApply === pending) state.selectOnApply = null;
-      return event;
+  const operations = [];
+  // Layers placed in pixels keep their place: the group is drawn around them, where the last
+  // of them was (so it covers no layer it does not hold), and they are placed within it.
+  const boxes = order.map((id) => pixelBox(doc.nodes[id]));
+  if (boxes.every((box) => box !== null)) {
+    if (order.some((id) => doc.nodes[id].parentId !== parentId)) {
+      setStatus("Layers placed in pixels are grouped with layers of the same parent.");
+      return Promise.resolve(null);
     }
-    if (state.revision < event.revision) return event;
-    if (state.selectOnApply === pending) state.selectOnApply = null;
-    selectLayers([groupId]);
-    return event;
-  });
+    const left = Math.min(...boxes.map((box) => box.left));
+    const top = Math.min(...boxes.map((box) => box.top));
+    const right = Math.max(...boxes.map((box) => box.left + box.width));
+    const bottom = Math.max(...boxes.map((box) => box.top + box.height));
+    const last = placeOf(doc, order.at(-1)).index;
+    // Just after the last of them: it takes that place as they move into it.
+    operations.push(...insertNode(parentId, last + 1, { id: groupId, type: "group", style: { position: "absolute", left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` } }));
+    order.forEach((id, at) => {
+      operations.push({ type: "move-node", nodeId: id, parentId: groupId, index: at });
+      operations.push(...setStyle(doc, id, { left: `${boxes[at].left - left}px`, top: `${boxes[at].top - top}px` }));
+    });
+  } else {
+    // Layers in the page's flow: the group takes the first one's place, and they flow in it.
+    operations.push(...insertNode(parentId, index, { id: groupId, type: "group" }));
+    order.forEach((id, at) => operations.push({ type: "move-node", nodeId: id, parentId: groupId, index: at }));
+  }
+  return commitAndSelect(operations, order.length === 1 ? "Group layer" : "Group layers", groupId);
+}
+
+/** A layer's box when it is placed in pixels (position absolute, px left, top, width, height); else null. */
+function pixelBox(node) {
+  const style = node.props?.style;
+  if (!style || style.position !== "absolute") return null;
+  const px = (value) => (typeof value === "string" && /^-?\d+(?:\.\d+)?px$/u.test(value) ? Number.parseFloat(value) : null);
+  const box = { left: px(style.left), top: px(style.top), width: px(style.width), height: px(style.height) };
+  return Object.values(box).every((value) => value !== null) ? box : null;
 }
 
 // Dragging a row: above its top quarter, before it; below its bottom quarter, after it;
@@ -1559,10 +1592,15 @@ function dropTarget(event) {
   if (!doc.nodes[targetId] || !doc.nodes[draggedLayer]) return null;
   const box = row.getBoundingClientRect();
   const y = (event.clientY - box.top) / box.height;
-  const zone = y < 0.25 ? "before" : y > 0.75 ? "after" : "inside";
+  let zone = y < 0.25 ? "before" : y > 0.75 ? "after" : "inside";
+  // Below an open layer's row is its first child's place, where the mark is drawn.
+  const open = doc.nodes[targetId].children.length > 0 && !state.collapsed.has(targetId);
   let parentId;
   let index;
-  if (zone === "inside") {
+  if (zone === "after" && open) {
+    parentId = targetId;
+    index = 0;
+  } else if (zone === "inside") {
     parentId = targetId;
     index = doc.nodes[targetId].children.filter((child) => child !== draggedLayer).length;
   } else {
@@ -1573,7 +1611,7 @@ function dropTarget(event) {
     const from = placeOf(doc, draggedLayer);
     if (from.parentId === parentId && from.index < index) index -= 1;
   }
-  if (targetId === draggedLayer || moveProblem(doc, draggedLayer, parentId) !== null) return { row, zone, parentId: undefined, index };
+  if (targetId === draggedLayer || moveProblem(doc, draggedLayer, parentId) !== null) return null;
   return { row, zone, parentId, index };
 }
 
@@ -1592,7 +1630,7 @@ function onLayersDragStart(event) {
 function onLayersDragOver(event) {
   const target = dropTarget(event);
   clearDropMarks();
-  if (target === null || target.parentId === undefined) return;
+  if (target === null) return;
   event.preventDefault();
   event.dataTransfer.dropEffect = "move";
   target.row.classList.add(`drop-${target.zone}`);
@@ -1605,10 +1643,6 @@ function onLayersDrop(event) {
   draggedLayer = null;
   if (target === null || id === null) return;
   event.preventDefault();
-  if (target.parentId === undefined) {
-    setStatus(moveProblem(state.document, id, target.zone === "inside" ? target.row.parentElement.dataset.nodeId : placeOf(state.document, target.row.parentElement.dataset.nodeId).parentId) ?? "A layer cannot go there.");
-    return;
-  }
   moveLayer(id, target.parentId, target.index, target.zone === "inside" ? "Move layer into another" : "Move layer");
 }
 

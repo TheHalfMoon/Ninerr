@@ -110,13 +110,16 @@ test("layers are reordered, moved to another parent and grouped, by keyboard and
     await row(page, c).click({ modifiers: ["Control"] });
     await page.keyboard.press("Control+g");
     await waitRevision(page, ++revision);
-    const group = childrenOf(host, pageId)[0];
+    // The group takes the last grouped layer's place, so it covers no layer it does not hold.
+    const group = childrenOf(host, pageId)[1];
     assert.match(group, /^group-/u);
+    assert.equal(host.session.document.nodes[group].type, "group");
     assert.deepEqual(childrenOf(host, group), [a, c]);
-    assert.deepEqual(childrenOf(host, pageId), [group, b]);
+    assert.deepEqual(childrenOf(host, pageId), [b, group]);
     await page.waitForFunction((id) => document.getElementById(`layer-${id}`)?.getAttribute("aria-selected") === "true", group);
-    // The boxes keep their place: the group fills the page and is positioned like them.
-    assert.deepEqual(host.session.document.nodes[group].props.style, { position: "absolute", left: "0px", top: "0px", width: "100%", height: "100%" });
+    // The boxes keep their place: the group is drawn around them, and they sit within it.
+    assert.deepEqual(host.session.document.nodes[group].props.style, { position: "absolute", left: "32px", top: "32px", width: "160px", height: "100px" });
+    assert.deepEqual([host.session.document.nodes[a].props.style.left, host.session.document.nodes[a].props.style.top], ["0px", "0px"]);
     await undo();
     assert.deepEqual(childrenOf(host, pageId), [a, b, c]);
     assert.equal(host.session.document.nodes[group], undefined);
@@ -130,9 +133,10 @@ test("layers are reordered, moved to another parent and grouped, by keyboard and
     await drag(page, c, b, "inside");
     await waitRevision(page, ++revision);
     assert.equal(parentOf(host, c), b);
-    await drag(page, c, b, "after");
+    // Out again, dropped below a: back on the page, between a and b.
+    await drag(page, c, a, "after");
     await waitRevision(page, ++revision);
-    assert.deepEqual(childrenOf(host, pageId), [a, b, c]);
+    assert.deepEqual(childrenOf(host, pageId), [a, c, b]);
     await undo();
     assert.equal(parentOf(host, c), b);
     await undo();
@@ -157,6 +161,29 @@ test("layers are reordered, moved to another parent and grouped, by keyboard and
     assert.deepEqual(childrenOf(host, single), [c]);
     await undo();
     assert.equal(parentOf(host, c), pageId);
+
+    // Into a collapsed layer: it opens, and the moved layer keeps the focus.
+    await row(page, b).click();
+    await page.keyboard.press("ArrowLeft");
+    await page.waitForFunction((id) => document.getElementById(`layer-${id}`).getAttribute("aria-expanded") === "false", b);
+    await row(page, c).click();
+    await page.keyboard.press("Alt+ArrowRight");
+    await waitRevision(page, ++revision);
+    assert.equal(parentOf(host, c), b);
+    assert.equal(await page.locator(`#layer-${b}`).getAttribute("aria-expanded"), "true");
+    assert.equal(await page.evaluate(() => document.activeElement.id), `layer-${c}`);
+    // Layers placed in pixels from different parents are not grouped: they would jump.
+    await page.keyboard.press("Alt+ArrowLeft");
+    await waitRevision(page, ++revision);
+    await row(page, a).click();
+    await row(page, c).click({ modifiers: ["Control"] });
+    await page.keyboard.press("Control+g");
+    await page.waitForFunction(() => document.getElementById("status").textContent === "Layers placed in pixels are grouped with layers of the same parent.");
+    assert.equal(host.session.revision, revision);
+    // Dropped just below an open layer's row: it becomes that layer's first child.
+    await drag(page, c, b, "after");
+    await waitRevision(page, ++revision);
+    assert.deepEqual(childrenOf(host, b), [c, a]);
 
     assert.deepEqual(editor.foreign, []);
     assert.deepEqual(editor.errors, []);
