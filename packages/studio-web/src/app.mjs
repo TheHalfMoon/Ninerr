@@ -1477,7 +1477,10 @@ function renderInspector() {
   const children = [field("name", "Layer name", typeof node.props?.name === "string" ? node.props.name : "")];
   // The element's classes, which its page's stylesheet styles it by (P09).
   const classes = node.props?.attributes?.class;
-  children.push(field("classes", "Classes, separated by spaces", typeof classes === "string" ? classes : ""));
+  const classesField = field("classes", "Classes, separated by spaces", typeof classes === "string" ? classes : "");
+  // The longest attribute value the canvas draws.
+  classesField.querySelector("input").maxLength = 2000;
+  children.push(classesField);
   if (node.type === "text" || typeof node.props?.text === "string") children.push(field("text", "Text", typeof node.props?.text === "string" ? node.props.text : "", true));
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
@@ -1514,8 +1517,8 @@ function onInspectorChange(event) {
   if (input.name === "name") commit([{ type: "set-props", nodeId, ...(value === "" ? { set: {}, unset: ["name"] } : { set: { name: value } }) }], "Rename layer");
   else if (input.name === "text") commit(setText(nodeId, input.value), "Edit text");
   else if (input.name === "classes") {
-    // Each class once, in the order given.
-    const names = [...new Set(value.split(/\s+/u).filter((name) => name !== ""))].join(" ");
+    // Each class once, in the order given; HTML separates them by ASCII whitespace only.
+    const names = [...new Set(value.split(/[\t\n\f\r ]+/u).filter((name) => name !== ""))].join(" ");
     input.value = names;
     input.dataset.original = names;
     const attributes = { ...(state.document.nodes[nodeId].props?.attributes ?? {}) };
