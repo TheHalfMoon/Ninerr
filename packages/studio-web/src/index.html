@@ -21,6 +21,7 @@
   <div class="tool-group" aria-label="Layers" role="group">
     <button type="button" id="action-insert-box" disabled>Insert box</button>
     <button type="button" id="action-insert-text" disabled>Insert text</button>
+    <button type="button" id="action-group" aria-keyshortcuts="Control+G Meta+G" disabled>Group</button>
     <button type="button" id="action-delete" aria-keyshortcuts="Delete" disabled>Delete</button>
   </div>
   <div class="tool-group" aria-label="Zoom" role="group">
@@ -37,7 +38,8 @@
 <div class="workspace">
   <nav class="panel layers-panel" aria-labelledby="layers-heading">
     <h2 id="layers-heading">Layers</h2>
-    <ul id="layers" role="tree" aria-labelledby="layers-heading" aria-multiselectable="true"></ul>
+    <ul id="layers" role="tree" aria-labelledby="layers-heading" aria-describedby="layers-keys" aria-multiselectable="true" aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown Alt+ArrowLeft Alt+ArrowRight Control+G Meta+G"></ul>
+    <p id="layers-keys" class="hint">Drag a layer, or use Alt with the arrow keys, to move it: up and down among its siblings, right into the layer above it, left out of its parent. Ctrl+G groups the selected layers.</p>
     <p id="layers-empty" class="empty">This project has no layers yet. Use Insert box or Insert text.</p>
   </nav>
   <main id="canvas" class="canvas-area" tabindex="-1" aria-label="Canvas"></main>
