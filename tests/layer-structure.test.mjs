@@ -107,7 +107,7 @@ test("layers are reordered, moved to another parent and grouped, by keyboard and
 
     // Keyboard: group two layers with Ctrl+G; one undo removes the group.
     await row(page, a).click();
-    await row(page, c).click({ modifiers: ["Control"] });
+    await row(page, c).click({ modifiers: ["ControlOrMeta"] });
     await page.keyboard.press("Control+g");
     await waitRevision(page, ++revision);
     // The group takes the last grouped layer's place, so it covers no layer it does not hold.
@@ -176,7 +176,7 @@ test("layers are reordered, moved to another parent and grouped, by keyboard and
     await page.keyboard.press("Alt+ArrowLeft");
     await waitRevision(page, ++revision);
     await row(page, a).click();
-    await row(page, c).click({ modifiers: ["Control"] });
+    await row(page, c).click({ modifiers: ["ControlOrMeta"] });
     await page.keyboard.press("Control+g");
     await page.waitForFunction(() => document.getElementById("status").textContent === "Layers placed in pixels are grouped with layers of the same parent.");
     assert.equal(host.session.revision, revision);
