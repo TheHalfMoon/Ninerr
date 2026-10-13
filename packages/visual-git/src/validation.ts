@@ -19,6 +19,15 @@ const BRANCH = /^[A-Za-z0-9._/-]{1,255}$/u;
 // hide or reorder content. Tab/newline/CR and ZWNJ/ZWJ (emoji, Indic scripts) stay legal.
 const HIDDEN_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u034f\u115f\u1160\u3164\uffa0]/u;
 const VISIBLE_FORMAT = /[\t\n\r\u200c\u200d]/gu;
+// What draws nothing by itself: whitespace, joiners, combining marks and variation selectors.
+const INVISIBLE = /[\s\u200c\u200d\p{M}]/gu;
+// A variation selector must follow a character it can vary: not the start, whitespace, a
+// joiner, a mark, or another selector (selectors are marks themselves), however they are
+// spaced out (#64).
+const SELECTOR = "[\\ufe00-\\ufe0f\\u{e0100}-\\u{e01ef}]";
+const STRAY_SELECTOR = new RegExp(`(?:^|[\\s\\u200c\\u200d\\p{M}])${SELECTOR}`, "u");
+// Joiners join two characters: two in a row join nothing and carry data nobody sees.
+const JOINER_RUN = /[\u200c\u200d]{2}/u;
 
 export function sha256Text(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -86,6 +95,14 @@ export function assertBoundedString(value: unknown, label: string, max = 4096): 
   if (!value.isWellFormed() || HIDDEN_TEXT.test(value.replace(VISIBLE_FORMAT, ""))) {
     throw new VisualGitValidationError(`${label} must not contain control characters`);
   }
+  // trim() keeps joiners and combining marks, so a name of only those looks empty (#64).
+  if (value.replace(INVISIBLE, "") === "") throw new VisualGitValidationError(`${label} must contain visible text`);
+  // One variation selector after a character picks its variant (emoji, ideographs); one
+  // anywhere else carries data nobody sees (#64), as do joiners in a row.
+  if (STRAY_SELECTOR.test(value)) {
+    throw new VisualGitValidationError(`${label} must place each variation selector right after a character it varies`);
+  }
+  if (JOINER_RUN.test(value)) throw new VisualGitValidationError(`${label} must not hold two joiners in a row`);
 }
 
 export function assertTimestamp(value: unknown, label: string): asserts value is string {
