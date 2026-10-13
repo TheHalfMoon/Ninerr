@@ -245,9 +245,15 @@ export function checkPolicy(lockText, policy, notices, { nodeModules = join(ROOT
       overridesApplied += 1;
       if (override.declared !== pkg.license) problems.push(`${id}: override expects declared license ${JSON.stringify(override.declared)}, lockfile has ${JSON.stringify(pkg.license)}`);
       const packageDir = join(nodeModules, pkg.name);
-      const file = resolve(packageDir, override.licenseFile);
-      const inside = relative(packageDir, file);
-      if (inside === "" || inside.startsWith(`..${sep}`) || inside === "..") {
+      // A platform binary that ships no license text of its own names the package that ships
+      // it (`licenseFrom`, a package of the same lockfile), and the file is read from there.
+      const fromLock = override.licenseFrom === undefined || [...externalPackages(lock)].some((other) => other.name === override.licenseFrom && !other.optional);
+      const licenseDir = join(nodeModules, override.licenseFrom ?? pkg.name);
+      const file = resolve(licenseDir, override.licenseFile);
+      const inside = relative(licenseDir, file);
+      if (!fromLock) {
+        problems.push(`${id}: override licenseFrom ${JSON.stringify(override.licenseFrom)} is not a required package of the lockfile`);
+      } else if (inside === "" || inside.startsWith(`..${sep}`) || inside === "..") {
         problems.push(`${id}: override licenseFile ${JSON.stringify(override.licenseFile)} is outside the package`);
       } else if (existsSync(join(packageDir, "package.json"))) {
         const installed = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).version;

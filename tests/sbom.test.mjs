@@ -115,6 +115,30 @@ test("an override is checked against the installed license file", () => {
   }
 });
 
+test("a platform binary's override reads its license text from the package that ships it (#268)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ninerr-sbom-from-"));
+  try {
+    // koffi's platform packages ship no license file; koffi itself ships the MIT text.
+    mkdirSync(join(dir, "parent"));
+    writeFileSync(join(dir, "parent", "package.json"), JSON.stringify({ name: "parent", version: "1.0.0" }));
+    writeFileSync(join(dir, "parent", "LICENSE.txt"), "MIT License text");
+    mkdirSync(join(dir, "binary"));
+    writeFileSync(join(dir, "binary", "package.json"), JSON.stringify({ name: "binary", version: "1.0.0" }));
+    const good = createHash("sha256").update("MIT License text").digest("hex");
+    const override = (fields) => [{ name: "binary", version: "1.0.0", declared: "MIT", license: "MIT", licenseFile: "LICENSE.txt", licenseSha256: good, licenseFrom: "parent", ...fields }];
+    const packages = { "node_modules/parent": pkg("MIT"), "node_modules/binary": pkg("MIT", { optional: true }) };
+    const run = (fields = {}, lockPackages = packages) => checkPolicy(lockWith(lockPackages), { ...policy, overrides: override(fields) }, "`parent@1.0.0` `binary@1.0.0`", { nodeModules: dir });
+    assert.deepEqual(run(), []);
+    assert.match(run({ licenseSha256: "f".repeat(64) }).join("\n"), /binary@1\.0\.0: LICENSE\.txt does not match the override's sha256/u);
+    assert.match(run({ licenseFrom: "elsewhere" }).join("\n"), /licenseFrom "elsewhere" is not a required package of the lockfile/u);
+    // Only a package the install always has may carry the text, not another optional one.
+    assert.match(run({}, { "node_modules/parent": pkg("MIT", { optional: true }), "node_modules/binary": pkg("MIT", { optional: true }) }).join("\n"), /licenseFrom "parent" is not a required package/u);
+    assert.match(run({ licenseFile: "../binary/package.json" }).join("\n"), /is outside the package/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the --check command exits non-zero on a violation", () => {
   const dir = mkdtempSync(join(tmpdir(), "ninerr-sbom-cli-"));
   try {
