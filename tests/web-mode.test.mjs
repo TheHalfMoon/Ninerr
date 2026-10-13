@@ -44,13 +44,16 @@ test("the network trap refuses connections off this computer and allows loopback
         httpsIp: await refused(async () => (await import("node:https")).get("https://1.1.1.1/")),
         httpsPinned: await refused(async () => (await import("node:https")).request({ hostname: "example.com", lookup: (name, options, done) => done(null, "93.184.215.14", 4) }).end()),
         httpName: await refused(async () => (await import("node:http")).get("http://example.com/")),
+        // Koffi's module is allowed, for the Windows security API; a network library through it is not.
+        koffiOther: await refused(async () => (await import("node:module")).createRequire(import.meta.url)("koffi").load("ws2_32.dll")),
+        koffiSystem: process.platform === "win32" ? await refused(async () => (await import("node:module")).createRequire(import.meta.url)("koffi").load("kernel32.dll")) : "allowed",
       };
       console.log(JSON.stringify({ local, remote, resolved, spawned, ...others }));
       server.close();
     });
   `]);
   assert.equal(await probe.exited, 0);
-  assert.deepEqual(JSON.parse(probe.output.stdout), { local: "ok", remote: "refused", resolved: "refused", spawned: "refused", worker: "refused", childProcessClass: "refused", binding: "refused", dlopen: "refused", customLookup: "refused", udp: "refused", httpIp: "refused", httpsIp: "refused", httpsPinned: "refused", httpName: "refused" });
+  assert.deepEqual(JSON.parse(probe.output.stdout), { local: "ok", remote: "refused", resolved: "refused", spawned: "refused", worker: "refused", childProcessClass: "refused", binding: "refused", dlopen: "refused", customLookup: "refused", udp: "refused", httpIp: "refused", httpsIp: "refused", httpsPinned: "refused", httpName: "refused", koffiOther: "refused", koffiSystem: "allowed" });
   assert.ok(attemptsIn(probe.output.stderr).length >= 3, "every refused attempt is reported");
 });
 

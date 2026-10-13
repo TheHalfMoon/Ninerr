@@ -29,7 +29,7 @@ test("the native boundary binds only advapi32.dll and kernel32.dll, and starts n
   const source = readFileSync(new URL("../packages/studio-host/src/windows-security.ts", import.meta.url), "utf8");
   assert.deepEqual([...source.matchAll(/koffi\.load\("([^"]+)"\)/gu)].map((match) => match[1]).sort(), ["advapi32.dll", "kernel32.dll"]);
   const bound = [...source.matchAll(/(?:advapi|kernel)\.func\("[^"(]*?(\w+)\(/gu)].map((match) => match[1]).sort();
-  assert.deepEqual(bound, ["CloseHandle", "ConvertStringSecurityDescriptorToSecurityDescriptorW", "CreateFileW", "FlushFileBuffers", "GetAce", "GetAclInformation", "GetCurrentProcess", "GetFileInformationByHandle", "GetLastError", "GetLengthSid", "GetSecurityInfo", "GetTokenInformation", "IsValidSid", "LocalFree", "OpenProcessToken", "ReadFile", "WriteFile"]);
+  assert.deepEqual(bound, ["CloseHandle", "ConvertStringSecurityDescriptorToSecurityDescriptorW", "CreateFileW", "FlushFileBuffers", "GetAce", "GetAclInformation", "GetCurrentProcess", "GetFileInformationByHandle", "GetFileType", "GetLastError", "GetLengthSid", "GetSecurityInfo", "GetTokenInformation", "IsValidSid", "LocalFree", "OpenProcessToken", "ReadFile", "WriteFile"]);
   for (const file of ["windows-security.ts"]) {
     assert.doesNotMatch(readFileSync(new URL(`../packages/studio-host/src/${file}`, import.meta.url), "utf8"), /child_process|spawn|execFile|icacls|whoami|powershell/iu, file);
   }
