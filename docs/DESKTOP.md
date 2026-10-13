@@ -2,6 +2,8 @@
 
 The desktop app is Ninerr in its own window. It runs the same studio host as local web mode (`npm start`) and shows the same editor, with the same projects folder: "Ninerr Projects" in your home folder, or `NINERR_PROJECTS`. Only one Ninerr runs for a projects folder at a time; a second one says which is running (#261). A setup from before the rename keeps working: `LILAC_PROJECTS` is read when `NINERR_PROJECTS` is not set, an existing "Lilac Projects" folder is used while there is no "Ninerr Projects", and a project from before the rename is copied into the Ninerr format the first time it is opened, with the original left unchanged. Projects are files on your computer, and Ninerr needs no network.
 
+The projects folder must be one only you can change. Ninerr trusts three files in it (where the MCP relay sends an agent's credential, the list of connected agents, and the codebase links) only when they are yours and no other account can change them, and it writes them that way (#268). On Windows this is read from each file's owner and access list, so the folder must be on NTFS: on FAT or exFAT, which keep neither, those files are never trusted. A folder others can change, such as the root of a second drive, where Authenticated Users may modify, is refused the same way for files Ninerr did not write; set such a file aside and Ninerr writes a private one. Files OneDrive keeps online-only are placeholders Ninerr does not read as regular files, so keep the projects folder out of OneDrive or mark it to stay on this device.
+
 ## Running it from a checkout
 
 ```

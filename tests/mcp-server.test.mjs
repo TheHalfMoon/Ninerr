@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { MCP_TOOL_NAMES, assertMCPToolSurface, classifyTool, validateMCPToolDefinition } from "../packages/mcp-protocol/src/index.mjs";
 import { mcpToolDefinitions, startStudioHost } from "../packages/studio-host/src/index.ts";
+import { writeTrustedFile } from "../packages/studio-host/src/trusted-file.ts";
 import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
 import { writableMode } from "./support/platform.mjs";
 
@@ -364,7 +365,7 @@ test("approvals: one serves every identical waiting call; caps, revocation and r
 test("a damaged registry fails closed without stopping Ninerr; the discovery file goes on close", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-mcp-files-")));
   try {
-    writeFileSync(join(root, ".ninerr-agents.json"), "{ not json", { mode: 0o600 });
+    writeTrustedFile(join(root, ".ninerr-agents.json"), "{ not json");
     const host = await startStudioHost({ projectsRoot: root, now });
     try {
       const listing = await fetch(`${host.url}/api/agents`, { headers: { authorization: `Bearer ${host.token}` } }).then((response) => response.json());

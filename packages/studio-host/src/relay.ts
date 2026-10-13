@@ -1,8 +1,8 @@
-import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { isLoopbackAddress } from "@ninerr/network-policy";
+import { readTrustedFile, UntrustedFileError } from "./trusted-file.ts";
 
 // The stdio MCP relay. An MCP client that speaks stdio (one JSON-RPC message per line)
 // starts this; each message is forwarded to the running studio host's MCP endpoint with
@@ -27,13 +27,17 @@ export function discoverMcpUrl(projectsRoot: string): string {
   const path = join(projectsRoot, ".ninerr-studio.json");
   let info: any;
   try {
-    const entry = lstatSync(path);
-    if (!entry.isFile() || entry.size > 4096) throw new Error("not a small regular file");
-    // Only a file this user wrote: another local user could otherwise point the relay, and
-    // the agent credential it sends, at their own server.
-    if (typeof process.getuid === "function" && entry.uid !== process.getuid()) throw new Error("not this user's");
-    info = JSON.parse(readFileSync(path, "utf8"));
-  } catch {
+    // Only a file this user wrote, that no one else can change: another local account could
+    // otherwise point the relay, and the agent credential it sends, at its own server. On
+    // Windows the owner and access list are proven too, and the relay refuses what it cannot
+    // prove (#268).
+    const bytes = readTrustedFile(path, 4096);
+    if (bytes === null) throw new Error("absent");
+    info = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    if (error instanceof UntrustedFileError) {
+      throw new Error(`the relay will not use this projects folder's discovery file, so the agent's credential is not sent: ${error.message}. Keep the projects folder where only you can change it, or give the relay Ninerr's URL directly.`);
+    }
     throw new Error("Ninerr is not running for this projects folder (start Ninerr first)");
   }
   // A file left by a Ninerr that crashed names a port someone else may now hold.

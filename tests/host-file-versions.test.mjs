@@ -5,13 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AgentRegistry, CodebaseLinks } from "../packages/studio-host/src/index.ts";
+import { writeTrustedFile } from "../packages/studio-host/src/trusted-file.ts";
 
 // N0 exit criterion (#190): a host file from a future version is refused, and left exactly as
 // it was, so the newer version still finds it. A refused file is never set aside or rewritten.
 
 const AT = "2026-10-09T12:00:00.000Z";
 const owner = { actorId: "person-1", kind: "user", accessClass: "member", displayName: "Person" };
-const writeOwnerOnly = (path, text) => writeFileSync(path, text, { mode: 0o600 });
+// A file only this user can change: owner-only on POSIX, a private access list on Windows (#268).
+const writeOwnerOnly = (path, text) => writeTrustedFile(path, text);
 
 function withRoot(callback) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-host-versions-")));
