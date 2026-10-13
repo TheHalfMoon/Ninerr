@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { chmodSync, closeSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StudioError } from "./errors.ts";
+import { readTrustedFile, writeTrustedFile } from "./trusted-file.ts";
 import { LEGACY_AGENT_REGISTRY_FILE, LEGACY_AGENT_TOKEN_PREFIX, existing, registrySource } from "./legacy.ts";
 import type { StudioActor } from "./session.ts";
 
@@ -181,40 +182,27 @@ export class AgentRegistry {
   }
 
   #writeRegistry(next: AgentRecord[]): void {
-    const temporary = `${this.#path}.${randomUUID()}.tmp`;
     try {
-      const fd = openSync(temporary, "wx", 0o600);
-      try {
-        writeSync(fd, `${JSON.stringify({ version: REGISTRY_VERSION, agents: next }, null, 2)}\n`);
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      chmodSync(temporary, 0o600);
-      renameSync(temporary, this.#path);
+      writeTrustedFile(this.#path, `${JSON.stringify({ version: REGISTRY_VERSION, agents: next }, null, 2)}\n`);
     } catch {
-      rmSync(temporary, { force: true });
       throw new StudioError(500, "agents-unwritable", "the agent registry could not be saved");
     }
   }
 }
 
 function readRegistry(path: string): AgentRecord[] {
-  let entry;
+  // Only a small regular file this user owns, and that no one else can change, is trusted as
+  // the registry (#268): on Windows its owner and access list are checked too.
+  let bytes;
   try {
-    entry = lstatSync(path);
-  } catch {
-    return [];
+    bytes = readTrustedFile(path, 256 * 1024);
+  } catch (error) {
+    throw new StudioError(500, "agents-unreadable", `the agent registry is not trusted: ${error instanceof Error ? error.message : String(error)}`);
   }
-  // A link or anything but a small regular file is not trusted as the registry.
-  if (!entry.isFile() || entry.size > 256 * 1024) throw new StudioError(500, "agents-unreadable", "the agent registry is not a regular file");
-  // Only a registry this user owns, and that no one else can write, is trusted.
-  if (typeof process.getuid === "function" && (entry.uid !== process.getuid() || (entry.mode & 0o022) !== 0)) {
-    throw new StudioError(500, "agents-unreadable", "the agent registry is not owned by this user or is writable by others");
-  }
+  if (bytes === null) return [];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw new StudioError(500, "agents-unreadable", "the agent registry is not valid JSON");
   }

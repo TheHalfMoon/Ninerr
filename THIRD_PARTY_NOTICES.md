@@ -22,6 +22,16 @@ Ninerr's `@ninerr/import-stack` package uses the published local Parse5 HTML par
 
 Ninerr's `@ninerr/code-ir` package uses the published Babel parser to read the syntax of JSX and TSX files, as a bounded parser only. Ninerr owns the supported subset, the values it reads, source ranges, component bindings, patches and write-back. The MIT license texts are included by the upstream npm distributions. Any Ninerr release that redistributes these packages must preserve their licenses and attribution notices.
 
+## Koffi
+
+- npm runtime: `koffi@3.3.2`
+- Copyright: 2026 Niels Martignène
+- License: MIT
+- Upstream project: https://github.com/Koromix/koffi
+- Prebuilt native modules, one per platform, installed only on the matching one: `@koromix/koffi-win32-x64@3.3.2`, `@koromix/koffi-win32-arm64@3.3.2`, `@koromix/koffi-win32-ia32@3.3.2`, `@koromix/koffi-darwin-arm64@3.3.2`, `@koromix/koffi-darwin-x64@3.3.2`, `@koromix/koffi-linux-x64@3.3.2`, `@koromix/koffi-linux-arm64@3.3.2`, `@koromix/koffi-linux-arm@3.3.2`, `@koromix/koffi-linux-ia32@3.3.2`, `@koromix/koffi-linux-loong64@3.3.2`, `@koromix/koffi-linux-ppc64@3.3.2`, `@koromix/koffi-linux-riscv64@3.3.2`, `@koromix/koffi-freebsd-x64@3.3.2`, `@koromix/koffi-freebsd-arm64@3.3.2`, `@koromix/koffi-freebsd-ia32@3.3.2`, `@koromix/koffi-openbsd-x64@3.3.2`, `@koromix/koffi-openbsd-arm64@3.3.2`, `@koromix/koffi-openbsd-ia32@3.3.2`, `@koromix/koffi-android-x64@3.3.2` and `@koromix/koffi-android-arm64@3.3.2` (same copyright, MIT)
+
+Ninerr's `@ninerr/studio-host` package uses Koffi on Windows only, as its native boundary to the Windows security API (#268): to read the owner and access list of the files it trusts, and to create those files with a private access list. It calls a fixed set of functions in `advapi32.dll` and `kernel32.dll`, listed in `packages/studio-host/src/windows-security.ts`, and nothing else; on other systems it is never loaded. Ninerr starts no child process for this. The MIT license text is included by the upstream npm distribution. Any Ninerr release that redistributes Koffi must preserve its license and attribution notice.
+
 ## Impeccable
 
 - Project: `pbakaus/impeccable`

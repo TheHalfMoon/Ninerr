@@ -90,7 +90,26 @@ threads.Worker = class RefusedWorker {
 process.binding = (name) => {
   throw report(`process.binding ${String(name)}`);
 };
-process.dlopen = () => {
-  throw report("process.dlopen");
+// One native addon is allowed: Koffi's prebuilt module, the native boundary to the Windows
+// security API that the founder authorized for #268. It is allowed only from this repository's
+// own installed copy, by its exact path; studio-host binds through it only the advapi32.dll and
+// kernel32.dll functions listed in windows-security.ts (a test holds it to them).
+const dlopen = process.dlopen;
+const KOFFI = require("node:url").fileURLToPath(new URL(`../../node_modules/@koromix/koffi-${process.platform}-${process.arch}/${process.platform}_${process.arch}/koffi.node`, import.meta.url));
+// Node may name the file with Windows's long-path prefix; paths compare without it, and without
+// case on Windows.
+const canonical = (path) => {
+  const real = require("node:fs").realpathSync(String(path).replace(/^\\\\\?\\/u, ""));
+  return process.platform === "win32" ? real.toLowerCase() : real;
+};
+process.dlopen = (module, filename, ...rest) => {
+  let allowed = false;
+  try {
+    allowed = canonical(filename) === canonical(KOFFI);
+  } catch {
+    allowed = false;
+  }
+  if (!allowed) throw report(`process.dlopen ${String(filename)}`);
+  return dlopen.call(process, module, filename, ...rest);
 };
 syncBuiltinESMExports();
