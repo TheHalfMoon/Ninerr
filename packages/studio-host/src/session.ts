@@ -258,6 +258,11 @@ export class StudioSession {
     return (this.#undo.get(actor.actorId)?.length ?? 0) > 0;
   }
 
+  /** The agents' changes `actor` may revert now: each other actor's latest change in this session. */
+  revertible(actor: StudioActor = this.owner): string[] {
+    return [...this.#undo].filter(([actorId, stack]) => actorId !== actor.actorId && stack.length > 0).map(([, stack]) => stack[stack.length - 1].transactionId);
+  }
+
   canRedo(actor: StudioActor = this.owner): boolean {
     return (this.#redo.get(actor.actorId)?.length ?? 0) > 0;
   }

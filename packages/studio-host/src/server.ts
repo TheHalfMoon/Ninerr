@@ -173,7 +173,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
   const describe = () => {
     if (session === null) return { project: null };
     if (session.failure !== null) return { project: session.name, failure: session.failure };
-    return { project: session.name, revision: session.revision, canUndo: session.canUndo(owner), canRedo: session.canRedo(owner), recovery: session.recovery };
+    return { project: session.name, revision: session.revision, canUndo: session.canUndo(owner), canRedo: session.canRedo(owner), revertible: session.revertible(owner), recovery: session.recovery };
   };
 
   const matches = (presented: unknown): boolean => {
