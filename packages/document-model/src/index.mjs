@@ -461,37 +461,35 @@ export function getNodeIndex(document, nodeId) {
 export function isDescendant(document, ancestorId, candidateId) {
   getNode(document, ancestorId);
   getNode(document, candidateId);
+  // Walking up from the candidate costs its depth, and inside one transaction a chain may be far
+  // deeper than a document can be at its end: 1,000 moves under a chain restored 100,000 deep
+  // took about a minute (#329). Searching down the ancestor's subtree costs that subtree instead.
+  // The two take a step in turn and the first to finish answers, so a move costs about twice the
+  // smaller of the two, and no move, nor the undo of one, is refused for depth here.
   let cursor = document.nodes[candidateId];
-  // A restored snapshot must be one tree (#327), so parents cannot name each other part-way
-  // through a transaction; the walk still refuses a cycle rather than loop for ever.
-  const seen = new Set();
-  while (cursor.parentId !== null) {
+  const climbed = new Set();
+  // Child lists are read in place, so a parent of many children is not copied on every move.
+  const below = [{ children: document.nodes[ancestorId].children, next: 0 }];
+  const searched = new Set([ancestorId]);
+  for (;;) {
+    // A restored snapshot must be one tree (#327), so parents cannot name each other part-way
+    // through a transaction; both walks still refuse a cycle rather than loop for ever.
+    if (cursor.parentId === null) return false;
     if (cursor.parentId === ancestorId) return true;
-    if (seen.has(cursor.id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(cursor.id)}`);
-    seen.add(cursor.id);
-    // Inside one transaction a chain may be far deeper than a document can be at its end, and
-    // walking it to the top on every move cost each move the whole depth (#329). Past the
-    // depth limit, the answer comes from the other side instead: whether the candidate is in
-    // the ancestor's own subtree. A move then costs at most the limit plus that subtree, and
-    // its answer is the same, so no move, nor the undo of one, is refused for depth here.
-    if (seen.size > DOCUMENT_LIMITS.maxTreeDepth) return inSubtree(document, ancestorId, candidateId);
+    if (climbed.has(cursor.id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(cursor.id)}`);
+    climbed.add(cursor.id);
     cursor = getNode(document, cursor.parentId);
-  }
-  return false;
-}
 
-/** Whether `candidateId` is below `ancestorId`, searched downward and stopping when found. */
-function inSubtree(document, ancestorId, candidateId) {
-  const pending = [...document.nodes[ancestorId].children];
-  const seen = new Set([ancestorId]);
-  while (pending.length > 0) {
-    const id = pending.pop();
+    while (below.length > 0 && below.at(-1).next >= below.at(-1).children.length) below.pop();
+    if (below.length === 0) return false;
+    const top = below.at(-1);
+    const id = top.children[top.next];
+    top.next += 1;
     if (id === candidateId) return true;
-    if (seen.has(id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(id)}`);
-    seen.add(id);
-    for (const child of getNode(document, id).children) pending.push(child);
+    if (searched.has(id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(id)}`);
+    searched.add(id);
+    below.push({ children: getNode(document, id).children, next: 0 });
   }
-  return false;
 }
 
 const shownId = (id) => {
