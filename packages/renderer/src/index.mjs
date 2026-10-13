@@ -288,7 +288,15 @@ const LONGHANDS = Object.freeze({
   "border-style": /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?-style$/u,
   "border-width": /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?-width$/u,
   "border-radius": /^border-(?:top|bottom|start|end)-(?:left|right|start|end)-radius$/u,
+  "border-block-color": /^border-block-(?:start|end)-color$/u,
+  "border-block-style": /^border-block-(?:start|end)-style$/u,
+  "border-block-width": /^border-block-(?:start|end)-width$/u,
+  "border-inline-color": /^border-inline-(?:start|end)-color$/u,
+  "border-inline-style": /^border-inline-(?:start|end)-style$/u,
+  "border-inline-width": /^border-inline-(?:start|end)-width$/u,
 });
+// Logical and physical names (inset-block and top, margin-inline and margin-left) are not
+// paired: which physical side a logical one is depends on the writing mode.
 
 /** Whether `name` is one of `shorthand`'s longhands (margin-left of margin, top of inset). */
 export function isLonghandOf(name, shorthand) {
@@ -296,13 +304,23 @@ export function isLonghandOf(name, shorthand) {
   return name.startsWith(`${shorthand}-`) || LONGHANDS[shorthand]?.test(name) === true;
 }
 
-/** `style` with each shorthand moved before its first longhand; every other entry keeps its place. */
+/**
+ * `style` with each longhand moved to just after its last shorthand. Shorthands keep their
+ * order among themselves (so of two overlapping ones the later still wins what they share),
+ * and every other entry keeps its place.
+ */
 export function shorthandsFirst(style) {
-  const names = [];
-  for (const name of Object.keys(style)) {
-    const at = names.findIndex((earlier) => isLonghandOf(earlier, name));
-    if (at < 0) names.push(name);
-    else names.splice(at, 0, name);
+  const names = Object.keys(style);
+  for (const name of [...names]) {
+    const at = names.indexOf(name);
+    let last = -1;
+    names.forEach((other, index) => {
+      if (isLonghandOf(name, other)) last = index;
+    });
+    if (last > at) {
+      names.splice(at, 1);
+      names.splice(last, 0, name);
+    }
   }
   return Object.fromEntries(names.map((name) => [name, style[name]]));
 }
@@ -499,6 +517,8 @@ export function createRenderer(root) {
     for (const [name, raw] of Object.entries(plan.style)) {
       const important = /\s*!important$/iu.test(raw);
       const value = important ? raw.replace(/\s*!important$/iu, "") : raw;
+      // A shorthand marked !important is not refined by a plain longhand, as in CSS.
+      if (!important && element.style.getPropertyPriority(name) === "important") continue;
       element.style.setProperty(name, designViewportLengths(value), important ? "important" : "");
       // The browser's CSS parser is the final judge; count what it refused.
       if (element.style.getPropertyValue(name) === "") rejected += 1;

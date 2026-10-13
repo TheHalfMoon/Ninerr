@@ -76,7 +76,7 @@ Rules:
 - explicit sandbox boundary for imported or generated markup;
 - deterministic layout test fixtures;
 - browser-engine differences documented where exact parity is impossible;
-- a style's shorthand applies before its own longhands, so a longhand always refines its shorthand, whatever order the entries are stored in (#294, decided in P09). Examples: `margin` before `margin-left`, `inset` before `top`, `gap` before `row-gap`. The canvas and code export both take this order from the renderer's plan, and every other entry keeps its place.
+- a style's shorthand applies before its own longhands, so a longhand always refines its shorthand, whatever order the entries are stored in (#294, decided in P09). Examples: `margin` before `margin-left`, `inset` before `top`, `gap` before `row-gap`. The canvas, code export and code write-back all take this order from the renderer, and every other entry keeps its place. Two exceptions follow CSS. A shorthand marked `!important` is not refined by a plain longhand. Logical and physical names, such as `inset-block` and `top`, are not paired, since the writing mode decides which side is which.
 
 ## Code synchronization
 
