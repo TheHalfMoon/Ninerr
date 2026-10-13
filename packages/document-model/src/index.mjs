@@ -469,13 +469,27 @@ export function isDescendant(document, ancestorId, candidateId) {
     if (cursor.parentId === ancestorId) return true;
     if (seen.has(cursor.id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(cursor.id)}`);
     seen.add(cursor.id);
-    // No valid document is deeper than its limit, so a node more levels down than that can
-    // never hold anything once the transaction ends: refused here rather than walked to the
-    // top on every move (#329), which made each move cost the whole depth.
-    if (seen.size > DOCUMENT_LIMITS.maxTreeDepth) {
-      throw new DocumentInvariantError(`node ${shownId(candidateId)} is deeper than ${DOCUMENT_LIMITS.maxTreeDepth} levels`);
-    }
+    // Inside one transaction a chain may be far deeper than a document can be at its end, and
+    // walking it to the top on every move cost each move the whole depth (#329). Past the
+    // depth limit, the answer comes from the other side instead: whether the candidate is in
+    // the ancestor's own subtree. A move then costs at most the limit plus that subtree, and
+    // its answer is the same, so no move, nor the undo of one, is refused for depth here.
+    if (seen.size > DOCUMENT_LIMITS.maxTreeDepth) return inSubtree(document, ancestorId, candidateId);
     cursor = getNode(document, cursor.parentId);
+  }
+  return false;
+}
+
+/** Whether `candidateId` is below `ancestorId`, searched downward and stopping when found. */
+function inSubtree(document, ancestorId, candidateId) {
+  const pending = [...document.nodes[ancestorId].children];
+  const seen = new Set([ancestorId]);
+  while (pending.length > 0) {
+    const id = pending.pop();
+    if (id === candidateId) return true;
+    if (seen.has(id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(id)}`);
+    seen.add(id);
+    for (const child of getNode(document, id).children) pending.push(child);
   }
   return false;
 }

@@ -56,9 +56,9 @@ test("a subtree whose child lists loop is refused at once, not walked until memo
 
 // #329 item 2: a move checks that the new parent is not inside the moved node by walking up
 // from the new parent, which cost the new parent's depth on every move: 1,000 moves under a
-// restored chain 100,000 deep took about a minute in one transaction. No valid document is
-// deeper than its limit, so the walk stops there and refuses a deeper parent at once.
-test("moves under a parent deeper than the limit are refused at once, not walked", async () => {
+// restored chain 100,000 deep took about a minute in one transaction. Past the depth limit the
+// check now searches the moved node's subtree instead, with the same answer.
+test("moves under a parent far deeper than the limit cost the limit, not the depth", async () => {
   const outcome = await new Promise((resolve) => {
     const worker = new Worker(`
       const { parentPort, workerData } = require("node:worker_threads");
@@ -87,7 +87,30 @@ test("moves under a parent deeper than the limit are refused at once, not walked
       resolve(message);
     });
   });
-  assert.match(outcome.error ?? "applied", /^DocumentInvariantError: node c99989 is deeper than 1024 levels/u);
+  // Every move applies; the transaction is refused only at its end, for the chain it leaves.
+  assert.match(outcome.error ?? "applied", /^DocumentInvariantError: document tree is deeper than 1024 levels/u);
+});
+
+test("a transaction that passes through a deep state, and its undo, both apply (#329)", () => {
+  // From the review: a leaf under a 2,000-deep chain moved to the top, then the chain cut in
+  // half. The result is valid; undoing it moves the leaf back under the deep end.
+  const document = createDocument({ id: "undo", nodes: [{ id: "root", type: "frame", children: [], props: {} }] });
+  const nodes = chain(2_000);
+  nodes[1_999].children = ["X"];
+  nodes.push({ id: "X", type: "element", parentId: "c1999", props: {} });
+  const forward = applyTransaction(document, { id: "t", actor: "u", baseRevision: document.revision, operations: [
+    { type: "restore-subtree", rootId: "c0", parentId: "root", nodes },
+    { type: "move-node", nodeId: "X", parentId: "root" },
+    { type: "move-node", nodeId: "c1000", parentId: "root" },
+  ] });
+  const undone = applyTransaction(forward.document, { ...forward.inverse, baseRevision: forward.document.revision });
+  assert.deepEqual(Object.keys(undone.document.nodes), ["root"]);
+  // A move into the moved node's own subtree is still refused, however deep the target.
+  const deep = createDocument({ id: "own", nodes: [{ id: "root", type: "frame", children: [], props: {} }] });
+  assert.throws(() => applyTransaction(deep, { id: "t2", actor: "u", baseRevision: deep.revision, operations: [
+    { type: "restore-subtree", rootId: "c0", parentId: "root", nodes: chain(3_000) },
+    { type: "move-node", nodeId: "c5", parentId: "c2999" },
+  ] }), /into its own subtree/u);
 });
 
 test("moves within the depth limit are still checked against the moved node's own subtree", () => {
