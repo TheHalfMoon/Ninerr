@@ -75,7 +75,8 @@ Rules:
 - no renderer-only state that cannot be serialized;
 - explicit sandbox boundary for imported or generated markup;
 - deterministic layout test fixtures;
-- browser-engine differences documented where exact parity is impossible.
+- browser-engine differences documented where exact parity is impossible;
+- a style's shorthand applies before its own longhands, so a longhand always refines its shorthand, whatever order the entries are stored in (#294, decided in P09). Examples: `margin` before `margin-left`, `inset` before `top`, `gap` before `row-gap`. The canvas and code export both take this order from the renderer's plan, and every other entry keeps its place.
 
 ## Code synchronization
 

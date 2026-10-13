@@ -268,7 +268,43 @@ export function planElement(node) {
     if (safeStylesheet(rawStylesheet)) stylesheet = rawStylesheet;
     else dropped += 1;
   }
-  return { tag, namespace, attributes, style, text, stylesheet, dropped };
+  return { tag, namespace, attributes, style: shorthandsFirst(style), text, stylesheet, dropped };
+}
+
+// #294 (decided in P09): a style's shorthand applies before its own longhands, so a longhand
+// always refines its shorthand, whatever order the entries are stored in. Nothing else moves.
+const LONGHANDS = Object.freeze({
+  inset: /^(?:top|right|bottom|left)$/u,
+  gap: /^(?:row|column)-gap$/u,
+  "grid-gap": /^grid-(?:row|column)-gap$/u,
+  "grid-area": /^grid-(?:row|column)(?:-start|-end)?$/u,
+  "place-items": /^(?:align|justify)-items$/u,
+  "place-content": /^(?:align|justify)-content$/u,
+  "place-self": /^(?:align|justify)-self$/u,
+  "flex-flow": /^flex-(?:direction|wrap)$/u,
+  columns: /^column-(?:width|count)$/u,
+  font: /^line-height$/u,
+  "border-color": /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?-color$/u,
+  "border-style": /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?-style$/u,
+  "border-width": /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?-width$/u,
+  "border-radius": /^border-(?:top|bottom|start|end)-(?:left|right|start|end)-radius$/u,
+});
+
+/** Whether `name` is one of `shorthand`'s longhands (margin-left of margin, top of inset). */
+export function isLonghandOf(name, shorthand) {
+  if (name === shorthand || name.startsWith("--") || shorthand.startsWith("--")) return false;
+  return name.startsWith(`${shorthand}-`) || LONGHANDS[shorthand]?.test(name) === true;
+}
+
+/** `style` with each shorthand moved before its first longhand; every other entry keeps its place. */
+export function shorthandsFirst(style) {
+  const names = [];
+  for (const name of Object.keys(style)) {
+    const at = names.findIndex((earlier) => isLonghandOf(earlier, name));
+    if (at < 0) names.push(name);
+    else names.splice(at, 0, name);
+  }
+  return Object.fromEntries(names.map((name) => [name, style[name]]));
 }
 
 function sanitizeAttribute(tag, namespace, name, rawValue) {
