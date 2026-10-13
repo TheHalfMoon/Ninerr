@@ -454,6 +454,9 @@ test("a gate whose base and head use different object formats is refused (#64)",
   const longBase = HEAD_COMMIT + "c".repeat(24);
   assert.throws(() => evaluateAcceptance(gateInput({ baseCommit: longBase })), (error) => error instanceof VisualGitValidationError && /one object format/u.test(error.message));
   assert.throws(() => evaluateAcceptance(gateInput({ baseCommit: "a".repeat(64) })), /one object format/u);
-  // One format on both sides is evaluated as before.
-  assert.deepEqual(evaluateAcceptance(gateInput({ baseCommit: HEAD_COMMIT })).blocks, [{ reason: "empty-range", check: null }]);
+  assert.throws(() => evaluateAcceptance(gateInput({ headCommit: "b".repeat(64), snapshot: snapshot({ snapshotId: "snap-head", sourceCommit: "b".repeat(64) }) })), /one object format/u);
+  // A gate in SHA-256 on both sides is evaluated as one in SHA-1.
+  const sha256 = { baseCommit: "a".repeat(64), headCommit: "b".repeat(64), snapshot: snapshot({ snapshotId: "snap-head", sourceCommit: "b".repeat(64) }) };
+  assert.equal(evaluateAcceptance(gateInput(sha256)).verdict, "accepted");
+  assert.deepEqual(evaluateAcceptance(gateInput({ ...sha256, baseCommit: "b".repeat(64) })).blocks, [{ reason: "empty-range", check: null }]);
 });
