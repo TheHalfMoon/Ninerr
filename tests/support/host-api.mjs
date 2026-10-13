@@ -7,10 +7,14 @@ import { startStudioHost } from "../../packages/studio-host/src/index.ts";
 /**
  * fetch, but a request that fails before any answer names itself and its cause (the socket
  * error, such as ECONNRESET), which a bare "fetch failed" does not (#306).
+ *
+ * Each request has its own connection. The host runs in the test's own process, and a test can
+ * hold the event loop past the host's 5 s keep-alive with synchronous work: Node 22's fetch
+ * then reused the connection the host had closed meanwhile, and the request was reset (#306).
  */
 async function request(url, init) {
   try {
-    return await fetch(url, init);
+    return await fetch(url, { ...init, headers: { ...init.headers, connection: "close" } });
   } catch (error) {
     const cause = error?.cause;
     throw new Error(`${init.method} ${new URL(url).pathname} failed before an answer: ${[cause?.code, cause?.message ?? error?.message].filter(Boolean).join(" ")}`, { cause: error });
