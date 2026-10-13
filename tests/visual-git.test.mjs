@@ -434,11 +434,16 @@ test("text with nothing visible, or variation selectors out of place, is refused
   for (const blank of ["\u{200d}", "\u{200c}\u{200d}", " \u{200d} ", "\u{301}", "\u{200d}\u{301}\t"]) {
     assert.throws(() => normalizeSnapshot(named(blank)), /must contain visible text/, JSON.stringify(blank));
   }
-  for (const selectors of ["\u{fe0f}a", "a\u{fe0f}\u{fe0f}", "a\u{fe00}\u{fe01}b", "\u{E0100}x", "x\u{E0100}\u{E0101}"]) {
+  // At the start, in a row, or spaced out by whitespace, a joiner or a mark (from the review).
+  for (const selectors of ["\u{fe0f}a", "a\u{fe0f}\u{fe0f}", "a\u{fe00}\u{fe01}b", "\u{E0100}x", "x\u{E0100}\u{E0101}", " \u{fe0f}a", "\t\u{fe0f}a", `a${"\u{200d}\u{fe0f}".repeat(50)}`, `a${"\u{301}\u{fe0f}".repeat(50)}`, `a${" \u{fe01}".repeat(50)}`]) {
     assert.throws(() => normalizeSnapshot(named(selectors)), /variation selector/, JSON.stringify(selectors));
   }
-  // One selector after a character is how emoji and ideograph variants are written.
-  for (const visible of ["\u{2764}\u{fe0f}", "\u{845b}\u{E0100}", "a\u{301}"]) {
+  for (const joiners of [`a${"\u{200d}\u{200c}".repeat(100)}`, "a\u{200d}\u{200d}b"]) {
+    assert.throws(() => normalizeSnapshot(named(joiners)), /two joiners in a row/, JSON.stringify(joiners));
+  }
+  // One selector after a character is how emoji and ideograph variants are written: a heart,
+  // a heart on fire (ZWJ with VS16), a keycap, a flag of two parts, skin tones, a kanji variant.
+  for (const visible of ["\u{2764}\u{fe0f}", "\u{2764}\u{fe0f}\u{200d}\u{1f525}", "1\u{fe0f}\u{20e3}", "\u{1f3f3}\u{fe0f}\u{200d}\u{1f308}", "\u{1f44d}\u{1f3fd}", "\u{1f1f8}\u{1f1e6}", "\u{845b}\u{E0100}", "a\u{301}"]) {
     assert.equal(normalizeSnapshot(named(visible)).nodes.find((entry) => entry.id === "frame-1").name, visible);
   }
 });
