@@ -251,9 +251,21 @@ test("a registry this user cannot read is not trusted: it is reported, not used"
   // Another account could leave a file this user may not read (only SYSTEM listed here).
   setAccessList(path, "D:P(A;;FA;;;SY)");
   try {
+    // An elevated process with backup rights (as on CI's Windows runners) still opens it; then
+    // it is this user's file that only SYSTEM may change, and trusted. Otherwise it is refused.
+    let readable = true;
+    try {
+      readWithSecurity(path, 1024);
+    } catch {
+      readable = false;
+    }
     const registry = new AgentRegistry(root, "test");
-    assert.match(registry.problem ?? "", /not trusted: its owner and access list could not be read \(CreateFileW failed \(Windows error 5\)\)/u);
-    assert.notEqual(registry.problemCode, "agents-unavailable", "not merely busy");
+    if (readable) {
+      assert.equal(registry.problem, null);
+    } else {
+      assert.match(registry.problem ?? "", /not trusted: its owner and access list could not be read \(CreateFileW failed \(Windows error 5\)\)/u);
+      assert.notEqual(registry.problemCode, "agents-unavailable", "not merely busy");
+    }
   } finally {
     setAccessList(path, `D:P(A;;FA;;;${currentUserSid()})`);
   }
