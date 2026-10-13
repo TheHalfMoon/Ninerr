@@ -103,8 +103,9 @@ test("an agent's change is undone next to Undo, by pointer and keyboard, newest 
     assert.equal(await layerCount(page), boxLayers, "only the person's box is left");
     await offered(page, null);
     assert.equal(await page.locator("#history button.revert").count(), 0);
-    // With nothing to offer, the shortcut says so and changes nothing.
-    await page.keyboard.press("Control+Alt+z");
+    // With nothing to offer, the shortcut says so and changes nothing. Pressed as on a Mac,
+    // where Option+Z types "Ω": the key's place counts, not its character.
+    await page.evaluate(() => document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Ω", code: "KeyZ", altKey: true, metaKey: true, bubbles: true })));
     await page.waitForFunction(() => document.getElementById("status").textContent === "No agent change to undo.");
 
     // The person's Undo undoes their own revert: the frame is back.
@@ -123,6 +124,9 @@ test("an agent's change is undone next to Undo, by pointer and keyboard, newest 
     await page.keyboard.press("Enter");
     await waitRevision(page, 8);
     assert.equal(await background(page, frameId), before);
+    // The button is gone with nothing left to undo; focus stays in the toolbar.
+    await offered(page, null);
+    assert.match(await page.evaluate(() => document.activeElement.id), /^action-(?:undo|redo|projects)$/u);
 
     assert.deepEqual(editor.foreign, []);
     assert.deepEqual(editor.errors, []);
