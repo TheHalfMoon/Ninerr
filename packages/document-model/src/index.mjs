@@ -461,17 +461,35 @@ export function getNodeIndex(document, nodeId) {
 export function isDescendant(document, ancestorId, candidateId) {
   getNode(document, ancestorId);
   getNode(document, candidateId);
+  // Walking up from the candidate costs its depth, and inside one transaction a chain may be far
+  // deeper than a document can be at its end: 1,000 moves under a chain restored 100,000 deep
+  // took about a minute (#329). Searching down the ancestor's subtree costs that subtree instead.
+  // The two take a step in turn and the first to finish answers, so a move costs about twice the
+  // smaller of the two, and no move, nor the undo of one, is refused for depth here.
   let cursor = document.nodes[candidateId];
-  // A restored snapshot must be one tree (#327), so parents cannot name each other part-way
-  // through a transaction; the walk still refuses a cycle rather than loop for ever.
-  const seen = new Set();
-  while (cursor.parentId !== null) {
+  const climbed = new Set();
+  // Child lists are read in place, so a parent of many children is not copied on every move.
+  const below = [{ children: document.nodes[ancestorId].children ?? [], next: 0 }];
+  const searched = new Set([ancestorId]);
+  for (;;) {
+    // A restored snapshot must be one tree (#327), so parents cannot name each other part-way
+    // through a transaction; both walks still refuse a cycle rather than loop for ever.
+    if (cursor.parentId === null) return false;
     if (cursor.parentId === ancestorId) return true;
-    if (seen.has(cursor.id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(cursor.id)}`);
-    seen.add(cursor.id);
+    if (climbed.has(cursor.id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(cursor.id)}`);
+    climbed.add(cursor.id);
     cursor = getNode(document, cursor.parentId);
+
+    while (below.length > 0 && below.at(-1).next >= below.at(-1).children.length) below.pop();
+    if (below.length === 0) return false;
+    const top = below.at(-1);
+    const id = top.children[top.next];
+    top.next += 1;
+    if (id === candidateId) return true;
+    if (searched.has(id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(id)}`);
+    searched.add(id);
+    below.push({ children: getNode(document, id).children ?? [], next: 0 });
   }
-  return false;
 }
 
 const shownId = (id) => {
