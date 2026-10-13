@@ -469,7 +469,7 @@ export function isDescendant(document, ancestorId, candidateId) {
   let cursor = document.nodes[candidateId];
   const climbed = new Set();
   // Child lists are read in place, so a parent of many children is not copied on every move.
-  const below = [{ children: document.nodes[ancestorId].children, next: 0 }];
+  const below = [{ children: document.nodes[ancestorId].children ?? [], next: 0 }];
   const searched = new Set([ancestorId]);
   for (;;) {
     // A restored snapshot must be one tree (#327), so parents cannot name each other part-way
@@ -488,7 +488,7 @@ export function isDescendant(document, ancestorId, candidateId) {
     if (id === candidateId) return true;
     if (searched.has(id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(id)}`);
     searched.add(id);
-    below.push({ children: getNode(document, id).children, next: 0 });
+    below.push({ children: getNode(document, id).children ?? [], next: 0 });
   }
 }
 

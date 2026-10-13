@@ -108,9 +108,16 @@ test("a snapshot a removal recorded is restored as before", () => {
 });
 
 test("the walk up from a node stops at a cycle of parents instead of looping", async () => {
-  // Not reachable through a transaction now; the walk is guarded all the same.
-  const result = await inWorker((_, { isDescendant }) => isDescendant({ nodes: { x: { id: "x", parentId: "y" }, y: { id: "y", parentId: "x" }, a: { id: "a", parentId: null } } }, "a", "x"), {});
+  // Not reachable through a transaction now; the walk is guarded all the same. The search down
+  // from "a" runs a step at a time beside the walk up (#329), so "a" holds a chain longer than
+  // the cycle: the walk up meets the cycle first.
+  const chain = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`b${i}`, { id: `b${i}`, parentId: i === 0 ? "a" : `b${i - 1}`, children: i === 9 ? [] : [`b${i + 1}`] }]));
+  const nodes = { x: { id: "x", parentId: "y", children: [] }, y: { id: "y", parentId: "x", children: [] }, a: { id: "a", parentId: null, children: ["b0"] }, ...chain };
+  const result = await inWorker(({ nodes }, { isDescendant }) => isDescendant({ nodes }, "a", "x"), { nodes });
   assert.match(result.error ?? String(result.result), /Cycle detected at node [xy]/u);
+  // With nothing below "a", the search down ends first, and answers.
+  const empty = await inWorker((_, { isDescendant }) => isDescendant({ nodes: { x: { id: "x", parentId: "y" }, y: { id: "y", parentId: "x" }, a: { id: "a", parentId: null } } }, "a", "x"), {});
+  assert.equal(empty.error ?? empty.result, false);
 });
 
 test("the host refuses such an edit at once and stays usable", { timeout: 20_000 }, async (t) => {
