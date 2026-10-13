@@ -183,7 +183,7 @@ test("only inputs whose own parse is unrepresentable are out of scope", () => {
     assert.equal(representable(html), false, html);
   }
   // Expressible nestings, foreign nesting and the shapes the review found are in scope.
-  for (const html of ["<ul><li><ul><li>x</li></ul></li></ul>", "<p><button><p>y</p></button></p>", "<svg><a><a>x</a></a></svg>", "<ul><li><form><li>x</li></form></li></ul>", "<dl><dt><form><dd>x</dd></form></dt></dl>", "<table><form></form></table>"]) {
+  for (const html of ["<ul><li><ul><li>x</li></ul></li></ul>", "<p><button><p>y</p></button></p>", "<svg><a><a>x</a></a></svg>", "<ul><li><form><li>x</li></form></li></ul>", "<dl><dt><form><dd>x</dd></form></dt></dl>", "<table><form></form></table>", "<template><plaintext>x</template>y", "<svg><foreignObject><plaintext>x"]) {
     assert.equal(representable(html), true, html);
     assertFixpoint(html, html);
   }
