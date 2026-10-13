@@ -28,6 +28,8 @@ export const SEMANTIC_ROLES = [
   "menuitem",
 ] as const;
 export type SemanticRole = (typeof SEMANTIC_ROLES)[number];
+/** ARIA tokens that remove native semantics rather than replace them. */
+export type RemovingRole = "presentation" | "none" | "article";
 
 /** How a semantic fact was established. Intake only ever records markup it saw. */
 export type EvidenceClass = "OBSERVED";
@@ -50,8 +52,11 @@ export interface SemanticReport {
   records: SemanticRecord[];
   /** Explicit ARIA roles that are not on the allow-list; reported, never applied. */
   unknownRoles: Array<{ nodeId: string; role: string }>;
-  /** Native semantics that an explicit ARIA role overrode. */
-  overrides: Array<{ nodeId: string; native: SemanticRole; aria: SemanticRole }>;
+  /**
+   * Native semantics that an explicit ARIA role overrode: replaced by another role, or removed
+   * by a presentational role or `article` (#89).
+   */
+  overrides: Array<{ nodeId: string; native: SemanticRole; aria: SemanticRole | RemovingRole }>;
 }
 
 export interface ImportReview {

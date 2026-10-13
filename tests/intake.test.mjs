@@ -83,7 +83,31 @@ test("web semantics come only from markup and carry OBSERVED evidence", () => {
   assert.deepEqual(sections.map((id) => roleOf(id)?.role ?? null).sort(), [null, "region"].sort());
   assert.equal(roleOf(byTag(p, "ul", (node) => node.attributes.role === "presentation")[0]), undefined, "presentation removes the role");
   assert.deepEqual(report.unknownRoles.map((entry) => entry.role), ["banana"]);
-  assert.deepEqual(report.overrides.map((entry) => [entry.native, entry.aria]), [["button", "tab"]]);
+  // A presentational role that removes a native one is an override a reviewer must see too (#89).
+  assert.deepEqual(report.overrides.map((entry) => [entry.native, entry.aria]), [["button", "tab"], ["list", "presentation"]]);
+});
+
+test("a role that removes native semantics is recorded as an override, whichever removes it (#89)", () => {
+  for (const [html, expected] of [
+    ['<nav role="none"><a href="https://example.com/">x</a></nav>', [["navigation", "none"]]],
+    ['<header role="article">h</header>', [["banner", "article"]]],
+    ['<div role="presentation">no native role</div>', []],
+    ['<UL ROLE="PRESENTATION"><li>x</li></UL>', [["list", "presentation"]]],
+  ]) {
+    const report = inferSemantics(proposal(html));
+    assert.deepEqual(report.overrides.map((entry) => [entry.native, entry.aria]), expected, html);
+  }
+});
+
+test("tag names are matched ASCII case-insensitively, in a proposal not built by the parser (#89)", () => {
+  // The HTML import lowercases tags itself; a proposal built otherwise may not.
+  const p = proposal('<ul><li>x</li></ul><span title="pic">p</span>');
+  for (const node of Object.values(p.nodes)) if (node.tag !== undefined) node.tag = node.tag.toUpperCase();
+  const span = Object.values(p.nodes).find((node) => node.tag === "SPAN");
+  span.tag = "IMG";
+  span.attributes.alt = "a picture";
+  const roles = inferSemantics(p).records.map((record) => record.role).sort();
+  assert.deepEqual(roles, ["img", "list", "listitem"]);
 });
 
 test("an anchor without an href resource is not a link", () => {
