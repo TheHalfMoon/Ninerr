@@ -34,6 +34,11 @@ export function evaluateAcceptance(input: unknown): AcceptanceResult {
   const snapshot = normalizeSnapshot(input.snapshot);
   assertCommit(input.baseCommit, "gate.baseCommit");
   assertCommit(input.headCommit, "gate.headCommit");
+  // SHA-1 (40) and SHA-256 (64) ids never name one commit: a range between them is neither
+  // empty nor real, so one gate input uses one object format (#64).
+  if (input.baseCommit.length !== input.headCommit.length) {
+    throw new VisualGitValidationError("gate.baseCommit and gate.headCommit must use one object format");
+  }
   assertBoundedArray(input.checks, "gate.checks", VISUAL_GIT_HARD_LIMITS.maxChecks);
   assertBoundedArray(input.requiredChecks, "gate.requiredChecks", VISUAL_GIT_HARD_LIMITS.maxChecks);
   const checks = new Map<string, AcceptanceCheck>();

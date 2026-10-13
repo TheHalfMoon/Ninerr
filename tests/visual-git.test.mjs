@@ -447,3 +447,13 @@ test("text with nothing visible, or variation selectors out of place, is refused
     assert.equal(normalizeSnapshot(named(visible)).nodes.find((entry) => entry.id === "frame-1").name, visible);
   }
 });
+
+test("a gate whose base and head use different object formats is refused (#64)", () => {
+  // A SHA-256 base that begins with a SHA-1 head is the same range under neither format, but
+  // compared as text it is not an empty range either: one gate input uses one format.
+  const longBase = HEAD_COMMIT + "c".repeat(24);
+  assert.throws(() => evaluateAcceptance(gateInput({ baseCommit: longBase })), (error) => error instanceof VisualGitValidationError && /one object format/u.test(error.message));
+  assert.throws(() => evaluateAcceptance(gateInput({ baseCommit: "a".repeat(64) })), /one object format/u);
+  // One format on both sides is evaluated as before.
+  assert.deepEqual(evaluateAcceptance(gateInput({ baseCommit: HEAD_COMMIT })).blocks, [{ reason: "empty-range", check: null }]);
+});
