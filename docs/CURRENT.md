@@ -43,7 +43,7 @@ Since then, more follow-ups have landed the same way:
 
 The seven-project dogfooding was run again on `1987c77` with the same outcomes as its record (#230).
 
-#268 (Windows access lists) is decided: a small Windows-only native boundary may read owners and access lists, and the no-process rule stands. Until it lands, it stays the stated platform deviation.
+#268 (Windows access lists) is decided: a small Windows-only native boundary reads owners and access lists, and the no-process rule stands.
 
 ## Canonical main
 

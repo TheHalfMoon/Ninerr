@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { applyPatch, buildCodeIr, exportedComponents } from "@ninerr/code-ir";
 import { StudioError } from "./errors.ts";
 import { LEGACY_CODEBASE_LINKS_FILE, registrySource } from "./legacy.ts";
-import { readTrustedFile, writeTrustedFile } from "./trusted-file.ts";
+import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
 import { type CodeSource, importJsx, layerName, sourceShape } from "./code.ts";
 import { styleProperties } from "./imports.ts";
 
@@ -100,8 +100,10 @@ export function settleWriteBacks(document: any, folder: string): { operations: u
 export class CodebaseLinks {
   readonly #path: string;
   #links: Record<string, string>;
-  /** Set when the links file was written by a newer Ninerr: it is read as empty and never written. */
+  /** Set when the links file was written by a newer Ninerr, or could not be read just now: it is read as empty and never written. */
   readonly #newer: StudioError | null;
+  /** Why a links file was set aside as not trusted, or null. */
+  readonly #setAside: string | null = null;
 
   constructor(projectsRoot: string) {
     this.#path = join(projectsRoot, ".ninerr-codebases.json");
@@ -112,11 +114,26 @@ export class CodebaseLinks {
     this.#links = read.links;
     // A legacy file is never written by a newer Ninerr, so a "newer" one is only ignored.
     this.#newer = read.newer === null || source.legacy ? null : new StudioError(409, "codebases-newer", `the codebase links were saved by a newer version of Ninerr (links version ${read.newer}); they are left unchanged until that version is used`);
+    // Links that could not be read just now are kept as they are and not overwritten (#268).
+    if (read.unavailable !== null && !source.legacy) this.#newer = new StudioError(503, "codebases-unavailable", `the codebase links could not be read just now, so they are left unchanged until Ninerr is started again: ${read.unavailable}`);
+    // Links that are not trusted (another account may have written them) are set aside, kept
+    // for inspection, and reported: never followed, and never lost without a word (#268). A
+    // legacy file is not ours to move; it is only ignored.
+    if (read.untrusted !== null) {
+      this.#setAside = `the codebase links were not trusted and ${source.legacy ? "are ignored" : "were set aside"}: ${read.untrusted}`;
+      if (!source.legacy) {
+        try {
+          renameSync(this.#path, `${this.#path}.unreadable-${Date.now()}`);
+        } catch {
+          // left in place; it is ignored until replaced by the next save
+        }
+      }
+    }
   }
 
   /** Why the links could not be used, or null. */
   get problem(): string | null {
-    return this.#newer?.message ?? null;
+    return this.#newer?.message ?? this.#setAside;
   }
 
   get(project: string): string | null {
@@ -141,22 +158,23 @@ export class CodebaseLinks {
 /** The links format this version writes; a newer one is refused and never changed. */
 const LINKS_VERSION = 1;
 
-function readLinks(path: string): { links: Record<string, string>; newer: number | null } {
-  const none = { links: {}, newer: null };
+function readLinks(path: string): { links: Record<string, string>; newer: number | null; untrusted: string | null; unavailable: string | null } {
+  const none = { links: {}, newer: null, untrusted: null, unavailable: null };
   // Only a small regular file this user owns, and no one else can change, is trusted (#268).
   let bytes;
   try {
     bytes = readTrustedFile(path, 64 * 1024);
-  } catch {
-    return none;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return error instanceof TrustedFileUnavailableError ? { ...none, unavailable: reason } : { ...none, untrusted: reason };
   }
   if (bytes === null) return none;
   try {
     const parsed = JSON.parse(bytes.toString("utf8"));
-    if (Number.isInteger(parsed?.version) && parsed.version > LINKS_VERSION) return { links: {}, newer: parsed.version };
+    if (Number.isInteger(parsed?.version) && parsed.version > LINKS_VERSION) return { ...none, newer: parsed.version };
     const links = parsed?.links;
     if (links === null || typeof links !== "object" || Array.isArray(links)) return none;
-    return { links: Object.fromEntries(Object.entries(links).filter(([project, folder]) => typeof folder === "string" && isAbsolute(folder) && project.length <= 64)), newer: null };
+    return { ...none, links: Object.fromEntries(Object.entries(links).filter(([project, folder]) => typeof folder === "string" && isAbsolute(folder) && project.length <= 64)) };
   } catch {
     return none;
   }

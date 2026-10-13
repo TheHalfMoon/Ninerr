@@ -26,7 +26,6 @@ export interface WindowsTrustedRead {
   bytes: Buffer | null;
 }
 
-const INVALID_HANDLE = 0xffffffffffffffffn;
 const GENERIC_READ = 0x80000000;
 const GENERIC_WRITE = 0x40000000;
 const READ_CONTROL = 0x00020000;
@@ -48,6 +47,7 @@ const ACL_SIZE_INFORMATION_CLASS = 2;
 const SDDL_REVISION_1 = 1;
 const ERROR_FILE_NOT_FOUND = 2;
 const ERROR_PATH_NOT_FOUND = 3;
+const ERROR_SHARING_VIOLATION = 32;
 
 /** An error the Windows API reported, with its code. */
 export class WindowsSecurityError extends Error {
@@ -98,6 +98,8 @@ interface Bindings {
   ConvertStringSecurityDescriptorToSecurityDescriptorW: any;
   ACE_HEADER: any;
   BY_HANDLE_FILE_INFORMATION: any;
+  securityAttributesSize: number;
+  invalidHandle: bigint;
 }
 
 let bindings: Bindings | null = null;
@@ -109,17 +111,30 @@ function bind(): Bindings {
   const koffi = createRequire(import.meta.url)("koffi");
   const advapi = koffi.load("advapi32.dll");
   const kernel = koffi.load("kernel32.dll");
-  koffi.pointer("NINERR_HANDLE", koffi.opaque());
-  const ACE_HEADER = koffi.struct("NINERR_ACE_HEADER", { AceType: "uint8", AceFlags: "uint8", AceSize: "uint16" });
-  koffi.struct("NINERR_ACL_SIZE_INFORMATION", { AceCount: "uint32", AclBytesInUse: "uint32", AclBytesFree: "uint32" });
-  const FILETIME = koffi.struct("NINERR_FILETIME", { low: "uint32", high: "uint32" });
-  const BY_HANDLE_FILE_INFORMATION = koffi.struct("NINERR_BY_HANDLE_FILE_INFORMATION", {
+  // Koffi's type names are global to the process: a second copy of this module (loaded under
+  // another URL) reuses the types the first one registered.
+  const named = (name: string, make: () => unknown) => {
+    try {
+      return make();
+    } catch (error) {
+      if (!/Duplicate type name/u.test(String((error as Error)?.message))) throw error;
+      return koffi.type(name);
+    }
+  };
+  named("NINERR_HANDLE", () => koffi.pointer("NINERR_HANDLE", koffi.opaque()));
+  const ACE_HEADER = named("NINERR_ACE_HEADER", () => koffi.struct("NINERR_ACE_HEADER", { AceType: "uint8", AceFlags: "uint8", AceSize: "uint16" }));
+  named("NINERR_ACL_SIZE_INFORMATION", () => koffi.struct("NINERR_ACL_SIZE_INFORMATION", { AceCount: "uint32", AclBytesInUse: "uint32", AclBytesFree: "uint32" }));
+  const FILETIME = named("NINERR_FILETIME", () => koffi.struct("NINERR_FILETIME", { low: "uint32", high: "uint32" }));
+  const BY_HANDLE_FILE_INFORMATION = named("NINERR_BY_HANDLE_FILE_INFORMATION", () => koffi.struct("NINERR_BY_HANDLE_FILE_INFORMATION", {
     attributes: "uint32", created: FILETIME, accessed: FILETIME, written: FILETIME,
     volumeSerial: "uint32", sizeHigh: "uint32", sizeLow: "uint32", links: "uint32", indexHigh: "uint32", indexLow: "uint32",
-  });
-  koffi.struct("NINERR_SECURITY_ATTRIBUTES", { nLength: "uint32", lpSecurityDescriptor: "void *", bInheritHandle: "int" });
+  }));
+  const SECURITY_ATTRIBUTES = named("NINERR_SECURITY_ATTRIBUTES", () => koffi.struct("NINERR_SECURITY_ATTRIBUTES", { nLength: "uint32", lpSecurityDescriptor: "void *", bInheritHandle: "int" }));
   bindings = {
     koffi,
+    // Sizes as this process's pointers make them: 12 bytes on 32-bit Windows, 24 on 64-bit.
+    securityAttributesSize: koffi.sizeof(SECURITY_ATTRIBUTES),
+    invalidHandle: (1n << BigInt(8 * koffi.sizeof("void *"))) - 1n,
     ACE_HEADER,
     BY_HANDLE_FILE_INFORMATION,
     CreateFileW: kernel.func("NINERR_HANDLE __stdcall CreateFileW(str16 name, uint32 access, uint32 share, NINERR_SECURITY_ATTRIBUTES *attributes, uint32 disposition, uint32 flags, NINERR_HANDLE template)"),
@@ -143,7 +158,15 @@ function bind(): Bindings {
   return bindings;
 }
 
-const isInvalid = (api: Bindings, handle: unknown) => handle === null || api.koffi.address(handle) === INVALID_HANDLE;
+const isInvalid = (api: Bindings, handle: unknown) => handle === null || api.koffi.address(handle) === api.invalidHandle;
+
+/** Thrown when another program holds the file open for writing: worth trying again later. */
+export class FileBusyError extends WindowsSecurityError {
+  constructor() {
+    super("CreateFileW (another program holds the file open)", ERROR_SHARING_VIOLATION);
+    this.name = "FileBusyError";
+  }
+}
 
 function sidAt(api: Bindings, sid: unknown): string {
   if (!api.IsValidSid(sid)) throw new Error("the Windows API returned an invalid SID");
@@ -203,11 +226,18 @@ function securityOf(api: Bindings, handle: unknown): WindowsFileSecurity {
 export function readWithSecurity(path: string, maxBytes: number): WindowsTrustedRead | null {
   const api = bind();
   // Backup semantics lets a folder in the file's place be opened, and so refused by its kind.
-  const handle = api.CreateFileW(longPath(path), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, null, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, null);
-  if (isInvalid(api, handle)) {
+  // Shared for reading only, so no one can write, delete or rename it while it is checked and
+  // read. A program that holds it open for writing (a backup or sync tool, briefly) is waited
+  // for, a little, and then reported as busy: not as untrusted.
+  let handle: unknown = null;
+  for (let attempt = 0; ; attempt += 1) {
+    handle = api.CreateFileW(longPath(path), GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, null, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, null);
+    if (!isInvalid(api, handle)) break;
     const code = api.GetLastError();
     if (code === ERROR_FILE_NOT_FOUND || code === ERROR_PATH_NOT_FOUND) return null;
-    throw new WindowsSecurityError("CreateFileW", code);
+    if (code !== ERROR_SHARING_VIOLATION) throw new WindowsSecurityError("CreateFileW", code);
+    if (attempt >= 10) throw new FileBusyError();
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
   }
   try {
     const info: { attributes?: number; sizeHigh?: number; sizeLow?: number } = {};
@@ -256,7 +286,7 @@ export function createPrivateFile(path: string, bytes: Buffer): string {
   }
   try {
     const temporary = `${resolve(path)}.${randomBytes(8).toString("hex")}.tmp`;
-    const attributes = { nLength: 24, lpSecurityDescriptor: descriptor[0], bInheritHandle: 0 };
+    const attributes = { nLength: api.securityAttributesSize, lpSecurityDescriptor: descriptor[0], bInheritHandle: 0 };
     const handle = api.CreateFileW(longPath(temporary), GENERIC_WRITE, 0, attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, null);
     if (isInvalid(api, handle)) throw new WindowsSecurityError("CreateFileW", api.GetLastError());
     try {

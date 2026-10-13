@@ -17,10 +17,22 @@ export class UntrustedFileError extends Error {
   }
 }
 
+/**
+ * A file that could not be read just now (another program holds it, or the system refused
+ * the read), so nothing about it is proven: not trusted, but not shown to be untrusted either.
+ * A caller keeps such a file rather than setting it aside.
+ */
+export class TrustedFileUnavailableError extends UntrustedFileError {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "TrustedFileUnavailableError";
+  }
+}
+
 // Rights that let an account change, replace or re-permission a file: write and append data,
-// write extended attributes, delete, change the access list or the owner, and the generic and
-// maximum-allowed forms that include them.
-const WRITE_RIGHTS = 0x2 | 0x4 | 0x10 | 0x10000 | 0x40000 | 0x80000 | 0x2000000 | 0x10000000 | 0x40000000;
+// write extended attributes and attributes, delete, change the access list or the owner, and
+// the generic and maximum-allowed forms that include them.
+const WRITE_RIGHTS = 0x2 | 0x4 | 0x10 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x2000000 | 0x10000000 | 0x40000000;
 // Who may hold those rights besides this user: SYSTEM, the Administrators group, and OWNER
 // RIGHTS, which applies to the owner, itself checked to be one of these.
 const SYSTEM = "S-1-5-18";
@@ -53,13 +65,14 @@ export function readTrustedFile(path: string, maxBytes: number): Buffer | null {
   if (process.platform === "win32") return readTrustedWindows(path, maxBytes);
   let fd: number;
   try {
-    // Never through a link: the check and the read are of this one file.
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    // Never through a link: the check and the read are of this one file. Without blocking, so
+    // a FIFO in its place is refused below rather than waited on.
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT" || code === "ENOTDIR") return null;
     if (code === "ELOOP") throw new UntrustedFileError("it is a link");
-    throw new UntrustedFileError(`it could not be opened (${code ?? "unknown error"})`);
+    throw new TrustedFileUnavailableError(`it could not be opened (${code ?? "unknown error"})`);
   }
   try {
     const entry = fstatSync(fd);
@@ -87,7 +100,7 @@ function readTrustedWindows(path: string, maxBytes: number): Buffer | null {
     read = readWithSecurity(path, maxBytes);
     userSid = currentUserSid();
   } catch (error) {
-    throw new UntrustedFileError(`its owner and access list could not be read (${error instanceof Error ? error.message : String(error)})`);
+    throw new TrustedFileUnavailableError(`its owner and access list could not be read (${error instanceof Error ? error.message : String(error)})`);
   }
   if (read === null) return null;
   if (!read.regularFile) throw new UntrustedFileError("it is not a regular file (a folder or a link)");

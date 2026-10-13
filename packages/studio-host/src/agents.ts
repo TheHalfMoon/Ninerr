@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypt
 import { readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { StudioError } from "./errors.ts";
-import { readTrustedFile, writeTrustedFile } from "./trusted-file.ts";
+import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
 import { LEGACY_AGENT_REGISTRY_FILE, LEGACY_AGENT_TOKEN_PREFIX, existing, registrySource } from "./legacy.ts";
 import type { StudioActor } from "./session.ts";
 
@@ -87,6 +87,8 @@ export class AgentRegistry {
       // A newer Ninerr's registry is kept as it is. A legacy file is never written by a newer
       // Ninerr, so a "newer" legacy registry is only ignored, like a damaged one.
       if (error instanceof StudioError && error.code === "agents-newer" && !source.legacy) this.#newer = error;
+      // A registry that could not be read just now is kept as it is, the same way (#268).
+      if (error instanceof StudioError && error.code === "agents-unavailable" && !source.legacy) this.#newer = error;
       // A damaged registry must not stop Ninerr: it is set aside (kept for inspection) and
       // every agent has to be connected again. Failing closed means no agent gets access.
       // A damaged legacy registry is only ignored; it is not ours to move.
@@ -197,7 +199,10 @@ function readRegistry(path: string): AgentRecord[] {
   try {
     bytes = readTrustedFile(path, 256 * 1024);
   } catch (error) {
-    throw new StudioError(500, "agents-unreadable", `the agent registry is not trusted: ${error instanceof Error ? error.message : String(error)}`);
+    const reason = error instanceof Error ? error.message : String(error);
+    // Not readable just now (another program holds it): kept as it is, not set aside.
+    if (error instanceof TrustedFileUnavailableError) throw new StudioError(503, "agents-unavailable", `the agent registry could not be read just now, so no agent can connect and the agent list cannot be changed until Ninerr is started again: ${reason}`);
+    throw new StudioError(500, "agents-unreadable", `the agent registry is not trusted: ${reason}`);
   }
   if (bytes === null) return [];
   let parsed: unknown;

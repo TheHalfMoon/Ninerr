@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,6 +90,18 @@ test("the native boundary binds only advapi32.dll and kernel32.dll, and starts n
   for (const file of ["windows-security.ts", "trusted-file.ts"]) {
     assert.doesNotMatch(readFileSync(new URL(`../packages/studio-host/src/${file}`, import.meta.url), "utf8"), /child_process|spawn|execFile|icacls|whoami|powershell/iu, file);
   }
+  // Koffi can load any DLL, and the offline guard allows its module: so it stays in this one
+  // file, which loads exactly the two DLLs above (from the review of #268).
+  assert.equal([...source.matchAll(/\.load\(/gu)].length, 2);
+  const packages = new URL("../packages/", import.meta.url);
+  for (const name of readdirSync(packages)) {
+    const src = new URL(`${name}/src/`, packages);
+    if (!existsSync(src)) continue;
+    for (const file of readdirSync(src, { recursive: true }).map(String)) {
+      if (`${name}/${file}` === "studio-host/windows-security.ts" || !/\.(?:m?js|ts|cjs)$/u.test(file)) continue;
+      assert.doesNotMatch(readFileSync(new URL(file, src), "utf8"), /koffi/iu, `packages/${name}/src/${file} must not use Koffi`);
+    }
+  }
 });
 
 test("a file Ninerr writes is private from the start: owned by this user, protected, nobody else listed", onWindows, () => withFolder((root) => {
@@ -150,7 +163,29 @@ test("an agent registry or codebase links another account could change are not t
   registry.create("Fresh", "2026-10-13T00:00:00.000Z");
   assert.equal(new AgentRegistry(shared, "test").list().length, 1);
   writeFileSync(join(shared, ".ninerr-codebases.json"), JSON.stringify({ version: 1, links: { site: shared } }));
-  assert.deepEqual(new CodebaseLinks(shared).get("site") ?? null, null, "planted links are ignored");
+  const links = new CodebaseLinks(shared);
+  assert.equal(links.get("site"), null, "planted links are not followed");
+  assert.match(links.problem ?? "", /codebase links were not trusted and were set aside: another account \(S-1-5-11\) may change it/u, "and not dropped without a word");
+  assert.ok(readdirSync(shared).some((name) => name.startsWith(".ninerr-codebases.json.unreadable-")), "kept for inspection");
+  links.set("site", shared);
+  assert.equal(new CodebaseLinks(shared).get("site"), shared, "the next save is private, and trusted");
+}));
+
+test("a registry another program holds open is kept as it is, not set aside, and read again next time", onWindows, () => withFolder((root) => {
+  const registry = new AgentRegistry(root, "test");
+  registry.create("Kept", "2026-10-13T00:00:00.000Z");
+  const held = openSync(join(root, ".ninerr-agents.json"), "r+");
+  let busy;
+  try {
+    busy = new AgentRegistry(root, "test");
+  } finally {
+    closeSync(held);
+  }
+  assert.equal(busy.problemCode, "agents-unavailable");
+  assert.match(busy.problem, /could not be read just now/u);
+  assert.throws(() => busy.create("Lost", "2026-10-13T00:00:00.000Z"), /could not be read just now/u, "and is not overwritten");
+  assert.equal(readdirSync(root).some((name) => name.includes(".unreadable-")), false, "not set aside");
+  assert.deepEqual(new AgentRegistry(root, "test").list().map((agent) => agent.displayName), ["Kept"]);
 }));
 
 test("an access list widened after Ninerr wrote the file is noticed on the next read", onWindows, async () => withFolder(async (root) => {
@@ -203,4 +238,7 @@ test("on POSIX a link, a file of another owner or one others can write is refuse
   chmodSync(join(root, "open.json"), 0o666);
   assert.throws(() => readTrustedFile(join(root, "open.json"), 1024), /other accounts may change it/u);
   assert.equal(readTrustedFile(join(root, "absent.json"), 1024), null);
+  // A FIFO in the file's place is refused at once, not waited on (from the review of #268).
+  execFileSync("mkfifo", [join(root, "fifo.json")]);
+  assert.throws(() => readTrustedFile(join(root, "fifo.json"), 1024), /not a regular file/u);
 }));
