@@ -25,7 +25,8 @@ test("a host request after more than the keep-alive of synchronous work is answe
       // the event loop cannot see the host close the idle connection meanwhile
     }
   };
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  // It failed on the second pause every time it failed (6 of 6 runs on Node 22), so two suffice.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     await ok(call("GET", "/api/session"), `before the pause, attempt ${attempt}`);
     block(6_000);
     await ok(call("GET", "/api/session"), `after the pause, attempt ${attempt}`);
