@@ -469,6 +469,12 @@ export function isDescendant(document, ancestorId, candidateId) {
     if (cursor.parentId === ancestorId) return true;
     if (seen.has(cursor.id)) throw new DocumentInvariantError(`Cycle detected at node ${shownId(cursor.id)}`);
     seen.add(cursor.id);
+    // No valid document is deeper than its limit, so a node more levels down than that can
+    // never hold anything once the transaction ends: refused here rather than walked to the
+    // top on every move (#329), which made each move cost the whole depth.
+    if (seen.size > DOCUMENT_LIMITS.maxTreeDepth) {
+      throw new DocumentInvariantError(`node ${shownId(candidateId)} is deeper than ${DOCUMENT_LIMITS.maxTreeDepth} levels`);
+    }
     cursor = getNode(document, cursor.parentId);
   }
   return false;
