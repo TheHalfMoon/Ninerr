@@ -41,7 +41,7 @@ The `Desktop` workflow (`.github/workflows/desktop.yml`) builds each package on 
 
 ## Installing a package
 
-A release's archives are in its GitHub Release, each with a Sigstore attestation from the release workflow and a line in `SHA256SUMS`; `docs/RELEASE.md` says how to check one before installing it. Packages are not yet signed by a publisher; signing needs the owner's certificates (#139). Until then:
+A release's archives are in its GitHub Release, each with a Sigstore attestation from the release workflow and a line in `SHA256SUMS`; `docs/RELEASE.md` says how to check one before installing it. Packages are not signed by a publisher or notarized: the founder chose, on 2026-10-13, to release them that way rather than depend on paid certificates, with checksums and Sigstore provenance instead (`docs/MASTER_PLAN.md`). So:
 
 - **macOS (Apple silicon).** Unzip it and move `Ninerr.app` to Applications. The app has an ad-hoc signature only and is not notarized, so macOS refuses to open a downloaded copy at first.
   - On macOS 15 and later, try to open it once, then choose Open Anyway in System Settings, Privacy & Security.

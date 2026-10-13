@@ -6,6 +6,8 @@ Issue: #230 (P08 umbrella). Date: 2026-10-11.
 
 P09 does not start before that decision. v1.0.0 is not authorized.
 
+*Update 2026-10-13: the founder resolved both decisions below and authorized P09, P10 and the release gate (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`). Gate 13 is judged on the reference machine by the protocol of #275, the P08-G4 budget framework is accepted, and #268 is to be resolved with a Windows-only native boundary. P08 closes with its closeout record, against current measurements. This replaces the statements below that P09 waits and that v1.0.0 is not authorized.*
+
 *Updated after #283 was fixed (#296, #298, #301; main `6309cf9`). It had been proposed for the founder to move out of P08. That proposal is withdrawn.*
 
 ## The exit criteria (founder, #230)
