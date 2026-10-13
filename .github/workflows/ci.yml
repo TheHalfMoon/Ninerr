@@ -44,6 +44,12 @@ jobs:
         run: |
           set -euo pipefail
           npm run check 2>&1 | tee check.log
+      - name: Annotate gate-13 information (#275)
+        if: always()
+        shell: bash
+        # The gate-13 test reports shared-runner overruns and regressions as warnings; node --test
+        # prints them as TAP comments, so they are re-emitted here (at most 20).
+        run: grep -E '^# ::warning title=Gate 13' check.log 2>/dev/null | sed 's/^# //' | head -n 20 || true
       - name: Annotate test totals
         if: always()
         shell: bash
@@ -97,6 +103,12 @@ jobs:
         run: |
           set -euo pipefail
           npm run check 2>&1 | tee check.log
+      - name: Annotate gate-13 information (#275)
+        if: always()
+        shell: bash
+        # The gate-13 test reports shared-runner overruns and regressions as warnings; node --test
+        # prints them as TAP comments, so they are re-emitted here (at most 20).
+        run: grep -E '^# ::warning title=Gate 13' check.log 2>/dev/null | sed 's/^# //' | head -n 20 || true
       - name: Annotate test totals
         if: always()
         shell: bash

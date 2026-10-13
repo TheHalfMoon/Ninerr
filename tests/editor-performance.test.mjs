@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
+import { overruns, regressions, summarize } from "./support/gate13.mjs";
 
 // PC8 (#168): large-document canvas and render performance through the editor, in headless
 // Chromium against a real studio host, on a 10,000-node project. Budgets (MASTER_PLAN PC
@@ -14,16 +15,21 @@ import { openEditor, waitRevision } from "./support/editor.mjs";
 // from receipt of the change-stream event; the end-to-end edit (request, persisted commit,
 // event, patch) at most 750 ms at p95. Measured with the editor's own User Timing marks.
 // Closes PC gate 13.
+//
+// Where the budgets are judged (#275, the founder's decision of 2026-10-13): on the reference
+// machine, by scripts/gate13-reference.mjs, which runs this test five times with
+// NINERR_GATE13_RECORD set and judges the records. In CI the figures are information: an
+// overrun, or a measure 50% above the last recorded baseline for the runner's OS, is reported
+// as a warning to investigate. Elsewhere the budgets are asserted, as before.
 
 let clock = 0;
 const now = () => new Date(Date.UTC(2026, 9, 7, 12, 0, 0) + clock++ * 1000).toISOString();
 const NODES = 10_000;
-const p95 = (values) => [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1];
 // An edit's measure is recorded when its own response arrives, which can be just after the
 // same change, sent on the event stream, has updated the revision shown.
 const waitMeasures = (tab, name, count) => tab.waitForFunction(([measureName, expected]) => performance.getEntriesByName(measureName, "measure").length >= expected, [name, count]);
 
-test("a 10,000-node project renders, applies changes and edits within the gate-13 budgets", browserTestOptions(), async () => {
+test("a 10,000-node project renders, applies changes and edits within the gate-13 budgets", browserTestOptions(), async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-perf-")));
   const host = await startStudioHost({ projectsRoot: root, now });
   const call = (path, body) => fetch(`${host.url}${path}`, { method: "POST", headers: { authorization: `Bearer ${host.token}`, "content-type": "application/json" }, body: JSON.stringify(body) }).then((response) => response.json());
@@ -57,7 +63,6 @@ test("a 10,000-node project renders, applies changes and edits within the gate-1
     const rendered = await tab.evaluate(() => document.querySelector("iframe").contentDocument.querySelectorAll("[data-ninerr-id]").length);
     assert.equal(rendered, NODES);
     const firstRender = await tab.evaluate(() => performance.getEntriesByName("ninerr:render-project", "measure").at(-1).duration);
-    assert.ok(firstRender <= 2000, `first render of ${NODES} nodes took ${firstRender.toFixed(0)} ms (budget 2000)`);
 
     // Changes from elsewhere (another client): applying each, from the event's arrival.
     let revision = created.revision;
@@ -70,8 +75,6 @@ test("a 10,000-node project renders, applies changes and edits within the gate-1
     const applied = await tab.evaluate(() => performance.getEntriesByName("ninerr:apply-change", "measure").map((entry) => entry.duration));
     // A change that lands while a refresh is in flight is replayed, not timed from arrival.
     assert.ok(applied.length >= 35, `${applied.length} changes measured`);
-    const applyP95 = p95(applied);
-    assert.ok(applyP95 <= 100, `applying a change: p95 ${applyP95.toFixed(1)} ms (budget 100)`);
 
     // Structural changes from elsewhere: a card added, and a card removed.
     const structural = async (label, operationFor) => {
@@ -84,9 +87,7 @@ test("a 10,000-node project renders, applies changes and edits within the gate-1
       }
       const durations = await tab.evaluate(() => performance.getEntriesByName("ninerr:apply-change", "measure").map((entry) => entry.duration));
       assert.ok(durations.length >= 25, `${durations.length} ${label} changes measured`);
-      const value = p95(durations);
-      assert.ok(value <= 100, `applying ${label}: p95 ${value.toFixed(1)} ms (budget 100)`);
-      return { value, count: durations.length };
+      return summarize(durations);
     };
     const inserts = await structural("insert", (index) => ({ type: "insert-node", node: { id: `added${index}`, type: "element", props: { tag: "div", text: `Added ${index}`, style: { position: "absolute", left: "0px", top: "0px", width: "36px", height: "50px" } }, metadata: {} }, parentId: "page", index: 500 + index }));
     const treeRows = () => tab.locator("#layers [role=treeitem]").count();
@@ -110,8 +111,6 @@ test("a 10,000-node project renders, applies changes and edits within the gate-1
     }
     const edits = await tab.evaluate(() => performance.getEntriesByName("ninerr:edit", "measure").map((entry) => entry.duration));
     assert.equal(edits.length, 30);
-    const editP95 = p95(edits);
-    assert.ok(editP95 <= 750, `end-to-end edit: p95 ${editP95.toFixed(0)} ms (budget 750)`);
     assert.equal(host.session.document.nodes.n1.props.style.left, "300px", "the first recolour set left to 0px; 30 nudges of 10 px");
 
     // Layers deleted in the editor: select a card in the tree, press Delete.
@@ -125,15 +124,30 @@ test("a 10,000-node project renders, applies changes and edits within the gate-1
     }
     const deletes = await tab.evaluate(() => performance.getEntriesByName("ninerr:edit", "measure").map((entry) => entry.duration));
     assert.equal(deletes.length, 20);
-    const deleteP95 = p95(deletes);
-    assert.ok(deleteP95 <= 750, `deleting a layer in the editor: p95 ${deleteP95.toFixed(0)} ms (budget 750)`);
     assert.equal(Object.hasOwn(host.session.document.nodes, "n200"), false);
     assert.equal(await tab.locator("#layers [role=treeitem][data-node-id=n219]").count(), 0, "the deleted rows are gone from the tree");
     assert.equal(await tab.locator("#layers [role=treeitem][data-node-id=n220]").count(), 1, "and the rest stay");
-    // The measurements, for the record.
-    process.stdout.write(`# PC8 gate 13: open ${openWall} ms end to end, first render ${firstRender.toFixed(0)} ms; apply p95 ${applyP95.toFixed(1)} ms over ${applied.length} (insert ${inserts.value.toFixed(1)} over ${inserts.count}, remove ${removes.value.toFixed(1)} over ${removes.count}); edit p95 ${editP95.toFixed(0)} ms over ${edits.length}; delete p95 ${deleteP95.toFixed(0)} ms over ${deletes.length}\n`);
     assert.deepEqual(editor.foreign, []);
     assert.deepEqual(editor.errors, []);
+
+    // The measurements: every one is kept before any budget is judged, so an overrun does not
+    // lose the rest.
+    const measures = { firstRender: { value: Math.round(firstRender * 10) / 10 }, apply: summarize(applied), insert: inserts, remove: removes, edit: summarize(edits), delete: summarize(deletes) };
+    process.stdout.write(`# PC8 gate 13: open ${openWall} ms end to end, first render ${firstRender.toFixed(0)} ms; apply p95 ${measures.apply.p95.toFixed(1)} ms over ${applied.length} (insert ${inserts.p95.toFixed(1)} over ${inserts.n}, remove ${removes.p95.toFixed(1)} over ${removes.n}); edit p95 ${measures.edit.p95.toFixed(0)} ms over ${edits.length}; delete p95 ${measures.delete.p95.toFixed(0)} ms over ${deletes.length}\n`);
+    const record = process.env.NINERR_GATE13_RECORD;
+    if (record) {
+      writeFileSync(record, JSON.stringify({ measures, openWallMs: openWall, node: process.version, browser: await editor.browser.version() }, null, 2));
+      return;
+    }
+    const over = overruns(measures);
+    if (process.env.CI) {
+      const baseline = JSON.parse(readFileSync(new URL("./fixtures/gate13-ci-baseline.json", import.meta.url), "utf8")).runners[platform()];
+      for (const item of over) process.stdout.write(`::warning title=Gate 13 (information, issue 275)::${item.label}: ${item.value} ms, budget ${item.budget} ms on the reference machine\n`);
+      for (const item of regressions(measures, baseline)) process.stdout.write(`::warning title=Gate 13 regression to investigate (issue 275)::${item.label}: ${item.value} ms, more than 50% above this runner OS's baseline of ${item.baseline} ms\n`);
+      t.diagnostic(`gate 13 on a shared runner: information only; ${over.length} measure(s) over budget`);
+      return;
+    }
+    assert.deepEqual(over.map((item) => `${item.label}: ${item.value} ms`), [], "every gate-13 budget holds");
   } finally {
     await editor.close();
     await host.close();

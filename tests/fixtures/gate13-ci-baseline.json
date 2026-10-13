@@ -1,0 +1,9 @@
+{
+  "description": "Gate 13 on shared CI runners: the median of each measure over main's last five successful CI runs before #275 was decided (runs 38348158607, 38341379815, 38337964146, 38336346255, 38334806639; main 1987c77 back to 97da28a). A CI run more than 50% above these is reported as a regression to investigate; these are not budgets (#275).",
+  "unit": "ms; firstRender is a single value, the rest are p95",
+  "runners": {
+    "linux": { "firstRender": 440, "apply": 10.7, "insert": 31.6, "remove": 25.6, "edit": 104, "delete": 204 },
+    "darwin": { "firstRender": 283, "apply": 14.8, "insert": 36.9, "remove": 41.5, "edit": 171, "delete": 315 },
+    "win32": { "firstRender": 386, "apply": 13.3, "insert": 30.9, "remove": 42.8, "edit": 112, "delete": 331 }
+  }
+}
