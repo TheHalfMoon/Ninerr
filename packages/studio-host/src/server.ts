@@ -1,11 +1,12 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isLoopbackAddress } from "@ninerr/network-policy";
 import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES } from "@ninerr/persistence";
 import { AgentRegistry } from "./agents.ts";
+import { writeTrustedFile } from "./trusted-file.ts";
 import { StudioError } from "./errors.ts";
 import { exportJsx, importJsx } from "./code.ts";
 import { CodebaseLinks, assertFolder, bringIn, keptFields, planWriteBack, removeTemporary, resolveWithFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
@@ -522,9 +523,8 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
   const discovery = join(projectsRoot, ".ninerr-studio.json");
   const discoveryNonce = randomBytes(8).toString("hex");
   try {
-    const temporary = `${discovery}.${discoveryNonce}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify({ version: 1, url: `http://${LOOPBACK}:${port}`, mcpUrl: `http://${LOOPBACK}:${port}/mcp`, pid: process.pid, nonce: discoveryNonce })}\n`, { mode: 0o600, flag: "wx" });
-    renameSync(temporary, discovery);
+    // Private to this user from the moment it exists (#268), as relays trust no other.
+    writeTrustedFile(discovery, `${JSON.stringify({ version: 1, url: `http://${LOOPBACK}:${port}`, mcpUrl: `http://${LOOPBACK}:${port}/mcp`, pid: process.pid, nonce: discoveryNonce })}\n`);
   } catch {
     // Relays can still be given the URL directly.
   }

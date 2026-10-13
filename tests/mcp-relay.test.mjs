@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { assertLoopbackUrl, discoverMcpUrl, startStudioHost } from "../packages/studio-host/src/index.ts";
+import { writeTrustedFile } from "../packages/studio-host/src/trusted-file.ts";
 
 // PC5 (#146, #82): the stdio MCP relay. A stdio MCP client runs scripts/ninerr-mcp.mjs, which
 // finds the running host through its discovery file and forwards each line to the host's
@@ -75,9 +76,9 @@ test("a discovery file left by a Ninerr that is no longer running is not followe
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-relay-stale-")));
   try {
     assert.throws(() => discoverMcpUrl(root), /not running/u, "no file");
-    writeFileSync(join(root, ".ninerr-studio.json"), JSON.stringify({ version: 1, url: "http://127.0.0.1:9", mcpUrl: "http://127.0.0.1:9/mcp", pid: 2 ** 22 + 4321, nonce: "x" }), { mode: 0o600 });
+    writeTrustedFile(join(root, ".ninerr-studio.json"), JSON.stringify({ version: 1, url: "http://127.0.0.1:9", mcpUrl: "http://127.0.0.1:9/mcp", pid: 2 ** 22 + 4321, nonce: "x" }));
     assert.throws(() => discoverMcpUrl(root), /not running/u, "a dead pid");
-    writeFileSync(join(root, ".ninerr-studio.json"), JSON.stringify({ version: 1, url: "http://10.0.0.1:9", mcpUrl: "http://10.0.0.1:9/mcp", pid: process.pid, nonce: "x" }), { mode: 0o600 });
+    writeTrustedFile(join(root, ".ninerr-studio.json"), JSON.stringify({ version: 1, url: "http://10.0.0.1:9", mcpUrl: "http://10.0.0.1:9/mcp", pid: process.pid, nonce: "x" }));
     assert.throws(() => discoverMcpUrl(root), /only connects/u, "a non-loopback address");
   } finally {
     rmSync(root, { recursive: true, force: true });
