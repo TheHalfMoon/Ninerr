@@ -96,7 +96,10 @@ export interface LockRecord {
 
 export interface RecoveryReport {
   tornTailBytes: number;
-  /** Temporary files left by interrupted atomic writes, removed on open. */
+  /**
+   * Leftovers removed on open: temporary files of interrupted atomic writes, stale locks a
+   * crashed override renamed aside, and staging directories of a crashed create or migration.
+   */
   staleTemporaryFiles: number;
   replayedEntries: number;
   migratedFrom: number | null;

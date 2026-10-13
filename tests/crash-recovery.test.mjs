@@ -397,3 +397,50 @@ test("cleanup absorbs only operating-system errors, never a bug", () => {
   assert.throws(() => removeStaleFiles(undefined, () => true), TypeError);
   assert.equal(removeStaleFiles(join(tmpdir(), `ninerr-missing-${randomUUID()}`), () => true), 0, "a missing directory is nothing to clean");
 });
+
+// #64, from the D6a review: a create or legacy migration builds the project in a staging
+// directory beside it and renames it into place; a crash in between left that directory for
+// ever. An open removes those whose process is gone, and never one still at work.
+test("staging directories of an interrupted create are removed on open, a live one kept (#64)", () => {
+  const root = project(1);
+  try {
+    const deadPid = [999_983, 999_979, 999_961, 999_959].find((pid) => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch (error) {
+        return error.code === "ESRCH";
+      }
+    });
+    assert.ok(deadPid !== undefined, "a pid no process uses");
+    const staged = (pid) => join(root, `${PROJECT_FILES.directory}.tmp-${pid}-${randomUUID()}`);
+    const dead = staged(deadPid);
+    mkdirSync(join(dead, "objects", "ab"), { recursive: true });
+    writeFileSync(join(dead, "project.json"), "{}");
+    const live = staged(process.pid);
+    mkdirSync(live);
+    // Another running process (this test's parent) keeps its own too.
+    const parent = staged(process.ppid);
+    mkdirSync(parent);
+    // A link under a staging name is never followed or removed, whatever its pid says.
+    const target = join(root, "kept-target");
+    mkdirSync(target);
+    writeFileSync(join(target, "precious.txt"), "keep");
+    const linked = staged(deadPid);
+    linkDirectory(target, linked);
+    // Look-alikes that are not staging directories stay too.
+    const unrelated = [join(root, `${PROJECT_FILES.directory}.tmp-${deadPid}-not-a-uuid`), join(root, `notes.tmp-${deadPid}-${randomUUID()}`)];
+    for (const path of unrelated) mkdirSync(path);
+    const store = open(root);
+    assert.equal(existsSync(dead), false, "the dead process's staging directory is removed");
+    assert.equal(existsSync(live), true, "a staging directory whose process runs is kept");
+    assert.equal(existsSync(parent), true, "another running process's staging directory is kept");
+    assert.equal(existsSync(linked), true, "a link is not removed");
+    assert.equal(readFileSync(join(target, "precious.txt"), "utf8"), "keep", "nor anything it leads to");
+    for (const path of unrelated) assert.equal(existsSync(path), true, path);
+    assert.equal(store.recovery.staleTemporaryFiles, 1);
+    store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

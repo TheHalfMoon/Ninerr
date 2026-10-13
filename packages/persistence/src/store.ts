@@ -407,6 +407,50 @@ function objectFanOutDirectories(projectDir: string): string[] {
 }
 
 const OBJECT_TAIL = /^[0-9a-f]{62}$/u;
+// The staging directory a create or legacy migration builds beside the project and renames
+// into place: <directory>.tmp-<pid>-<uuid>.
+const STAGING = new RegExp(`^${PROJECT_FILES.directory.replace(".", "\\.")}\\.tmp-(\\d{1,10})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, "u");
+
+/** Whether `pid` may be a running process: only a definite "no such process" says it is not. */
+function mayBeRunning(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff || pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code !== "ESRCH";
+  }
+}
+
+/**
+ * Remove staging directories that a crashed create or migration left beside the project
+ * (#64). Only real directories (never links) whose process is gone are removed, so a create
+ * still at work in another process keeps its own; best effort, like the other leftovers.
+ */
+function removeStaleStaging(directory: string): number {
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch (error) {
+    if (isFilesystemError(error)) return 0;
+    throw error;
+  }
+  let removed = 0;
+  for (const name of names) {
+    const match = STAGING.exec(name);
+    if (match === null || mayBeRunning(Number(match[1]))) continue;
+    const path = join(directory, name);
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      rmSync(path, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      if (!isFilesystemError(error)) throw error;
+    }
+  }
+  return removed;
+}
 const LEFTOVER_LOCK = new RegExp(`^${PROJECT_FILES.lock.replace(".", "\\.")}\\.broken-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, "u");
 
 interface VerifiedProject {
@@ -525,7 +569,9 @@ export function openProject(root: string, options: OpenProjectOptions): ProjectS
       + objectFanOutDirectories(projectDir).reduce((total, directory) => total + removeStaleTemporaries(directory, (target) => OBJECT_TAIL.test(target)), 0)
       // A lock override renames the stale lock aside before reading it; a crash in between
       // leaves that renamed copy behind. The previous holder is already in the override record.
-      + removeStaleFiles(projectDir, (name) => LEFTOVER_LOCK.test(name));
+      + removeStaleFiles(projectDir, (name) => LEFTOVER_LOCK.test(name))
+      // A create or migration that crashed before its rename left its staging directory.
+      + removeStaleStaging(dirname(projectDir));
     if (migratedFrom !== null) {
       unchanged();
       atomicWrite(files.manifest, canonicalJson(manifest), "manifest");
