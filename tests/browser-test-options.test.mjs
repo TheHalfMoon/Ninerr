@@ -20,13 +20,19 @@ test("browser tests carry a timeout, so a hang fails by name", () => {
 test("a host request that gets no answer says which request and why", async () => {
   const { createServer } = await import("node:net");
   const { client } = await import("./support/host-api.mjs");
-  // A port that was just free: nothing listens there.
-  const port = await new Promise((resolve) => {
-    const server = createServer().listen(0, "127.0.0.1", () => {
-      const { port: free } = server.address();
-      server.close(() => resolve(free));
+  // A port that was just free: nothing listens there. Not one fetch refuses to use at all (the
+  // Fetch standard's bad ports, such as 6000), which fails before any connection with "bad
+  // port": the system hands those out too, now and then.
+  const { BROWSER_BLOCKED_PORTS } = await import("../packages/studio-host/src/index.ts");
+  let port;
+  do {
+    port = await new Promise((resolve) => {
+      const server = createServer().listen(0, "127.0.0.1", () => {
+        const { port: free } = server.address();
+        server.close(() => resolve(free));
+      });
     });
-  });
+  } while (BROWSER_BLOCKED_PORTS.has(port));
   await assert.rejects(client(`http://127.0.0.1:${port}`, "t")("GET", "/api/session"), (error) => {
     assert.match(error.message, /^GET \/api\/session failed before an answer: ECONNREFUSED/u);
     assert.ok(error.cause instanceof Error);
