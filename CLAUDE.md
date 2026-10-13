@@ -64,4 +64,4 @@ Use normal merge commits. Do not squash, rebase, force-push, or rewrite history.
 
 ## Current program direction
 
-Continue from the live canonical frontier in `docs/CURRENT.md`. The current program is N0 (Ninerr independence and migration), then P08, P09, P10 and the release gate, as `docs/MASTER_PLAN.md` sets out. The founder authorized the program through the release gate on 2026-10-13 (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`); v1.0.0 is created only after the exact candidate passes every gate. Do not redo already closed work unless live evidence proves a regression.
+Continue from the live canonical frontier in `docs/CURRENT.md`. The current program is N0 (Ninerr independence and migration), then P08, P09, P10 and the release gate, as `docs/MASTER_PLAN.md` sets out. The founder authorized the program through the release gate on 2026-10-13 (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`); v1.0.0 is created only after the exact candidate passes every P10 criterion, and published only after the release gate. Do not redo already closed work unless live evidence proves a regression.

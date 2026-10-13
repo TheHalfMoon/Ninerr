@@ -4,9 +4,9 @@ Last updated: 2026-10-13
 
 ## Program
 
-**P08 — Deep qualification and dogfooding.** N0, Ninerr independence and migration (umbrella #190), is `CLOSED_CANONICAL`. The founder renamed the product to Ninerr on 2026-10-08 and set the order: N0, P08 deep qualification and dogfooding, P09 Ninerr UI and UX, P10 release candidate hardening, then the release gate (`docs/MASTER_PLAN.md`). The founder authorized the program through the release gate on 2026-10-13; v1.0.0 is created only after the exact candidate passes every gate.
+**P08 — Deep qualification and dogfooding.** N0, Ninerr independence and migration (umbrella #190), is `CLOSED_CANONICAL`. The founder renamed the product to Ninerr on 2026-10-08 and set the order: N0, P08 deep qualification and dogfooding, P09 Ninerr UI and UX, P10 release candidate hardening, then the release gate (`docs/MASTER_PLAN.md`). The founder authorized the program through the release gate on 2026-10-13; v1.0.0 is created only after the exact candidate passes every P10 criterion.
 
-Status: **P08 CLOSEOUT.** Every engineering exit criterion is met, with stated limits (`docs/evidence/P08_EXIT_QUALIFICATION_2026-10-11.md`). On 2026-10-13 the founder resolved the decisions P08 was waiting on and authorized P09, P10 and the release gate (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`; the decisions and the P09 and P10 acceptance criteria are in `docs/MASTER_PLAN.md`). P08 closes once the gate-13 reference protocol and the P08-G4 budgets are recorded against current measurements (#275) and #268 is resolved as decided. N0 closed on 2026-10-09, with every exit criterion verified (`docs/evidence/N0_CLOSE_2026-10-09.md`). Each N0 grain landed through its own PR with exact-head CI, Jev qualification and review, and its evidence is in the `N0_*` records under docs/evidence. N0 delivered:
+Status: **P08 CLOSEOUT.** Every engineering exit criterion is met, with stated limits (`docs/evidence/P08_EXIT_QUALIFICATION_2026-10-11.md`). On 2026-10-13 the founder resolved the decisions P08 was waiting on and authorized P09, P10 and the release gate (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`; the decisions and the P09 and P10 acceptance criteria are in `docs/MASTER_PLAN.md`). P08 closes once the gate-13 reference protocol and the P08-G4 budgets are recorded against current measurements (#275), #268 is resolved as decided, and #300 and #329 are resolved or dispositioned. N0 closed on 2026-10-09, with every exit criterion verified (`docs/evidence/N0_CLOSE_2026-10-09.md`). Each N0 grain landed through its own PR with exact-head CI, Jev qualification and review, and its evidence is in the `N0_*` records under docs/evidence. N0 delivered:
 - the identity census (G1);
 - the persisted-data and host migrations with backward compatibility (G2), and the #185 write-back fix;
 - the package scope, product, tooling, runtime and prose identity (G3);
@@ -31,7 +31,7 @@ Since the exit record, independent P08 follow-ups have landed, each with a regre
 - each frame's @keyframes apply to it alone, and a project's stylesheets have a 16 MiB budget in all (#299, PRs #320 and #321).
 
 Since then, more follow-ups have landed the same way:
-- an edit copies and checks only what it changes, not the whole document: at 50,000 layers a property edit went from 1,165 ms to 95 ms at p50 (#252, PRs #324, #325 and #326);
+- an edit copies and checks only what it changes, not the whole document: at 50,000 layers a property edit went from 1,165 ms to 133 ms at p50 in one session, and measured 95 ms in a later one on the same machine (#252, PRs #324, #325 and #326);
 - one edit could hang the host with a restored snapshot whose parents loop; a snapshot must now be one tree (#327, PR #328), and a deep chain inside one transaction no longer overflows the stack (#329 item 1, PR #330);
 - a timed-out editor wait now says what the editor showed (#300, PR #331);
 - the evidence store refuses other letter case, dangling links, missing drives and NTFS stream names (#270, PR #332);
@@ -56,7 +56,7 @@ This is the normal merge commit for PR #340 (#306). It is the latest commit whos
 2. **Private vulnerability reporting.** Resolved: it is enabled and verified (`SECURITY.md`).
 3. **Publisher signing.** Decided: the release may ship without publisher signing or notarization, stated as such, with checksums and Sigstore build provenance (#139).
 4. **LGPL corresponding source.** The binding is done (`docs/provenance/ELECTRON_CORRESPONDING_SOURCE.json`), and the release workflow verifies it live (`docs/evidence/N0_G7B_ELECTRON_SOURCE_2026-10-09.md`). Decided: the release carries that source alongside its artifacts.
-5. **The tag.** Authorized only after the exact candidate passes every P10 gate and the release gate (`docs/MASTER_PLAN.md`). No tag exists.
+5. **The tag.** `v1.0.0` is created only after the exact candidate passes every P10 criterion, and its release is published only after the release gate has checked it (`docs/MASTER_PLAN.md`). No tag exists.
 
 ## Canonical facts
 - Product: **Ninerr**, licensed under Apache-2.0. The repository is `TheHalfMoon/Ninerr`.

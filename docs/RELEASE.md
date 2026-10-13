@@ -7,7 +7,7 @@ A Ninerr release is a tagged commit together with its signed release files: the 
 | File | What it is |
 | --- | --- |
 | `Ninerr-linux-x64.tar.gz`, `Ninerr-darwin-arm64.zip`, `Ninerr-win32-x64.zip` | The desktop app (`docs/DESKTOP.md` says how to install it). Each is packaged on its own platform's runner from the tagged commit, smoke-tested, and taken through the release-candidate journey before it is collected. |
-| `Ninerr-<platform>.json` | Each archive's package manifest: its SHA-256, the Electron runtime and its pinned archive, its corresponding-source binding, the fuses, and whether it is publisher-signed (not yet, #139). |
+| `Ninerr-<platform>.json` | Each archive's package manifest: its SHA-256, the Electron runtime and its pinned archive, its corresponding-source binding, the fuses, and whether it is publisher-signed (it is not: the release is unsigned by a publisher, by the founder's decision of 2026-10-13). |
 | `ninerr-release-evidence-<sha>.tar.gz` | The evidence bundle below, as one archive. |
 | `SHA256SUMS` | The SHA-256 of each file above. |
 
