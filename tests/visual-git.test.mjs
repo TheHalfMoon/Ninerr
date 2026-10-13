@@ -426,3 +426,19 @@ test("hidden text is rejected while visible joiners and line breaks stay legal",
     assert.equal(normalizeSnapshot(named(visible)).nodes.find((entry) => entry.id === "frame-1").name, visible);
   }
 });
+
+// #64, from the D4 security judge: names that look empty, and variation selectors used as a
+// hidden-data channel.
+test("text with nothing visible, or variation selectors out of place, is refused (#64)", () => {
+  const named = (name) => snapshot({ nodes: replaceNode(baseNodes(), "frame-1", { name }) });
+  for (const blank of ["\u{200d}", "\u{200c}\u{200d}", " \u{200d} ", "\u{301}", "\u{200d}\u{301}\t"]) {
+    assert.throws(() => normalizeSnapshot(named(blank)), /must contain visible text/, JSON.stringify(blank));
+  }
+  for (const selectors of ["\u{fe0f}a", "a\u{fe0f}\u{fe0f}", "a\u{fe00}\u{fe01}b", "\u{E0100}x", "x\u{E0100}\u{E0101}"]) {
+    assert.throws(() => normalizeSnapshot(named(selectors)), /variation selector/, JSON.stringify(selectors));
+  }
+  // One selector after a character is how emoji and ideograph variants are written.
+  for (const visible of ["\u{2764}\u{fe0f}", "\u{845b}\u{E0100}", "a\u{301}"]) {
+    assert.equal(normalizeSnapshot(named(visible)).nodes.find((entry) => entry.id === "frame-1").name, visible);
+  }
+});
