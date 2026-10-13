@@ -36,6 +36,8 @@ const state = {
   selection: [],
   canUndo: false,
   canRedo: false,
+  // The agents' changes this person may revert now: each agent's latest change in this session.
+  revertible: [],
   history: [],
   seen: new Set(),
   // Layers this editor has just added, to select once the change that adds them is applied:
@@ -838,6 +840,7 @@ async function resync() {
   state.seen = new Set(state.history.map((entry) => entry.transactionId));
   state.canUndo = Boolean(session.canUndo);
   state.canRedo = Boolean(session.canRedo);
+  state.revertible = Array.isArray(session.revertible) ? session.revertible : [];
   canvas.setDocument(next);
   // A layer inserted here whose change the refresh brought in is selected now.
   takePendingSelection();
@@ -939,9 +942,11 @@ function applyChange(event) {
   if (selectedNew && state.selection.length > 0) state.focusedLayer = state.selection.at(-1);
   // A change that removed selected layers changes the selection; agents see it too.
   if (state.selection.length !== selectionBefore.length || state.selection.some((id, index) => id !== selectionBefore[index])) shareSelection();
-  if (event.actor === state.user.actorId) {
-    // Only this user's own changes move this user's undo and redo stacks.
-    refreshUndoState();
+  // This user's changes move this user's undo and redo stacks; an agent's change is the one
+  // this user may now undo with "Undo agent change".
+  refreshUndoState();
+  if (event.actor !== state.user.actorId && event.actorKind === "agent") {
+    setStatus(`${actorLabel(event)}: ${event.intent ?? "a change"}. Undo agent change undoes it.`);
   }
   renderToolbar();
   try {
@@ -960,7 +965,9 @@ async function refreshUndoState() {
     const session = await state.client.get("/api/session");
     state.canUndo = Boolean(session.canUndo);
     state.canRedo = Boolean(session.canRedo);
+    state.revertible = Array.isArray(session.revertible) ? session.revertible : [];
     renderToolbar();
+    renderHistory();
   } catch {
     // The next change refreshes it.
   }
@@ -1053,6 +1060,23 @@ function undoRedo(kind) {
       }
     }
   });
+}
+
+/** The latest agent change this person may revert now, from the history; null when none is. */
+function latestAgentChange() {
+  for (let index = state.history.length - 1; index >= 0; index -= 1) {
+    if (state.revertible.includes(state.history[index].transactionId)) return state.history[index];
+  }
+  return null;
+}
+
+function undoAgentChange() {
+  const entry = latestAgentChange();
+  if (entry === null) {
+    setStatus("No agent change to undo.");
+    return Promise.resolve();
+  }
+  return revert(entry);
 }
 
 function revert(entry) {
@@ -1526,7 +1550,7 @@ function renderHistory() {
       entry.tool && !/^(?:ninerr|lilac):/u.test(entry.tool) ? ` · ${entry.tool}` : null,
       ` · revision ${entry.revision}`,
       entry.earlier ? " · before this session" : null),
-    entry.actorKind === "agent" && !entry.earlier ? el("button", { type: "button", class: "revert", "aria-label": `Revert ${entry.intent ?? "change"} by ${actorLabel(entry)}`, onclick: () => revert(entry) }, "Revert") : null)));
+    state.revertible.includes(entry.transactionId) ? el("button", { type: "button", class: "revert", "aria-label": `Revert ${entry.intent ?? "change"} by ${actorLabel(entry)}`, onclick: () => revert(entry) }, "Revert") : null)));
   if (state.history.length === 0) list.replaceChildren(el("li", {}, el("span", { class: "who" }, state.revision === 0 ? "No changes yet." : "No changes listed since this project was opened.")));
 }
 
@@ -1535,6 +1559,12 @@ function renderToolbar() {
   $("project-name").textContent = state.project ?? "No project open";
   $("action-undo").disabled = !open || !state.canUndo;
   $("action-redo").disabled = !open || !state.canRedo;
+  // Next to Undo: the latest agent change this person may undo, named.
+  const agentChange = latestAgentChange();
+  const undoAgent = $("action-undo-agent");
+  undoAgent.hidden = !open || agentChange === null;
+  undoAgent.setAttribute("aria-label", agentChange === null ? "Undo agent change" : `Undo agent change: ${agentChange.intent ?? "change"} by ${actorLabel(agentChange)}`);
+  undoAgent.title = agentChange === null ? "" : `${agentChange.intent ?? "Change"} by ${actorLabel(agentChange)}`;
   $("action-insert-box").disabled = !open;
   $("action-insert-text").disabled = !open;
   $("action-delete").disabled = !open || state.selection.length === 0;
@@ -1568,6 +1598,11 @@ function onGlobalKey(event) {
   const mod = event.ctrlKey || event.metaKey;
   if (!mod || isTextInput(event.target)) return;
   const key = event.key.toLowerCase();
+  if (key === "z" && event.altKey && !event.shiftKey) {
+    event.preventDefault();
+    undoAgentChange();
+    return;
+  }
   if (key === "z" && !event.shiftKey) {
     event.preventDefault();
     undoRedo("undo");
@@ -1605,6 +1640,7 @@ async function main() {
   $("action-projects").addEventListener("click", openProjectsDialog);
   $("action-undo").addEventListener("click", () => undoRedo("undo"));
   $("action-redo").addEventListener("click", () => undoRedo("redo"));
+  $("action-undo-agent").addEventListener("click", () => undoAgentChange());
   $("action-insert-box").addEventListener("click", () => insert("box"));
   $("action-insert-text").addEventListener("click", () => insert("text"));
   $("action-delete").addEventListener("click", deleteSelection);
