@@ -3,6 +3,7 @@ import { linkSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, uptime } from "node:os";
 import { join } from "node:path";
 import { StudioError } from "./errors.ts";
+import { readTrustedFile } from "./trusted-file.ts";
 
 // One studio host per projects folder (#261). The folder-wide files (connected agents,
 // codebase links, the discovery file MCP relays read) are each kept by one host and written
@@ -57,7 +58,9 @@ function isRunning(pid: number): boolean {
 /** Where the running host serves, from the discovery file it wrote, if it can be read. */
 function runningUrl(projectsRoot: string): string | null {
   try {
-    const url = JSON.parse(readFileSync(join(projectsRoot, ".ninerr-studio.json"), "utf8"))?.url;
+    const bytes = readTrustedFile(join(projectsRoot, ".ninerr-studio.json"), 4096);
+    if (bytes === null) return null;
+    const url = JSON.parse(bytes.toString("utf8"))?.url;
     return typeof url === "string" && /^http:\/\/127\.0\.0\.1:\d{1,5}$/u.test(url) ? url : null;
   } catch {
     return null;
