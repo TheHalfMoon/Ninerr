@@ -138,6 +138,8 @@ async function runMachine(seed, root, pool) {
     assert.deepEqual(shape(document), model.doc, `${where}: the host's document is the model's`);
     const session = await ok(running.call("GET", "/api/session"), "session");
     assert.deepEqual([session.canUndo, session.canRedo], [model.person.undo.length > 0, model.person.redo.length > 0], `${where}: what the person can undo and redo`);
+    // The agent's latest change, which the editor offers as "Undo agent change" (P09).
+    assert.deepEqual(session.revertible, model.agent.undo.length > 0 ? [model.agent.undo.at(-1).transactionId] : [], `${where}: the agent change the person may revert`);
   };
 
   for (let step = 0; step < STEPS; step += 1) {
