@@ -49,6 +49,17 @@ Each criterion is met through the product itself, with an end-to-end test that d
 
 Then the release gate: the candidate's release workflow runs on the `v1.0.0` tag, and the draft release it creates is checked against the candidate's evidence before it is published.
 
+## Proposed after the release gate (not approved)
+A design-platform extension, phases P11 to P16, is proposed in `docs/design-platform/PLAN.md`. It rests on the dated reverse-engineering study records in `docs/research/rea-design-platforms/` (2026-10-18). Its phases:
+- **P11:** trustworthy agent editing;
+- **P12:** layout and canvas precision;
+- **P13:** tokens and design systems;
+- **P14:** components;
+- **P15:** AI-native creation;
+- **P16:** vectors, export and prototyping.
+
+It is not part of the program above, and it changes none of its criteria. None of it starts until the founder approves it (`docs/design-platform/adr/0001-extension-is-a-proposal.md`).
+
 ## Definition of genuinely complete
 
 Ninerr is not complete merely because the UI launches. Completion requires:
