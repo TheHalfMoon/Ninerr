@@ -57,6 +57,15 @@
       "reason": "Dated qualification records (date-suffixed) describe the product as it was named when they were written."
     },
     {
+      "id": "competitor-research",
+      "category": "IMMUTABLE_HISTORICAL_FACT",
+      "path": "^docs/research/rea-design-platforms/[A-Z0-9_]+_2026-10-18\\.md$",
+      "terms": [
+        "paper"
+      ],
+      "reason": "Dated reverse-engineering study records (2026-10-18) name the third-party products observed, among them Paper Desktop; they are not Ninerr's identity, and no code or asset of those products enters Ninerr."
+    },
+    {
       "id": "legacy-project-fixture",
       "category": "LEGACY_COMPATIBILITY",
       "path": "^tests/fixtures/(projects/v1-[a-z0-9-]+|corpus/legacy-[a-z0-9-]+)/\\.lilac/",
