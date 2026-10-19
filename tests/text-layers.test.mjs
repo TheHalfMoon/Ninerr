@@ -34,12 +34,19 @@ test("the layer holding an element's words: its own text, or its only bare text 
     // A styled text layer is a layer of its own, not the element's words.
     styled: node("styled", "element", "page", ["styled-text"], { tag: "p" }),
     "styled-text": node("styled-text", "text", "styled", [], { tag: "span", text: "First", style: { color: "red" } }),
+    // A {…} part of imported code is code, not words; a bound run of text is words.
+    expr: node("expr", "element", "page", ["expr-code"], { tag: "p" }),
+    "expr-code": node("expr-code", "text", "expr", [], { name: "Code", text: "{title}", codeSource: { tag: "#expression" } }),
+    run: node("run", "element", "page", ["run-text"], { tag: "p" }),
+    "run-text": node("run-text", "text", "run", [], { text: "Hi", codeSource: { tag: "#text" } }),
   } };
   assert.equal(textLayerOf(document, "code"), "code");
   assert.equal(textLayerOf(document, "html"), "html-text");
   assert.equal(textLayerOf(document, "html-text"), "html-text");
   assert.equal(textLayerOf(document, "mixed"), null);
   assert.equal(textLayerOf(document, "styled"), null);
+  assert.equal(textLayerOf(document, "expr"), null);
+  assert.equal(textLayerOf(document, "run"), "run-text");
   assert.equal(textLayerOf(document, "page"), null);
   assert.equal(textLayerOf(document, "missing"), null);
   // Both shapes export the same JSX.
@@ -67,6 +74,8 @@ test("an agent's set_text on an HTML-imported paragraph changes the words a pers
   assert.equal(result.isError, undefined, JSON.stringify(result));
   assert.equal(nodes()[words.id].props.text, "Second", "the paragraph's text layer holds the new words");
   assert.equal(nodes()[paragraph].props.text, undefined, "no second copy on the element");
+  const details = await agent.tool("layer_details", { nodeId: paragraph });
+  assert.equal(details.structuredContent.text, "Second", "an agent reads the words where it writes them");
   assert.match((await ok(running.call("POST", "/api/code/export", { nodeId: paragraph }), "export")).code, /<p>Second<\/p>/u);
 });
 
