@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fchmodSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { applyPatch, buildCodeIr, exportedComponents } from "@ninerr/code-ir";
+import { shorthandsFirst } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 import { LEGACY_CODEBASE_LINKS_FILE, registrySource } from "./legacy.ts";
 import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
@@ -485,7 +486,8 @@ function equalProp(prop: string, a: string | undefined, b: string | undefined): 
 function styleInSourceOrder(sourceText: string, style: Record<string, string>): string {
   const order = Object.keys(styleProperties({ cssText: sourceText }));
   const names = [...order.filter((name) => Object.hasOwn(style, name)), ...Object.keys(style).filter((name) => !order.includes(name))];
-  return names.map((name) => `${name}: ${style[name]}`).join("; ");
+  // The source's order, with each longhand after its shorthands, as the canvas draws it (#294).
+  return Object.keys(shorthandsFirst(Object.fromEntries(names.map((name) => [name, style[name]])))).map((name) => `${name}: ${style[name]}`).join("; ");
 }
 
 /** One hunk covering every changed line, with up to 3 lines of context. */

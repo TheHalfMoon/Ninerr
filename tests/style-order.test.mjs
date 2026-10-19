@@ -1,18 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, rendered, waitRevision, reloadEditor } from "./support/editor.mjs";
 import { hostPool, ok } from "./support/host-api.mjs";
+import { isLonghandOf, planElement, shorthandsFirst } from "../packages/renderer/src/index.mjs";
+import { exportJsx } from "../packages/studio-host/src/code.ts";
 
-// #172 (found by the PC8b review): the renderer applies a style's entries in key order, so a
-// later shorthand overrides an earlier longhand. The editor applied each change as its caller
-// sent it, while the store, and so every reload, keeps the journal's sorted key order: the
-// same design could draw one way live and another after a reload. A change event now carries
-// its operations in the journal's form.
+// #172 (found by the PC8b review): the editor applied each change as its caller sent it, while
+// the store, and so every reload, keeps the journal's sorted key order: the same design could
+// draw one way live and another after a reload. A change event now carries its operations in
+// the journal's form. Since #294 the renderer applies a style's shorthands before their
+// longhands, whatever that order.
 
 let clock = 0;
 const now = () => new Date(Date.UTC(2026, 9, 11, 12, 0, 0) + clock++ * 1000).toISOString();
@@ -55,6 +57,82 @@ test("the editor draws a style the same live and after a reload", browserTestOpt
   await reloadEditor(editor.page, editor.pending);
   await waitRevision(editor.page, 2);
   assert.equal(live, await rendered(editor.page, "box", "margin-left"), "the same left margin live and after a reload");
+  // #294: the longhand refines its shorthand, whatever order it was sent or stored in.
+  assert.equal(live, "5px");
+  await ok(running.call("POST", "/api/edit", { baseRevision: 2, intent: "Inset", operations: [{ type: "set-props", nodeId: "box", set: { style: { position: "absolute", inset: "1px", bottom: "7px" } } }] }), "inset");
+  await waitRevision(editor.page, 3);
+  // The journal stores bottom before inset, so only applying the shorthand first keeps it.
+  assert.equal(await rendered(editor.page, "box", "bottom"), "7px");
+  assert.equal(await rendered(editor.page, "box", "top"), "1px");
+  await reloadEditor(editor.page, editor.pending);
+  await waitRevision(editor.page, 3);
+  assert.equal(await rendered(editor.page, "box", "bottom"), "7px", "the same after a reload");
+  // A shorthand marked !important is not refined by a plain longhand, as in CSS.
+  await ok(running.call("POST", "/api/edit", { baseRevision: 3, intent: "Important", operations: [{ type: "set-props", nodeId: "box", set: { style: { margin: "1px !important", "margin-left": "5px" } } }] }), "important");
+  await waitRevision(editor.page, 4);
+  assert.equal(await rendered(editor.page, "box", "margin-left"), "1px");
+  // An important declaration also wins where shorthands overlap: border-color is plain, so it
+  // must not take back border-bottom's important colour, though the journal's order puts it later.
+  await ok(running.call("POST", "/api/edit", { baseRevision: 4, intent: "Borders", operations: [{ type: "set-props", nodeId: "box", set: { style: { "border-bottom": "3px solid rgb(255, 0, 0) !important", "border-color": "rgb(0, 0, 255)", "border-style": "solid" } } }] }), "borders");
+  await waitRevision(editor.page, 5);
+  assert.equal(await rendered(editor.page, "box", "border-bottom-color"), "rgb(255, 0, 0)");
+  assert.equal(await rendered(editor.page, "box", "border-left-color"), "rgb(0, 0, 255)");
   assert.deepEqual(editor.foreign, []);
   assert.deepEqual(editor.errors, []);
+});
+
+// #294 (decided in P09): a shorthand applies before its own longhands, so a longhand always
+// refines it; every other entry keeps its place, so styles without such a pair are unchanged.
+test("a style's shorthands come before their longhands, and nothing else moves", () => {
+  assert.deepEqual(Object.keys(shorthandsFirst({ "margin-left": "5px", margin: "0px", color: "red" })), ["margin", "margin-left", "color"]);
+  assert.deepEqual(Object.keys(shorthandsFirst({ bottom: "0px", inset: "1px", left: "2px" })), ["inset", "bottom", "left"]);
+  assert.deepEqual(Object.keys(shorthandsFirst({ "column-gap": "1px", gap: "2px", "row-gap": "3px" })), ["gap", "column-gap", "row-gap"]);
+  assert.deepEqual(Object.keys(shorthandsFirst({ "border-top-color": "red", border: "1px solid", "border-top": "2px solid" })), ["border", "border-top", "border-top-color"]);
+  assert.deepEqual(Object.keys(shorthandsFirst({ "flex-direction": "row", "flex-flow": "column", "align-items": "a", "place-items": "b" })), ["flex-flow", "flex-direction", "place-items", "align-items"]);
+  assert.deepEqual(Object.keys(shorthandsFirst({ "line-height": "2", font: "16px serif", "border-top-left-radius": "1px", "border-radius": "2px" })), ["font", "line-height", "border-radius", "border-top-left-radius"]);
+  assert.deepEqual(Object.keys(shorthandsFirst({ "border-block-start-color": "red", "border-block-color": "blue" })), ["border-block-color", "border-block-start-color"]);
+  // Shorthands keep their order among themselves: of two overlapping ones, the later still wins.
+  assert.deepEqual(Object.keys(shorthandsFirst({ "border-left-color": "red", "border-top": "1px solid", "border-color": "blue" })), ["border-top", "border-color", "border-left-color"]);
+  // A logical side and a physical side are not paired; a physical shorthand is refined by its
+  // logical parts.
+  assert.equal(isLonghandOf("bottom", "inset-block"), false);
+  assert.equal(isLonghandOf("margin-left", "margin-inline"), false);
+  assert.deepEqual(Object.keys(shorthandsFirst({ "margin-inline": "5px", margin: "0px" })), ["margin", "margin-inline"]);
+  // Vendor-prefixed shorthands pair with their own longhands.
+  assert.deepEqual(Object.keys(shorthandsFirst({ "-webkit-mask-image": "none", "-webkit-mask": "none" })), ["-webkit-mask", "-webkit-mask-image"]);
+  // Unrelated names, and custom properties, keep their order.
+  const plain = { width: "1px", "background-color": "red", color: "blue", "--margin": "1px", margin: "0px" };
+  assert.equal(shorthandsFirst(plain), plain, "a style with no pair is returned as it is");
+  assert.equal(isLonghandOf("margin-left", "margin"), true);
+  assert.equal(isLonghandOf("top", "inset"), true);
+  assert.equal(isLonghandOf("margin", "margin-left"), false);
+  assert.equal(isLonghandOf("--margin-left", "--margin"), false);
+  // The canvas's plan and code export use the same order.
+  const node = { id: "n", type: "element", parentId: null, children: [], props: { tag: "div", style: { "margin-left": "5px", margin: "0px" } }, metadata: {} };
+  assert.deepEqual(Object.keys(planElement(node).style), ["margin", "margin-left"]);
+  const exported = exportJsx({ id: "d", revision: 0, rootIds: ["n"], nodes: { n: node } }, "n").code;
+  assert.match(exported, /style="margin: 0px; margin-left: 5px"/u);
+});
+
+test("a code write-back writes a style's longhands after their shorthands, as the canvas draws it", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-style-writeback-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const code = join(root, "code");
+  mkdirSync(code);
+  mkdirSync(join(root, "projects"));
+  const file = join(code, "Panel.jsx");
+  writeFileSync(file, 'export function Panel() {\n  return <div style="bottom: 1px">Hi</div>;\n}\n');
+  const running = await pool.open(join(root, "projects"));
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  await ok(running.call("POST", "/api/codebase/connect", { folder: code }), "connect");
+  await ok(running.call("POST", "/api/codebase/import", { file: "Panel.jsx", component: "Panel" }), "import");
+  const div = Object.values(running.host.session.document.nodes).find((node) => node.props?.tag === "div" && node.props?.codeSource);
+  await ok(running.call("POST", "/api/edit", { baseRevision: running.host.session.revision, intent: "Inset", operations: [{ type: "set-props", nodeId: div.id, set: { style: { bottom: "1px", inset: "0px" } } }] }), "edit");
+  const preview = await ok(running.call("POST", "/api/codebase/preview", { nodeId: div.id }), "preview");
+  await ok(running.call("POST", "/api/codebase/write", { nodeId: div.id, token: preview.token }), "write");
+  assert.match(readFileSync(file, "utf8"), /style="inset: 0px; bottom: 1px"/u, "bottom still refines inset in the file");
 });
