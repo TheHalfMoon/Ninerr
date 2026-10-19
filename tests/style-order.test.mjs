@@ -57,11 +57,11 @@ test("the editor draws a style the same live and after a reload", browserTestOpt
   await reloadEditor(editor.page, editor.pending);
   await waitRevision(editor.page, 2);
   assert.equal(live, await rendered(editor.page, "box", "margin-left"), "the same left margin live and after a reload");
-  // #294: the longhand refines its shorthand, whatever order it was sent or stored in. The
-  // journal stores bottom before inset, so only applying the shorthand first keeps it.
+  // #294: the longhand refines its shorthand, whatever order it was sent or stored in.
   assert.equal(live, "5px");
   await ok(running.call("POST", "/api/edit", { baseRevision: 2, intent: "Inset", operations: [{ type: "set-props", nodeId: "box", set: { style: { position: "absolute", inset: "1px", bottom: "7px" } } }] }), "inset");
   await waitRevision(editor.page, 3);
+  // The journal stores bottom before inset, so only applying the shorthand first keeps it.
   assert.equal(await rendered(editor.page, "box", "bottom"), "7px");
   assert.equal(await rendered(editor.page, "box", "top"), "1px");
   await reloadEditor(editor.page, editor.pending);
@@ -71,6 +71,12 @@ test("the editor draws a style the same live and after a reload", browserTestOpt
   await ok(running.call("POST", "/api/edit", { baseRevision: 3, intent: "Important", operations: [{ type: "set-props", nodeId: "box", set: { style: { margin: "1px !important", "margin-left": "5px" } } }] }), "important");
   await waitRevision(editor.page, 4);
   assert.equal(await rendered(editor.page, "box", "margin-left"), "1px");
+  // An important declaration also wins where shorthands overlap: border-color is plain, so it
+  // must not take back border-bottom's important colour, though the journal's order puts it later.
+  await ok(running.call("POST", "/api/edit", { baseRevision: 4, intent: "Borders", operations: [{ type: "set-props", nodeId: "box", set: { style: { "border-bottom": "3px solid rgb(255, 0, 0) !important", "border-color": "rgb(0, 0, 255)", "border-style": "solid" } } }] }), "borders");
+  await waitRevision(editor.page, 5);
+  assert.equal(await rendered(editor.page, "box", "border-bottom-color"), "rgb(255, 0, 0)");
+  assert.equal(await rendered(editor.page, "box", "border-left-color"), "rgb(0, 0, 255)");
   assert.deepEqual(editor.foreign, []);
   assert.deepEqual(editor.errors, []);
 });
@@ -87,11 +93,16 @@ test("a style's shorthands come before their longhands, and nothing else moves",
   assert.deepEqual(Object.keys(shorthandsFirst({ "border-block-start-color": "red", "border-block-color": "blue" })), ["border-block-color", "border-block-start-color"]);
   // Shorthands keep their order among themselves: of two overlapping ones, the later still wins.
   assert.deepEqual(Object.keys(shorthandsFirst({ "border-left-color": "red", "border-top": "1px solid", "border-color": "blue" })), ["border-top", "border-color", "border-left-color"]);
-  // Logical and physical names are not paired.
+  // A logical side and a physical side are not paired; a physical shorthand is refined by its
+  // logical parts.
   assert.equal(isLonghandOf("bottom", "inset-block"), false);
+  assert.equal(isLonghandOf("margin-left", "margin-inline"), false);
+  assert.deepEqual(Object.keys(shorthandsFirst({ "margin-inline": "5px", margin: "0px" })), ["margin", "margin-inline"]);
+  // Vendor-prefixed shorthands pair with their own longhands.
+  assert.deepEqual(Object.keys(shorthandsFirst({ "-webkit-mask-image": "none", "-webkit-mask": "none" })), ["-webkit-mask", "-webkit-mask-image"]);
   // Unrelated names, and custom properties, keep their order.
   const plain = { width: "1px", "background-color": "red", color: "blue", "--margin": "1px", margin: "0px" };
-  assert.deepEqual(Object.keys(shorthandsFirst(plain)), Object.keys(plain));
+  assert.equal(shorthandsFirst(plain), plain, "a style with no pair is returned as it is");
   assert.equal(isLonghandOf("margin-left", "margin"), true);
   assert.equal(isLonghandOf("top", "inset"), true);
   assert.equal(isLonghandOf("margin", "margin-left"), false);
