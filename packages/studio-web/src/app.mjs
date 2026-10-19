@@ -6,6 +6,7 @@
 
 import { mountCanvas, insertNode, removeNodes, setStyle, setText } from "/packages/canvas/src/index.mjs";
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
+import { textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -1743,7 +1744,9 @@ function renderInspector() {
   // The longest attribute value the canvas draws.
   classesField.querySelector("input").maxLength = 2000;
   children.push(classesField);
-  if (node.type === "text" || typeof node.props?.text === "string") children.push(field("text", "Text", typeof node.props?.text === "string" ? node.props.text : "", true));
+  // An element's own words, wherever they are held (#235).
+  const textId = textLayerOf(doc, node.id);
+  if (textId !== null) children.push(field("text", "Text", typeof doc.nodes[textId].props?.text === "string" ? doc.nodes[textId].props.text : "", true));
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.
@@ -1777,7 +1780,7 @@ function onInspectorChange(event) {
   const value = input.value.trim();
   input.dataset.original = input.value;
   if (input.name === "name") commit([{ type: "set-props", nodeId, ...(value === "" ? { set: {}, unset: ["name"] } : { set: { name: value } }) }], "Rename layer");
-  else if (input.name === "text") commit(setText(nodeId, input.value), "Edit text");
+  else if (input.name === "text") commit(setText(textLayerOf(state.document, nodeId) ?? nodeId, input.value), "Edit text");
   else if (input.name === "classes") {
     // Each class once, in the order given; HTML separates them by ASCII whitespace only.
     const names = [...new Set(value.split(/[\t\n\f\r ]+/u).filter((name) => name !== ""))].join(" ");

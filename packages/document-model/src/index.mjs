@@ -458,6 +458,27 @@ export function getNodeIndex(document, nodeId) {
   return index;
 }
 
+/**
+ * The layer that holds `id`'s own words (#235, decided in P09), or null when it has none.
+ * Both shapes the imports make mean the same words: code import keeps an element's only text in
+ * the element's own `text`, and HTML import gives the element a bare text layer of its own (a
+ * text layer with no tag, attributes or style). For such an element this is that text layer,
+ * so the inspector and an agent's set_text change the words a person sees, either way. A {…}
+ * part of imported code is code, not words: a layer bound to one is never an element's words.
+ */
+export function textLayerOf(document, id) {
+  const node = Object.hasOwn(document.nodes, id) ? document.nodes[id] : null;
+  if (node === null) return null;
+  if (node.type === "text" || typeof node.props?.text === "string") return id;
+  if (node.children.length !== 1 || !Object.hasOwn(document.nodes, node.children[0])) return null;
+  const child = document.nodes[node.children[0]];
+  const props = child.props ?? {};
+  const empty = (value) => value === undefined || (typeof value === "object" && value !== null && Object.keys(value).length === 0);
+  const code = props.codeSource !== undefined && props.codeSource?.tag !== "#text";
+  const bare = child.type === "text" && child.children.length === 0 && typeof props.text === "string" && props.tag === undefined && empty(props.attributes) && empty(props.style) && !code;
+  return bare ? child.id : null;
+}
+
 export function isDescendant(document, ancestorId, candidateId) {
   getNode(document, ancestorId);
   getNode(document, candidateId);

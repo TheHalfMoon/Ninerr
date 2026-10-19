@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
+import { textLayerOf } from "@ninerr/document-model";
 import { exportJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
@@ -50,14 +51,17 @@ function nodeOf(session: StudioSession, id: unknown) {
   return document.nodes[id];
 }
 
-function summary(node: any) {
+function summary(node: any, document: any) {
   const props = node.props ?? {};
+  // The words a person sees: the element's own text, or its only text layer's (#235).
+  const words = textLayerOf(document, node.id);
+  const text = words === null ? undefined : document.nodes[words].props?.text;
   return {
     id: node.id,
     type: node.type,
     ...(typeof props.tag === "string" ? { tag: props.tag } : {}),
     ...(typeof props.name === "string" ? { name: props.name } : {}),
-    ...(typeof props.text === "string" ? { text: props.text.slice(0, 200) } : {}),
+    ...(typeof text === "string" ? { text: text.slice(0, 200) } : {}),
     childCount: node.children.length,
   };
 }
@@ -77,7 +81,7 @@ const TOOLS: Tool[] = [
     inputSchema: object({}),
     run: ({ session }) => {
       const document = session.document as any;
-      return { project: session.name, documentId: document.id, documentName: document.name, revision: session.revision, nodeCount: Object.keys(document.nodes).length, roots: document.rootIds.map((id: string) => summary(document.nodes[id])) };
+      return { project: session.name, documentId: document.id, documentName: document.name, revision: session.revision, nodeCount: Object.keys(document.nodes).length, roots: document.rootIds.map((id: string) => summary(document.nodes[id], document)) };
     },
   },
   {
@@ -94,7 +98,7 @@ const TOOLS: Tool[] = [
       const walk = (id: string, level: number): Json => {
         budget -= 1;
         const node = document.nodes[id];
-        const out: Record<string, Json> = summary(node);
+        const out: Record<string, Json> = summary(node, document);
         if (level < depth && node.children.length > 0) {
           const children: Json[] = [];
           for (const child of node.children) {
@@ -123,11 +127,13 @@ const TOOLS: Tool[] = [
   {
     name: "layer_details",
     title: "Layer details",
-    description: "One layer: its type, parent, children and properties (tag, text, name, attributes, style).",
+    description: "One layer: its type, parent, children and properties (tag, text, name, attributes, style), and the words a person sees in it.",
     inputSchema: object({ nodeId: { type: "string" } }, ["nodeId"]),
     run: ({ session }, args) => {
       const node = nodeOf(session, args.nodeId);
-      return { id: node.id, type: node.type, parentId: node.parentId, children: node.children, props: node.props };
+      const words = textLayerOf(session.document as any, node.id);
+      const text = words === null ? undefined : (session.document as any).nodes[words].props?.text;
+      return { id: node.id, type: node.type, parentId: node.parentId, children: node.children, props: node.props, ...(typeof text === "string" ? { text } : {}) };
     },
   },
   {
@@ -138,7 +144,7 @@ const TOOLS: Tool[] = [
     run: ({ session }, args) => {
       const document = session.document as any;
       const ids = args.nodeId === undefined ? document.rootIds : nodeOf(session, args.nodeId).children;
-      return { children: ids.slice(0, MAX_RESULT_NODES).map((id: string) => summary(document.nodes[id])) };
+      return { children: ids.slice(0, MAX_RESULT_NODES).map((id: string) => summary(document.nodes[id], document)) };
     },
   },
   {
@@ -156,7 +162,7 @@ const TOOLS: Tool[] = [
         if (args.type !== undefined && node.type !== args.type) continue;
         if (args.tag !== undefined && node.props?.tag !== args.tag) continue;
         if (query !== null && ![node.props?.name, node.props?.text].some((value) => typeof value === "string" && value.toLowerCase().includes(query))) continue;
-        found.push(summary(node));
+        found.push(summary(node, document));
       }
       return { nodes: found };
     },
@@ -168,7 +174,7 @@ const TOOLS: Tool[] = [
     inputSchema: object({}),
     run: ({ session, selection }) => {
       const document = session.document as any;
-      return { nodes: selection().filter((id) => Object.hasOwn(document.nodes, id)).map((id) => summary(document.nodes[id])) };
+      return { nodes: selection().filter((id) => Object.hasOwn(document.nodes, id)).map((id) => summary(document.nodes[id], document)) };
     },
   },
   {
@@ -226,12 +232,14 @@ const TOOLS: Tool[] = [
   {
     name: "set_text",
     title: "Set text",
-    description: "Replace a layer's text.",
+    description: "Replace a layer's text. For an element whose only content is a text layer, that layer's text.",
     inputSchema: object({ nodeId: { type: "string" }, text: { type: "string", maxLength: 100000 } }, ["nodeId", "text"]),
     run: ({ session, edit }, args) => {
       const node = nodeOf(session, args.nodeId);
       if (typeof args.text !== "string") throw new ToolError("text must be a string");
-      return edit([{ type: "set-props", nodeId: node.id, set: { text: args.text } }], "Set text");
+      // The words a person sees: an element's own text, or its only text layer's (#235).
+      const target = textLayerOf(session.document, node.id) ?? node.id;
+      return edit([{ type: "set-props", nodeId: target, set: { text: args.text } }], "Set text");
     },
   },
   {
