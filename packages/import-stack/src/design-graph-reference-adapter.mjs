@@ -94,6 +94,7 @@ export function convertDesignGraphSnapshot(input, { includeNonPublic = false } =
     const sourceId = sourceMap.get(from);
     if (!sourceId) fail(`artifacts[${i}]`, "unknown source UUID");
     let assetSha256 = null;
+    let objectRights = classification(a.rightsClassification);
     if (kind === "asset") {
       const contentHash = a.contentHash;
       const matching = byHash.get(contentHash);
@@ -102,10 +103,11 @@ export function convertDesignGraphSnapshot(input, { includeNonPublic = false } =
       }
       usedAssets.add(contentHash);
       assetSha256 = contentHash;
+      if (matching.rightsClassification === "restricted" || matching.rightsClassification === "metadata_only") objectRights = DENIED;
     }
     push({ id: scopedId("object", `artifact:${orig}`), kind,
       title: title(a.title, kind), tags: [String(a.kind)], sourceId, assetSha256,
-      confidence: "documented", visibility, rights: classification(a.rightsClassification) });
+      confidence: "documented", visibility, rights: objectRights });
   }
   for (const [name, rowsInput, kind] of [["patterns", patterns, "pattern"], ["flows", flows, "flow"]]) {
     for (const [i, value] of rowsInput.entries()) {
