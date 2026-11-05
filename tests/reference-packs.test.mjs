@@ -31,6 +31,8 @@ const object = (id, from = "owned", overrides = {}) => ({
   sourceId: `urn:ninerr:source:${from}`,
   assetSha256: null,
   confidence: "observed",
+  visibility: from === "owned" ? "public" : "private",
+  rights: { status: from === "owned" ? "verified" : "restricted", license: from === "owned" ? "Apache-2.0" : null, redistributable: from === "owned" },
   ...overrides,
 });
 const fixture = () => ({
@@ -65,6 +67,7 @@ test("local reference pack normalizes deterministically and freezes nested metad
 test("local search is deterministic, supports kind/tag terms, and includes rights metadata", () => {
   const result = searchReferencePack(fixture(), { query: "dashboard responsive", kinds: ["pattern"] });
   assert.deepEqual(result.map((item) => item.id), ["urn:ninerr:object:private", "urn:ninerr:object:uncertain"]);
+  assert.equal(result[0].sourceRights.status, "restricted");
   assert.equal(result[0].rights.status, "restricted");
   assert.equal(searchReferencePack(fixture(), { query: "doesnotexist" }).length, 0);
   assert.throws(() => searchReferencePack(fixture(), { limit: 1000 }), ReferencePackValidationError);
@@ -77,6 +80,17 @@ test("unknown and restricted source metadata NEVER enables export", () => {
   assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:private").allowed, false);
   assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:uncertain").allowed, false);
   assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:absent").allowed, false);
+});
+
+test("object-specific access never inherits a broader source grant", () => {
+  const pack = fixture();
+  pack.objects[0].rights = { status: "restricted", license: null, redistributable: false };
+  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").allowed, false);
+  pack.objects[0].rights = { status: "verified", license: "Apache-2.0", redistributable: true };
+  pack.objects[0].visibility = "private";
+  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").allowed, false);
+  pack.objects[0].visibility = "public";
+  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").allowed, true);
 });
 
 test("asset bytes are checked against manifest size AND SHA-256", () => {
