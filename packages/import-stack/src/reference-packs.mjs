@@ -31,29 +31,29 @@ export class ReferencePackValidationError extends Error {
   }
 }
 
-const fail = (at, message) => { throw new ReferencePackValidationError(\`\${at}: \${message}\`); };
+const fail = (at, message) => { throw new ReferencePackValidationError(`${at}: ${message}`); };
 
 function record(value, at, allowed, required = allowed) {
   if (value === null || typeof value !== "object" || Array.isArray(value)
     || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
     fail(at, "expected a plain object");
   }
-  for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(at, \`unsupported field \${key}\`);
-  for (const key of required) if (!Object.hasOwn(value, key)) fail(at, \`missing field \${key}\`);
+  for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(at, `unsupported field ${key}`);
+  for (const key of required) if (!Object.hasOwn(value, key)) fail(at, `missing field ${key}`);
   return value;
 }
 
 function string(value, at, maximum = 256) {
   if (typeof value !== "string" || value.length === 0 || value.length > maximum
     || value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value)) {
-    fail(at, \`expected a nonempty trimmed string of at most \${maximum} characters without controls\`);
+    fail(at, `expected a nonempty trimmed string of at most ${maximum} characters without controls`);
   }
   return value;
 }
 
 function id(value, at, kind) {
   string(value, at, 144);
-  if (!ID.test(value) || !value.startsWith(\`urn:ninerr:\${kind}:\`)) fail(at, \`invalid \${kind} identifier\`);
+  if (!ID.test(value) || !value.startsWith(`urn:ninerr:${kind}:`)) fail(at, `invalid ${kind} identifier`);
   return value;
 }
 
@@ -84,14 +84,14 @@ function sourceUri(value, at) {
 }
 
 function array(value, at, max) {
-  if (!Array.isArray(value) || value.length > max) fail(at, \`expected an array of at most \${max} elements\`);
+  if (!Array.isArray(value) || value.length > max) fail(at, `expected an array of at most ${max} elements`);
   return value;
 }
 
 function unique(items, field, at) {
   const ids = new Set();
   for (const item of items) {
-    if (ids.has(item[field])) fail(at, \`duplicate \${field} \${item[field]}\`);
+    if (ids.has(item[field])) fail(at, `duplicate ${field} ${item[field]}`);
     ids.add(item[field]);
   }
   return items.sort((a, b) => a[field] < b[field] ? -1 : a[field] > b[field] ? 1 : 0);
@@ -100,7 +100,7 @@ function unique(items, field, at) {
 function rights(value, at) {
   record(value, at, ["status", "license", "redistributable"]);
   if (!RIGHTS.has(value.status)) fail(at, "invalid rights status");
-  if (value.license !== null) string(value.license, \`\${at}.license\`, 128);
+  if (value.license !== null) string(value.license, `${at}.license`, 128);
   if (typeof value.redistributable !== "boolean") fail(at, "redistributable must be boolean");
   if (value.redistributable && (value.status !== "verified" || value.license === null)) {
     fail(at, "redistribution requires verified rights and an identified license/grant");
@@ -109,46 +109,46 @@ function rights(value, at) {
 }
 
 function source(value, index) {
-  const at = \`sources[\${index}]\`;
+  const at = `sources[${index}]`;
   record(value, at, ["id", "uri", "observedAt", "rights"]);
   return Object.freeze({
-    id: id(value.id, \`\${at}.id\`, "source"),
-    uri: sourceUri(value.uri, \`\${at}.uri\`),
-    observedAt: timestamp(value.observedAt, \`\${at}.observedAt\`),
-    rights: rights(value.rights, \`\${at}.rights\`),
+    id: id(value.id, `${at}.id`, "source"),
+    uri: sourceUri(value.uri, `${at}.uri`),
+    observedAt: timestamp(value.observedAt, `${at}.observedAt`),
+    rights: rights(value.rights, `${at}.rights`),
   });
 }
 
 function asset(value, index) {
-  const at = \`assets[\${index}]\`;
+  const at = `assets[${index}]`;
   record(value, at, ["sha256", "byteLength", "mediaType"]);
-  const sha256 = digest(value.sha256, \`\${at}.sha256\`);
+  const sha256 = digest(value.sha256, `${at}.sha256`);
   if (!Number.isSafeInteger(value.byteLength) || value.byteLength < 0 || value.byteLength > REFERENCE_PACK_LIMITS.maxAssetBytes) {
-    fail(\`\${at}.byteLength\`, "invalid asset size");
+    fail(`${at}.byteLength`, "invalid asset size");
   }
-  const mediaType = string(value.mediaType, \`\${at}.mediaType\`, 100);
-  if (!/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/u.test(mediaType)) fail(\`\${at}.mediaType\`, "invalid media type");
+  const mediaType = string(value.mediaType, `${at}.mediaType`, 100);
+  if (!/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/u.test(mediaType)) fail(`${at}.mediaType`, "invalid media type");
   return Object.freeze({ sha256, byteLength: value.byteLength, mediaType });
 }
 
 function object(value, index) {
-  const at = \`objects[\${index}]\`;
+  const at = `objects[${index}]`;
   record(value, at, ["id", "kind", "title", "tags", "sourceId", "assetSha256", "confidence"]);
-  if (!OBJECT_KINDS.has(value.kind)) fail(\`\${at}.kind\`, "invalid object kind");
-  if (!CONFIDENCES.has(value.confidence)) fail(\`\${at}.confidence\`, "invalid evidence confidence");
-  const tags = array(value.tags, \`\${at}.tags\`, 20).map((tag, i) => {
-    string(tag, \`\${at}.tags[\${i}]\`, 32);
-    if (!TAG.test(tag)) fail(\`\${at}.tags[\${i}]\`, "invalid tag");
+  if (!OBJECT_KINDS.has(value.kind)) fail(`${at}.kind`, "invalid object kind");
+  if (!CONFIDENCES.has(value.confidence)) fail(`${at}.confidence`, "invalid evidence confidence");
+  const tags = array(value.tags, `${at}.tags`, 20).map((tag, i) => {
+    string(tag, `${at}.tags[${i}]`, 32);
+    if (!TAG.test(tag)) fail(`${at}.tags[${i}]`, "invalid tag");
     return tag;
   });
-  if (new Set(tags).size !== tags.length) fail(\`\${at}.tags\`, "duplicate tag");
-  const assetSha256 = value.assetSha256 === null ? null : digest(value.assetSha256, \`\${at}.assetSha256\`);
-  if (value.kind === "asset" && assetSha256 === null) fail(\`\${at}.assetSha256\`, "asset kind requires content hash");
+  if (new Set(tags).size !== tags.length) fail(`${at}.tags`, "duplicate tag");
+  const assetSha256 = value.assetSha256 === null ? null : digest(value.assetSha256, `${at}.assetSha256`);
+  if (value.kind === "asset" && assetSha256 === null) fail(`${at}.assetSha256`, "asset kind requires content hash");
   return Object.freeze({
-    id: id(value.id, \`\${at}.id\`, "object"), kind: value.kind,
-    title: string(value.title, \`\${at}.title\`, 200),
+    id: id(value.id, `${at}.id`, "object"), kind: value.kind,
+    title: string(value.title, `${at}.title`, 200),
     tags: Object.freeze(tags.sort()),
-    sourceId: id(value.sourceId, \`\${at}.sourceId\`, "source"),
+    sourceId: id(value.sourceId, `${at}.sourceId`, "source"),
     assetSha256, confidence: value.confidence,
   });
 }
@@ -197,7 +197,7 @@ export function searchReferencePack(value, { query = "", kinds = [], limit = 20 
   const sourceMap = new Map(manifest.sources.map((entry) => [entry.id, entry]));
   return manifest.objects.filter((entry) => {
     if (kinds.length > 0 && !kinds.includes(entry.kind)) return false;
-    const searchable = \`\${entry.title} \${entry.tags.join(" ")} \${entry.kind} \${entry.id}\`.toLowerCase();
+    const searchable = `${entry.title} ${entry.tags.join(" ")} ${entry.kind} ${entry.id}`.toLowerCase();
     return terms.every((term) => searchable.includes(term));
   }).slice(0, limit).map((entry) => Object.freeze({
     ...entry, rights: sourceMap.get(entry.sourceId).rights,
