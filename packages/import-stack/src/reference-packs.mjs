@@ -23,6 +23,7 @@ const TAG = /^[a-z0-9][a-z0-9._/-]{0,31}$/u;
 const OBJECT_KINDS = new Set(["screen", "flow", "pattern", "asset", "token", "component"]);
 const CONFIDENCES = new Set(["observed", "documented", "inferred", "unknown"]);
 const RIGHTS = new Set(["verified", "restricted", "unknown"]);
+const VISIBILITIES = new Set(["public", "workspace", "private"]);
 
 export class ReferencePackValidationError extends Error {
   constructor(message) {
@@ -133,7 +134,8 @@ function asset(value, index) {
 
 function object(value, index) {
   const at = `objects[${index}]`;
-  record(value, at, ["id", "kind", "title", "tags", "sourceId", "assetSha256", "confidence"]);
+  record(value, at, ["id", "kind", "title", "tags", "sourceId", "assetSha256", "confidence", "visibility", "rights"]);
+  if (!VISIBILITIES.has(value.visibility)) fail(`${at}.visibility`, "invalid visibility");
   if (!OBJECT_KINDS.has(value.kind)) fail(`${at}.kind`, "invalid object kind");
   if (!CONFIDENCES.has(value.confidence)) fail(`${at}.confidence`, "invalid evidence confidence");
   const tags = array(value.tags, `${at}.tags`, 20).map((tag, i) => {
@@ -150,6 +152,7 @@ function object(value, index) {
     tags: Object.freeze(tags.sort()),
     sourceId: id(value.sourceId, `${at}.sourceId`, "source"),
     assetSha256, confidence: value.confidence,
+    visibility: value.visibility, rights: rights(value.rights, `${at}.rights`),
   });
 }
 
@@ -200,7 +203,7 @@ export function searchReferencePack(value, { query = "", kinds = [], limit = 20 
     const searchable = `${entry.title} ${entry.tags.join(" ")} ${entry.kind} ${entry.id}`.toLowerCase();
     return terms.every((term) => searchable.includes(term));
   }).slice(0, limit).map((entry) => Object.freeze({
-    ...entry, rights: sourceMap.get(entry.sourceId).rights,
+    ...entry, sourceRights: sourceMap.get(entry.sourceId).rights,
   }));
 }
 
@@ -212,6 +215,9 @@ export function referenceReuseDecision(value, objectId) {
   const source = manifest.sources.find((item) => item.id === entry.sourceId);
   if (source.rights.status !== "verified" || !source.rights.redistributable) {
     return Object.freeze({ allowed: false, reason: "source rights do not permit redistribution" });
+  }
+  if (entry.visibility !== "public" || entry.rights.status !== "verified" || !entry.rights.redistributable) {
+    return Object.freeze({ allowed: false, reason: "object visibility or rights do not permit redistribution" });
   }
   return Object.freeze({ allowed: true, reason: "verified metadata allows reuse; verify asset bytes before export" });
 }
