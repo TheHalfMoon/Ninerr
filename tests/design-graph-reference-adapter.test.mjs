@@ -37,6 +37,15 @@ test("public graph snapshot converts to offline reference pack, excluding privat
     "permitted upstream classification cannot create a verified license or a source-level grant");
 });
 
+test("binary assets retain the stricter underlying storage-rights classification", () => {
+  const f = fixture();
+  f.artifacts[2].rightsClassification = "permitted";
+  const { pack } = convertDesignGraphSnapshot(f);
+  const icon = pack.objects.find((object) => object.kind === "asset");
+  assert.equal(icon.rights.status, "restricted", "a permitted artifact cannot erase restricted storage rights");
+  assert.equal(referenceReuseDecision(pack, icon.id).allowed, false);
+});
+
 test("private references can be imported locally only by an explicit option and remain non-redistributable", () => {
   const { pack } = convertDesignGraphSnapshot(fixture(), { includeNonPublic: true });
   assert.equal(pack.objects.length, 5);
