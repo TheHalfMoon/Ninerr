@@ -20,3 +20,4 @@ export * from "./docling-proposal.ts";
 export * from "./mirror.ts";
 export * from "./reference-packs.mjs";
 export * from "./design-graph-reference-adapter.mjs";
+export * from "./reference-pack-file.ts";
