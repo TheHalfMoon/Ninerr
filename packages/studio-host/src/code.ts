@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { buildCodeIr, designToCode, expressionShown, exportedComponents, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
 import { DRAWN_ID, planElement } from "@ninerr/renderer";
+import { isCodePart } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
 import { importedStyle } from "./imports.ts";
 
@@ -37,12 +38,9 @@ function plainLayer(props: any): boolean {
     && (props.style === undefined || Object.keys(props.style).length === 0);
 }
 
-/** A layer that is a {…} part of imported code. */
-const isExpressionLayer = (node: any) => node.props?.codeExpression !== undefined || node.props?.codeSource?.tag === "#expression";
-
 /** A bare text layer: nothing of its own but its words, so its text can fold. */
 function bareText(node: any): string | null {
-  if (node.type !== "text" || node.children.length > 0 || typeof node.props?.text !== "string" || isExpressionLayer(node)) return null;
+  if (node.type !== "text" || node.children.length > 0 || typeof node.props?.text !== "string" || isCodePart(node)) return null;
   return plainLayer(node.props) ? node.props.text : null;
 }
 
@@ -64,7 +62,7 @@ function expressionSource(node: any): string {
     throw new StudioError(422, "export-refused", error instanceof Error ? error.message.slice(0, 300) : "a {…} part cannot be exported");
   }
   if (node.props.text !== shown || node.children.length > 0) {
-    throw new StudioError(422, "export-refused", `${text} is not the code this layer holds, ${shown.slice(0, 100)}; restore it or delete the layer to export`);
+    throw new StudioError(422, "export-refused", `${text} is not the code this layer holds, ${shown.slice(0, 100)}; undo the change, delete the layer, or bring the code in again to export`);
   }
   return source;
 }
@@ -178,7 +176,7 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
     if (labelTarget.has(id)) props.htmlFor = labelTarget.get(id)!;
     else if (props.htmlFor !== undefined) delete props.htmlFor; // names nothing in this export
     if (Object.keys(plan.style).length > 0) props.style = cssText(plan.style);
-    if (isExpressionLayer(node)) {
+    if (isCodePart(node)) {
       codeParts += 1;
       codePartBytes += typeof node.props.codeExpression === "string" ? node.props.codeExpression.length : 0;
       if (codePartBytes > MAX_EXPORT_CODE_PARTS_BYTES) throw new StudioError(422, "export-too-large", "the {…} parts of these layers are too large to export at once");

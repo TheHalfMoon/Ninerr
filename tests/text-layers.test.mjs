@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { textLayerOf } from "../packages/document-model/src/index.mjs";
+import { isCodePart, textLayerOf } from "../packages/document-model/src/index.mjs";
 import { exportJsx } from "../packages/studio-host/src/code.ts";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
@@ -114,6 +114,11 @@ test("the inspector's Text field edits an HTML-imported paragraph's words", brow
 // would change nothing in the code and block its export: both ways in refuse.
 const CODE = "export function A() { return <main><p>{title}</p><p>Words</p></main>; }";
 
+const refusedAsCode = (result) => {
+  assert.equal(result.isError, true, JSON.stringify(result));
+  assert.match(result.content[0].text, /shows \{…\} code from its source/u);
+};
+
 async function withCode(t, prefix) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   const pool = hostPool(now);
@@ -130,6 +135,37 @@ async function withCode(t, prefix) {
   return { running, nodes, part, words };
 }
 
+test("a code part is known by its source, recorded or bound; a run of words is not", () => {
+  assert.equal(isCodePart({ props: { codeExpression: "{a}" } }), true);
+  assert.equal(isCodePart({ props: { codeSource: { tag: "#expression" } } }), true, "bound before the source was recorded");
+  assert.equal(isCodePart({ props: { codeSource: { tag: "#text" } } }), false);
+  assert.equal(isCodePart({ props: { text: "{a}" } }), false, "braces a person typed");
+  assert.equal(isCodePart(undefined), false);
+});
+
+test("set_text refuses an element holding a code part beside other content, and export keeps it", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-code-part-mixed-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const running = await pool.open(root);
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  await ok(running.call("POST", "/api/code/import", { code: "export function A() { return <main><p>Hi {a}</p><p>{b}{c}</p></main>; }" }), "import");
+  const nodes = () => running.host.session.document.nodes;
+  const { token } = await ok(running.call("POST", "/api/agents/create", { name: "Writer" }), "agent");
+  const agent = mcpClient(running.host.mcpUrl, token);
+  await agent.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
+  const holders = [...new Set(Object.values(nodes()).filter(isCodePart).map((part) => part.parentId))];
+  assert.equal(holders.length, 2);
+  for (const nodeId of holders) refusedAsCode(await agent.tool("set_text", { nodeId, text: "Replaced" }));
+  const code = (await ok(running.call("POST", "/api/code/export", { nodeId: nodes()[holders[0]].parentId }), "export")).code;
+  assert.ok(!code.includes("Replaced"));
+  assert.match(code, /\{a\}/u);
+  assert.match((await agent.tool("guide", {})).structuredContent.guide, /codeExpression/u, "the guide says so beforehand");
+});
+
 test("set_text refuses a code part, and an element holding only one, and export still works", async (t) => {
   const { running, nodes, part, words } = await withCode(t, "ninerr-code-part-text-");
   const { token } = await ok(running.call("POST", "/api/agents/create", { name: "Writer" }), "agent");
@@ -137,9 +173,7 @@ test("set_text refuses a code part, and an element holding only one, and export 
   await agent.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
   const revision = running.host.session.revision;
   for (const nodeId of [part.id, part.parentId]) {
-    const refused = await agent.tool("set_text", { nodeId, text: "Replaced" });
-    assert.equal(refused.isError, true, nodeId);
-    assert.match(refused.content[0].text, /code in its source/u);
+    refusedAsCode(await agent.tool("set_text", { nodeId, text: "Replaced" }));
   }
   assert.equal(running.host.session.revision, revision, "nothing changed");
   assert.equal(nodes()[part.id].props.text, "{title}");
