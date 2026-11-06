@@ -1,0 +1,339 @@
+{
+  "schema": "ninerr.execution-board/1",
+  "asOf": "2026-11-06",
+  "repository": "TheHalfMoon/Ninerr",
+  "planDocument": "docs/designs/NINERR_EXECUTION_READY_MASTER_PLAN_2026-11-06.md",
+  "planStage": "ready_for_scoped_implementation",
+  "productRelease": "not_qualified",
+  "releaseAuthorization": "not_given",
+  "cloudInfrastructure": "none_required_or_authorized",
+  "mandatoryExternalInference": false,
+  "agentToolchain": "OpenCode",
+  "deepResearch": "DeepSeek+Craft Anything when free quota available",
+  "researchProviderAvailability": "OpenCode free DeepSeek quota exhausted; stages 08/09 pending",
+  "independentEGM": {
+    "completed": [
+      5,
+      6,
+      7
+    ],
+    "pending": [
+      8,
+      9
+    ],
+    "findingsDispositioned": 34
+  },
+  "sourceOfTruth": [
+    "docs/MASTER_PLAN.md",
+    "released code schemas",
+    "approved ADRs",
+    "this execution plan"
+  ],
+  "constraints": [
+    "desktop-only product",
+    "local MCP",
+    "no founder inference/hosted compute",
+    "source and object rights separate",
+    "exact-head CI",
+    "no unapproved release"
+  ],
+  "tasks": [
+    {
+      "id": "R01",
+      "title": "Preserve code-bound JSX expressions",
+      "status": "ready_for_fix",
+      "deps": [],
+      "pr": 362,
+      "owner": "studio-host/code-ir",
+      "tests": [
+        "tests/text-layers.test.mjs",
+        "tests/code-workflow.test.mjs"
+      ],
+      "gate": "source expression round-trip exact, malformed code fails closed"
+    },
+    {
+      "id": "R02",
+      "title": "Fix CSS shorthand-longhand precedence",
+      "status": "ready_for_fix",
+      "deps": [],
+      "issue": 360,
+      "owner": "import-stack/renderer",
+      "tests": [
+        "existing CSS import and renderer suites"
+      ],
+      "gate": "computed styles match before and after reimport"
+    },
+    {
+      "id": "R03",
+      "title": "Complete P09 UI/UX",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "R01",
+        "R02"
+      ],
+      "owner": "studio-web/document-model",
+      "tests": [
+        "P09 pointer keyboard agent accessibility journeys"
+      ],
+      "gate": "all P09 journeys pass from exact head"
+    },
+    {
+      "id": "R04",
+      "title": "Whole-process strict offline mode",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "R03"
+      ],
+      "owner": "network-policy/desktop",
+      "tests": [
+        "tests/offline-guarantee.test.mjs",
+        "proposed tests/main-process-egress.test.mjs",
+        "packaged OS packet sink negative control"
+      ],
+      "gate": "external packets blocked for all processes, loopback works"
+    },
+    {
+      "id": "R05",
+      "title": "P10 cross-platform release qualification",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "R04"
+      ],
+      "owner": "desktop packaging/release",
+      "tests": [
+        "npm run check",
+        "npm run smoke",
+        "packaged Windows macOS Linux journeys",
+        "identity census --check"
+      ],
+      "gate": "all exact-SHA release gates pass; separate public release authorization required"
+    },
+    {
+      "id": "M01",
+      "title": "Qualify immutable reference pack contract",
+      "status": "draft_pr_review",
+      "deps": [],
+      "pr": 365,
+      "owner": "import-stack",
+      "tests": [
+        "tests/reference-packs.test.mjs",
+        "tests/design-graph-reference-adapter.test.mjs"
+      ],
+      "gate": "20 local targeted cases and all required PR-head CI; rights fail closed"
+    },
+    {
+      "id": "M02",
+      "title": "Qualify trusted local JSON file reader",
+      "status": "draft_pr_review",
+      "deps": [
+        "M01"
+      ],
+      "pr": 367,
+      "owner": "import-stack/filesystem",
+      "tests": [
+        "tests/reference-pack-file.test.mjs",
+        "native symlink/ACL tests",
+        "identity census --check"
+      ],
+      "gate": "all supported OS exact-head CI and filesystem negatives pass"
+    },
+    {
+      "id": "M03",
+      "title": "Project-scoped read-only reference catalog",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "M02"
+      ],
+      "owner": "studio-host",
+      "tests": [
+        "proposed tests/reference-catalog.test.mjs"
+      ],
+      "gate": "1,000 local references, stable digest, project switch/revoke safe"
+    },
+    {
+      "id": "M04",
+      "title": "Add read-only MCP search/read reference tools",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "M03"
+      ],
+      "owner": "mcp-protocol/studio-host",
+      "tests": [
+        "proposed tests/mcp-references.test.mjs"
+      ],
+      "gate": "GUI/MCP metadata parity, no unauthorized paths"
+    },
+    {
+      "id": "M05",
+      "title": "Desktop Research panel",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "M03",
+        "M04"
+      ],
+      "owner": "studio-web",
+      "tests": [
+        "proposed tests/research-ui.test.mjs",
+        "a11y/320px UI journey"
+      ],
+      "gate": "offline preview, no remote thumbs, correct rights"
+    },
+    {
+      "id": "M06",
+      "title": "Owner-authorized Skilit source exporter and rights ledger",
+      "status": "ready_for_inventory_not_redistribution",
+      "deps": [
+        "M01"
+      ],
+      "repo": "TheHalfMoon/Skilit",
+      "issue": 189,
+      "owner": "source-system export",
+      "tests": [
+        "cross-tenant and private-record negative export"
+      ],
+      "gate": "source grant and actor filter verified; no source deletion"
+    },
+    {
+      "id": "W01",
+      "title": "Versioned MCP transactions",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "R03"
+      ],
+      "owner": "mcp-protocol/studio-host",
+      "tests": [
+        "proposed tests/mcp-agent-contract.test.mjs"
+      ],
+      "gate": "caller revision, request idempotency, stale conflicts"
+    },
+    {
+      "id": "W02",
+      "title": "Dry-run proposal and human approval",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W01"
+      ],
+      "owner": "agent-runtime/studio-web",
+      "tests": [
+        "two-agent conflict, no-side-effect dryRun, rejected approval"
+      ],
+      "gate": "one atomic authorized edit, safe revert/reapply"
+    },
+    {
+      "id": "W03",
+      "title": "Packaged local stdio helper",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W01",
+        "R05"
+      ],
+      "issue": 364,
+      "owner": "desktop/relay",
+      "tests": [
+        "clean install without Node, native OS MCP test"
+      ],
+      "gate": "installed transport works without remote relay"
+    },
+    {
+      "id": "W04",
+      "title": "Responsive professional layout",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "R03"
+      ],
+      "owner": "document-model/renderer",
+      "tests": [
+        "viewport 320/768/1440, constraints, undo"
+      ],
+      "gate": "deterministic layout and keyboard/pointer parity"
+    },
+    {
+      "id": "W05",
+      "title": "Tokens and design-system bindings",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W04"
+      ],
+      "owner": "document-model/persistence",
+      "tests": [
+        "document schema v2 migration, older-reader refusal"
+      ],
+      "gate": "lazy migration and no write from older reader"
+    },
+    {
+      "id": "W06",
+      "title": "Components, variants and instances",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W05"
+      ],
+      "owner": "design-components/renderer",
+      "tests": [
+        "1,000-instance scale, cycle refusal, undo"
+      ],
+      "gate": "deterministic instance expansion with source fidelity"
+    },
+    {
+      "id": "W07",
+      "title": "Vectors and local PNG SVG PDF export",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "R03"
+      ],
+      "owner": "renderer/studio-host",
+      "tests": [
+        "golden vector geometry, pixel/page fidelity, restricted-asset refusal"
+      ],
+      "gate": "owner-scoped file export, no remote fonts"
+    },
+    {
+      "id": "W08",
+      "title": "Reviewable application of Skilit references",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "M05",
+        "M06",
+        "W02",
+        "W05",
+        "W06"
+      ],
+      "owner": "studio-host/studio-web",
+      "tests": [
+        "one transaction, rights, revision, undo/reopen"
+      ],
+      "gate": "provenance preserved, no unauthorized asset redistribution"
+    },
+    {
+      "id": "W09",
+      "title": "Optional user-owned AI provider",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W02",
+        "R04"
+      ],
+      "owner": "network-policy/agent-supervisor",
+      "tests": [
+        "local endpoint stub, offline rejection, no founder endpoint"
+      ],
+      "gate": "core offline no key, consented direct egress only"
+    },
+    {
+      "id": "W10",
+      "title": "Rights-qualified Build Kits and open-ended deep REA",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "M05",
+        "M06",
+        "W05",
+        "W06",
+        "W08"
+      ],
+      "owner": "Research/Build Kits",
+      "tests": [
+        "pack provenance and restricted exclusion",
+        "same-task comparative benchmark"
+      ],
+      "gate": "no cloud and no unverifiable parity claims"
+    }
+  ]
+}
