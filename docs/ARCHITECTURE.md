@@ -66,6 +66,8 @@ Minimum concepts:
 
 Node mutations occur only through transactions. Transactions are the common unit for undo/redo, collaboration, agent attribution, visual history, and audit.
 
+An element's own text has two shapes, and both mean the same words (#235, decided in P09). Code import keeps an element's only text in the element's own `text`. HTML import gives the element a bare text layer of its own: a text layer with no tag, attributes or style. Mixed content, text between elements, is always held in text layers. A `{…}` part of imported code is code, not words, so a layer bound to one is never an element's words. `textLayerOf` in the document model names the layer that holds an element's words; agents' layer summaries show those words too. The inspector's Text field and an agent's `set_text` edit that layer, and code export folds a bare text layer into its parent, so both shapes edit, draw and export alike.
+
 ## Rendering contract
 
 The renderer consumes the canonical graph and produces web semantics. The model stores intent; the renderer decides concrete DOM/CSS representation.
