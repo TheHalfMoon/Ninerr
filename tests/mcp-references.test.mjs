@@ -146,6 +146,7 @@ test("reading references does not count as reading the project: it unlocks no wr
   await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "pack.json" }), "load");
   await ok(running.call("POST", "/api/projects/create", { name: "other" }), "switch");
   await agent.tool("search_design_references", {});
+  await agent.tool("get_design_reference", { id: "urn:ninerr:object:a" });
   const write = await agent.tool("create_frame", { name: "Frame", width: 100, height: 100 });
   assert.equal(write.isError, true);
   assert.match(write.content[0].text, /read|project/iu, "refused as a project the agent has not read");
