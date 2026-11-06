@@ -18,9 +18,13 @@ export const REFERENCE_PACK_LIMITS = Object.freeze({
 });
 
 const ID = /^urn:ninerr:(?:pack|source|object|owner):[a-z0-9][a-z0-9._:-]{0,127}$/u;
-// Text an agent or a person reads back: no controls, line separators, direction overrides,
-// zero-width spaces or byte-order marks. Joiners stay, which Arabic and emoji need.
-const UNSAFE_TEXT = /[\u0000-\u001f\u007f\u200b\u2028-\u202e\u2066-\u2069\ufeff]/u;
+// Text an agent or a person reads back: no controls, format characters (direction overrides,
+// invisible tag characters), lone surrogates or line separators. Joiners and direction marks
+// stay, which Arabic and emoji need. Tag-sequence flags (England) are refused with them.
+const UNSAFE_CLASS = String.raw`[[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]--[\u061c\u200c-\u200f]]`;
+const UNSAFE_TEXT = new RegExp(UNSAFE_CLASS, "v");
+/** `text` with what a pack refuses replaced by spaces, for adapters that clean rather than refuse. */
+export const withoutUnsafeText = (text) => text.replace(new RegExp(UNSAFE_CLASS, "gv"), " ");
 const HASH = /^[a-f0-9]{64}$/u;
 const TAG = /^[a-z0-9][a-z0-9._/-]{0,31}$/u;
 const OBJECT_KINDS = new Set(["screen", "flow", "pattern", "asset", "token", "component"]);
@@ -169,8 +173,9 @@ export function normalizeReferencePack(value) {
     if (error instanceof ReferencePackValidationError) throw error;
     fail("manifest", "not JSON serializable");
   }
+  // First, so a pack of a later version is told so, not that its fields are unknown.
+  if (value !== null && typeof value === "object" && value.schemaVersion !== REFERENCE_PACK_SCHEMA_VERSION) fail("schemaVersion", "unsupported schema");
   record(value, "manifest", ["schemaVersion", "packId", "ownerScope", "createdAt", "sources", "objects", "assets"]);
-  if (value.schemaVersion !== REFERENCE_PACK_SCHEMA_VERSION) fail("schemaVersion", "unsupported schema");
   const packId = id(value.packId, "packId", "pack");
   const ownerScope = value.ownerScope === null ? null : id(value.ownerScope, "ownerScope", "owner");
   const createdAt = timestamp(value.createdAt, "createdAt");
