@@ -431,17 +431,17 @@ test("what P09 added audits clean while it shows: classes, a selection, a group,
     assert.equal(await page.locator("#inspect-classes").isVisible(), true, "the Classes field shows for a selected layer");
     await audit(page, "the inspector with its Classes field");
 
-    await row(page, c).click({ modifiers: ["Control"] });
+    await row(page, c).click({ modifiers: ["ControlOrMeta"] });
     await page.waitForFunction((id) => document.getElementById(`layer-${id}`)?.getAttribute("aria-selected") === "true", c);
     assert.equal(await page.locator("#action-group").isEnabled(), true);
     await audit(page, "two layers selected, Group enabled");
 
-    await page.keyboard.press("Control+g");
+    await page.keyboard.press("ControlOrMeta+g");
     await waitRevision(page, 4);
     const group = host.session.document.nodes[host.session.document.rootIds[0]].children.find((id) => id.startsWith("group-"));
     assert.ok(group);
     await audit(page, "a group layer");
-    await page.keyboard.press("Control+z");
+    await page.keyboard.press("ControlOrMeta+z");
     await waitRevision(page, 5);
 
     // A drop mark, in the middle of a drag.
@@ -517,7 +517,7 @@ test("with every P09 control showing, the editor reflows at 320 px and each targ
     await agentChange(host);
     await page.waitForFunction(() => !document.getElementById("action-undo-agent").hidden);
     await row(page, a).click();
-    await row(page, c).click({ modifiers: ["Control"] });
+    await row(page, c).click({ modifiers: ["ControlOrMeta"] });
     const targets = () => page.evaluate(() => [...document.querySelectorAll("button, input, textarea, select, [role=treeitem] > .row, a[href]")]
       .filter((element) => element.getClientRects().length > 0 && !element.closest("dialog:not([open])"))
       .map((element) => ({ id: element.id, name: element.id || element.getAttribute("aria-label") || element.textContent.trim().slice(0, 20), rect: element.getBoundingClientRect() }))
