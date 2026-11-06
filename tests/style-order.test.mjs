@@ -338,3 +338,47 @@ test("the HTML import review says when a style loses a longhand its shorthand ov
   // Layer ids are random, so the two come in either order.
   assert.deepEqual(styles.sort((a, b) => Object.keys(a).length - Object.keys(b).length), [{ inset: "0px" }, { inset: "0px", bottom: "1px" }]);
 });
+
+// #370, case 4: a browser reads comments, strings and parentheses, so a style's own reader must.
+test("a style's semicolons end declarations only outside comments, strings and parentheses", () => {
+  const style = (cssText) => importedStyle({ cssText });
+  assert.deepEqual(style("margin-left: 5px !important/*; margin: 0px"), { "margin-left": "5px !important" }, "a comment left open runs to the end");
+  assert.deepEqual(style("color: red /* ; margin: 0 */; top: 1px"), { color: "red", top: "1px" });
+  assert.deepEqual(style("/* a: b; */ color: red"), { color: "red" });
+  assert.deepEqual(style("margin-left: 5px; /* margin: 0 */"), { "margin-left": "5px" }, "a shorthand in a comment overrides nothing");
+  assert.deepEqual(style('content: "a;b"; color: red'), { content: '"a;b"', color: "red" });
+  assert.deepEqual(style('content: "a\\";b"; color: red'), { content: '"a\\";b"', color: "red" });
+  assert.deepEqual(style("background: url(data:image/png;base64,AAAA); color: red"), { background: "url(data:image/png;base64,AAAA)", color: "red" });
+  assert.deepEqual(style("background: url(a/*b*/c); color: red"), { background: "url(a/*b*/c)", color: "red" }, "not a comment inside url()");
+  assert.deepEqual(style("color: red; ;; top: 1px;"), { color: "red", top: "1px" });
+  // Linear: a long string of comments does not hold the host.
+  const started = performance.now();
+  assert.deepEqual(style(`${"/*x*/".repeat(100_000)}color: red`), { color: "red" });
+  assert.deepEqual(style(`color: red${" /* x".repeat(100_000)}`), { color: "red" });
+  assert.ok(performance.now() - started < 2_000);
+});
+
+test("a code import says when it leaves a declaration out, and the file is not changed", browserTestOptions(), async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-style-left-out-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const running = await pool.open(root);
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  const left = 'export function A() { return <main><p style="bottom: 1px; inset: 0px">a</p><p style="inset: 0px; bottom: 1px">b</p></main>; }';
+  assert.equal((await ok(running.call("POST", "/api/code/import", { code: left }), "import")).layersWithStyleLeftOut, 1);
+  assert.equal((await ok(running.call("POST", "/api/code/import", { code: "export function B() { return <p style=\"inset: 0px; bottom: 1px\">b</p>; }" }), "import")).layersWithStyleLeftOut, 0);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, running.host.session.revision);
+  await page.locator("#action-code").click();
+  await page.locator("#code-import").fill(left);
+  await page.locator("#code-import").press("Tab");
+  await page.locator("#dialog[open] form button.primary, #dialog[open] form button[type=submit]").first().click();
+  await page.waitForFunction(() => /left out that a later shorthand/u.test(document.getElementById("status")?.textContent ?? ""));
+  assert.match(await page.locator("#status").textContent(), /1 layer has style properties left out/u);
+  assert.deepEqual(editor.errors, []);
+});

@@ -196,9 +196,12 @@ test("the inspector has no Text field for a code part or an element holding only
   };
   await select(words.id);
   assert.equal(await page.locator("#inspect-text").count(), 1, "words have a Text field");
+  assert.equal(await page.locator("#inspect-code-note").count(), 0, "and no note about code");
   await select(part.parentId);
   assert.equal(await page.locator("#inspect-text").count(), 0, "the element holding only code has none");
+  assert.match(await page.locator("#inspect-code-note").textContent(), /code from its source/u, "and says why");
   await select(part.id);
   assert.equal(await page.locator("#inspect-text").count(), 0, "the code part has none");
+  assert.match(await page.locator("#inspect-code-note").textContent(), /code from its source/u);
   assert.deepEqual(editor.errors, []);
 });

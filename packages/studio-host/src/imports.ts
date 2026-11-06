@@ -244,6 +244,43 @@ function summarize(proposalId: string, name: string, proposal: ImportProposal, r
   };
 }
 
+/**
+ * A style's declarations, split at each semicolon that ends one: not one in a string, in
+ * parentheses (a data URL) or in a comment. Comments go, as they do in CSS, and one left open
+ * runs to the end. Linear in the text.
+ */
+function declarationsOf(text: string): string[] {
+  const declarations: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quote: string | null = null;
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (quote !== null) {
+      current += char;
+      if (char === "\\" && at + 1 < text.length) current += text[++at];
+      else if (char === quote) quote = null;
+    } else if (char === "\"" || char === "'") {
+      quote = char;
+      current += char;
+    } else if (depth === 0 && char === "/" && text[at + 1] === "*") {
+      const end = text.indexOf("*/", at + 2);
+      if (end < 0) break;
+      current += " ";
+      at = end + 1;
+    } else if (char === ";" && depth === 0) {
+      declarations.push(current);
+      current = "";
+    } else {
+      if (char === "(") depth += 1;
+      else if (char === ")" && depth > 0) depth -= 1;
+      current += char;
+    }
+  }
+  declarations.push(current);
+  return declarations;
+}
+
 /** `cssText` (an imported inline style) as style properties; the renderer re-checks every value. */
 export function styleProperties(style: unknown): Record<string, string> {
   const out: Record<string, string> = {};
@@ -256,7 +293,7 @@ export function styleProperties(style: unknown): Record<string, string> {
     }
     // A name written again takes the later value and the later place, since order decides what
     // wins; but a plain one never beats an important one, as in CSS.
-    for (const declaration of value.split(";")) {
+    for (const declaration of declarationsOf(value)) {
       const at = declaration.indexOf(":");
       if (at <= 0) continue;
       const property = declaration.slice(0, at).trim().toLowerCase();

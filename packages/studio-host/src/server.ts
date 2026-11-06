@@ -327,9 +327,9 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     "POST /api/code/export": (body) => exportJsx(requireSession().document, body?.nodeId),
     "POST /api/code/import": (body) => {
       const current = requireSession();
-      const { operations, frameId, componentName, layers } = importJsx(body?.code);
+      const { operations, frameId, componentName, layers, layersWithStyleLeftOut } = importJsx(body?.code);
       const placed = operations.map((operation: any) => ({ ...operation, index: (current.document as any).rootIds.length }));
-      return { ...current.edit(owner, { baseRevision: current.revision, operations: placed, intent: `Bring in ${componentName}`, tool: "ninerr:code" }), frameId, layers };
+      return { ...current.edit(owner, { baseRevision: current.revision, operations: placed, intent: `Bring in ${componentName}`, tool: "ninerr:code" }), frameId, layersWithStyleLeftOut, layers };
     },
     // A connected codebase (PC11): only the person, through the editor's session, ever
     // connects one, brings a component in from it, or writes back to it.
@@ -365,9 +365,9 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     "POST /api/codebase/import": (body) => {
       const current = requireSession();
       const folder = connectedFolder(current.name);
-      const { operations, frameId, componentName, layers, file } = bringIn(folder, body?.file, body?.component);
+      const { operations, frameId, componentName, layers, layersWithStyleLeftOut, file } = bringIn(folder, body?.file, body?.component);
       const placed = operations.map((operation: any) => ({ ...operation, index: (current.document as any).rootIds.length }));
-      return { ...current.edit(owner, { baseRevision: current.revision, operations: placed, intent: `Bring in ${componentName} from ${file}`, tool: "ninerr:codebase" }), frameId, layers };
+      return { ...current.edit(owner, { baseRevision: current.revision, operations: placed, intent: `Bring in ${componentName} from ${file}`, tool: "ninerr:codebase" }), frameId, layersWithStyleLeftOut, layers };
     },
     "POST /api/codebase/preview": (body) => {
       const current = requireSession();

@@ -3,7 +3,7 @@ import { buildCodeIr, designToCode, expressionShown, exportedComponents, type De
 import { DRAWN_ID, planElement } from "@ninerr/renderer";
 import { isCodePart } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
-import { importedStyle } from "./imports.ts";
+import { importedStyle, styleProperties } from "./imports.ts";
 
 // The design/code workflow (PC6, gate 11), over @ninerr/code-ir.
 //
@@ -272,7 +272,7 @@ export interface ImportJsxOptions {
   bind?: boolean;
 }
 
-export function importJsx(source: unknown, options: ImportJsxOptions = {}): { operations: unknown[]; frameId: string; componentName: string; layers: number } {
+export function importJsx(source: unknown, options: ImportJsxOptions = {}): { operations: unknown[]; frameId: string; componentName: string; layers: number; layersWithStyleLeftOut: number } {
   if (typeof source !== "string" || source.trim() === "") throw new StudioError(400, "invalid-code", "code must be a non-empty string");
   if (Buffer.byteLength(source) > MAX_CODE_BYTES) throw new StudioError(413, "code-too-large", "code is limited to 256 KiB");
   const refuse = (message: string) => new StudioError(422, "code-refused", message.slice(0, 300));
@@ -315,6 +315,7 @@ export function importJsx(source: unknown, options: ImportJsxOptions = {}): { op
   const frameId = `page-code-${randomUUID().slice(0, 12)}`;
   const suffix = randomUUID().slice(0, 8);
   let count = 0;
+  let layersWithStyleLeftOut = 0;
   const nodes: unknown[] = [];
   const nextId = () => `code-${suffix}-${++count}`;
   const convert = (symbolId: string, parentId: string, name?: string, path: number[] = []): string => {
@@ -340,7 +341,10 @@ export function importJsx(source: unknown, options: ImportJsxOptions = {}): { op
       const text = value === true ? "" : String(value);
       if (prop.name === "className") attributes.class = text;
       else if (prop.name === "htmlFor") attributes.for = text;
-      else if (prop.name === "style" && typeof value === "string") style = importedStyle({ cssText: value });
+      else if (prop.name === "style" && typeof value === "string") {
+        style = importedStyle({ cssText: value });
+        if (Object.keys(style).length < Object.keys(styleProperties({ cssText: value })).length) layersWithStyleLeftOut += 1;
+      }
       else attributes[prop.name] = text;
     }
     // A component (Button, Item.Skeleton) or a name that is not a plain tag is kept as a named
@@ -396,5 +400,5 @@ export function importJsx(source: unknown, options: ImportJsxOptions = {}): { op
   };
   const frame = { id: frameId, type: "frame", parentId: null, children: [] as string[], props: { tag: "div", name: componentName, style: { position: "relative", width: "800px", "min-height": "400px", background: "#ffffff" } }, metadata: {} };
   frame.children = [convert(rootId, frameId, componentName)];
-  return { operations: [{ type: "restore-subtree", rootId: frameId, parentId: null, nodes: [frame, ...nodes] }], frameId, componentName, layers: count };
+  return { operations: [{ type: "restore-subtree", rootId: frameId, parentId: null, nodes: [frame, ...nodes] }], frameId, componentName, layers: count, layersWithStyleLeftOut };
 }
