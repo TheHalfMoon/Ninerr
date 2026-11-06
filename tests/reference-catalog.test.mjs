@@ -202,7 +202,8 @@ test("a pack of shared bytes cannot stall the host", async (t) => {
 test("of two reads, the one asked for last wins, and closing ends a read under way", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-reference-order-")));
   try {
-    writeFileSync(join(root, "one.json"), JSON.stringify(pack([object("first")])));
+    // Large, so the first read usually finishes after the second: an older read must not win.
+    writeFileSync(join(root, "one.json"), JSON.stringify(pack(Array.from({ length: 8_000 }, (_, index) => object(`first-${index}`)))));
     writeFileSync(join(root, "two.json"), JSON.stringify(pack([object("second")])));
     const catalog = new ReferenceCatalog();
     const session = {};
@@ -214,6 +215,8 @@ test("of two reads, the one asked for last wins, and closing ends a read under w
     const late = assert.rejects(catalog.load(session, () => true, root, "one.json"), (error) => error.code === "reference-load-superseded");
     catalog.revoke();
     assert.equal(catalog.search(session, "site").status, "not-loaded");
+    await late;
+    assert.equal(catalog.search(session, "site").status, "not-loaded", "a read from before the revoke never lands");
     // A read that is refused takes nothing from one under way, which still lands.
     const good = catalog.load(session, () => true, root, "two.json");
     await assert.rejects(catalog.load(session, () => true, undefined, "one.json"), (error) => error.code === "reference-pack-refused");
