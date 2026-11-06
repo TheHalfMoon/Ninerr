@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, frameStylesheet, importHtmlSnapshot, sanitizeImportedStylesheet, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
 import { inferSemantics, reviewImport } from "@ninerr/intake";
-import { isImportant, shorthandsFirst, withoutOverriddenLonghands } from "@ninerr/renderer";
+import { isImportant, isLonghandOf, shorthandsFirst, withoutOverriddenLonghands } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 
 // Importing HTML into the open project (PC6, gate 10). The import stack parses and
@@ -371,20 +371,24 @@ const sets = (shorthand: string, name: string): boolean => SHORTHANDS.has(shorth
 // A border's side and a border's part (border-top and border-color) each set some of the other.
 const BORDER_SIDE = /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?$/u;
 const BORDER_PART = /^border-(?:color|style|width)$/u;
-export const overlap = (x: string, y: string): boolean => sets(x, y) || sets(y, x) || (BORDER_SIDE.test(x) && BORDER_PART.test(y)) || (BORDER_PART.test(x) && BORDER_SIDE.test(y));
+export const overlap = (x: string, y: string): boolean => sets(x, y) || sets(y, x) || (SHORTHANDS.has(x) && SHORTHANDS.has(y) && ((BORDER_SIDE.test(x) && BORDER_PART.test(y)) || (BORDER_PART.test(x) && BORDER_SIDE.test(y))));
 
 /**
  * Whether a style can draw differently from its source (decided in P09, #369): two properties
  * that overlap, in an order the canvas does not keep. The store sorts a style's names and the
  * canvas applies shorthands first, so of two overlapping shorthands the last written need not
- * win. Linear in the names, for the few shorthands there can be.
+ * win. Within the overlap table: other pairs (margin-left and margin-inline-start) are not seen.
+ * A longhand left beside its shorthand needs no report: importedStyle has already dropped one the
+ * shorthand resets, and the canvas applies the rest in order. Importance on one side settles a
+ * pair whatever the order. Linear in the names, for the few shorthands there can be.
  */
 export function styleOutOfWrittenOrder(style: unknown): boolean {
   const written = importedStyle(style);
   const names = Object.keys(written);
   const applied = new Map(Object.keys(shorthandsFirst(Object.fromEntries([...names].sort().map((name) => [name, ""])))).map((name, index) => [name, index]));
   return names.some((shorthand, at) => SHORTHANDS.has(shorthand) && names.some((other, otherAt) => {
-    if (other === shorthand || !overlap(shorthand, other) || isImportant(written[shorthand]) || isImportant(written[other])) return false;
+    if (other === shorthand || !overlap(shorthand, other) || isLonghandOf(shorthand, other) || isLonghandOf(other, shorthand)) return false;
+    if (isImportant(written[shorthand]) !== isImportant(written[other])) return false;
     return (at < otherAt) !== (applied.get(shorthand)! < applied.get(other)!);
   }));
 }

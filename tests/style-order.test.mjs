@@ -454,13 +454,13 @@ test("a code import says when it leaves a declaration out, and the file is not c
 
 // The limit decided in P09 (#369): pinned, so a change to it is noticed, and checked against a
 // browser, so that what the import reports is exactly what draws differently.
-test("what the canvas draws out of written order is what the import reports, and no more", browserTestOptions(), async (t) => {
+test("the import reports overlapping properties the canvas draws out of written order", browserTestOptions(), async (t) => {
   const running = await editing(t);
   const editor = await openEditor(running.host);
   t.after(() => editor.close());
   const { page } = editor;
   await waitRevision(page, 1);
-  const names = ["border-top-color", "border-left-color", "margin-left", "top", "row-gap"];
+  const names = ["border-top-color", "border-left-color", "border-top-left-radius", "margin-left", "top", "row-gap", "flex-direction", "outline-offset"];
   // Computed, since a logical property such as margin-inline only resolves there.
   await page.evaluate(() => {
     window.computed = (probe, wanted) => {
@@ -473,7 +473,10 @@ test("what the canvas draws out of written order is what the import reports, and
   const drawn = (entries) => page.evaluate(([list, wanted]) => {
     const probe = document.createElement("div");
     probe.style.position = "absolute";
-    for (const [name, value] of list) probe.style.setProperty(name, value.replace(/!\s*important\s*$/iu, "").trim(), /!\s*important\s*$/iu.test(value) ? "important" : "");
+    // As the renderer applies a style: plain declarations, then important ones.
+    const important = (value) => /!\s*important\s*$/iu.test(value);
+    for (const [name, value] of list) if (!important(value)) probe.style.setProperty(name, value);
+    for (const [name, value] of list) if (important(value)) probe.style.setProperty(name, value.replace(/!\s*important\s*$/iu, "").trim(), "important");
     return computed(probe, wanted);
   }, [entries, names]);
   const browser = (cssText) => page.evaluate(([text, wanted]) => {
@@ -492,6 +495,14 @@ test("what the canvas draws out of written order is what the import reports, and
     ["margin: 0px; margin-left: 5px", false],
     ["margin-left: 5px; margin: 0px", false],
     ["color: red; top: 1px", false],
+    // A shorthand does not set everything its name begins: these draw alike, and are not reported.
+    ["border-radius: 4px; border: 1px solid red", false],
+    ["flex-direction: column; flex: 1", false],
+    ["outline-offset: 3px; outline: 1px solid red", false],
+    // Importance on both sides settles nothing, so the order still decides.
+    ["border-top: 1px solid blue !important; border-color: red !important", true],
+    ["margin-left: 1px !important; margin-inline: 3px !important", true],
+    ["margin: 11px !important; margin-left: 14px", false],
     ["margin-left: 1px; top: 2px; width: 3px", false],
   ]) {
     const style = importedStyle({ cssText });
@@ -500,9 +511,9 @@ test("what the canvas draws out of written order is what the import reports, and
     assert.equal(styleOutOfWrittenOrder({ cssText }), reported, cssText);
     assert.equal(canvas !== await browser(cssText), reported, `${cssText}: drawn ${canvas}`);
   }
-  // Linear in a style's size.
+  // Linear in a style's size, with shorthands present so that every name is compared.
   const started = performance.now();
-  assert.equal(styleOutOfWrittenOrder({ cssText: Array.from({ length: 20_000 }, (_, index) => `margin-a${index}: 1px`).join(";") }), false);
+  assert.equal(styleOutOfWrittenOrder({ cssText: `margin: 0; border: 0; ${Array.from({ length: 20_000 }, (_, index) => `x-${index}: 1px`).join(";")}` }), false);
   assert.ok(performance.now() - started < 5_000);
   assert.deepEqual(editor.errors, []);
 });
