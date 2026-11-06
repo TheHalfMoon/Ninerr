@@ -206,6 +206,26 @@ test("a directory must be an absolute local path", async () => {
   });
 });
 
+test("a path through a link means the directory that was checked", async (t) => {
+  await withTemp(async (dir) => {
+    await mkdir(join(dir, "other", "target"), { recursive: true });
+    await mkdir(join(dir, "other", "real"));
+    await mkdir(join(dir, "real"));
+    await writeFile(join(dir, "real", "pack.json"), JSON.stringify(fixture(1)));
+    await writeFile(join(dir, "other", "real", "pack.json"), JSON.stringify(fixture(3)));
+    try {
+      await symlink(join(dir, "other", "target"), join(dir, "link"), process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if (await skipIfUnsupported(t, error, "directory link")) return;
+      throw error;
+    }
+    // Written by hand: join() would normalize the `..` away. To the system on POSIX, this names
+    // other/real, past the link; only the plain real/ was checked.
+    const read = await readReferencePackFile({ directory: `${dir}${sep}link${sep}..${sep}real`, fileName: "pack.json" });
+    assert.equal(read.pack.objects.length, 1);
+  });
+});
+
 test("a junction or link named with a trailing separator is still refused", async (t) => {
   await withPack(async ({ dir, root }) => {
     const linked = join(dir, "linked-root");

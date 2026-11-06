@@ -6,11 +6,13 @@ import { sha256Text } from "./validation.ts";
 
 export async function canonicalDirectory(path: string, label: string, create = false): Promise<string> {
   if (typeof path !== "string" || path.trim() === "") throw new ImportValidationError(`${label} must be a non-empty path`);
-  if (create) await mkdir(path, { recursive: true });
-  // Resolved first: on POSIX `link/` and `link/.` name the target, so lstat would pass them.
-  const info = await lstat(resolve(path));
+  // One resolved path for every step: on POSIX `link/` and `link/.` name the target, so lstat
+  // would pass them, and `link/../x` means one directory lexically and another to the system.
+  const full = resolve(path);
+  if (create) await mkdir(full, { recursive: true });
+  const info = await lstat(full);
   if (info.isSymbolicLink() || !info.isDirectory()) throw new ImportSecurityError(`${label} must be a regular non-symlink directory`);
-  return await realpath(path);
+  return await realpath(full);
 }
 
 export async function canonicalFileWithinRoots(path: string, roots: string[], label: string): Promise<string> {
