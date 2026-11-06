@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, frameStylesheet, importHtmlSnapshot, sanitizeImportedStylesheet, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
 import { inferSemantics, reviewImport } from "@ninerr/intake";
-import { isImportant, withoutOverriddenLonghands } from "@ninerr/renderer";
+import { isImportant, isLonghandOf, shorthandsFirst, withoutOverriddenLonghands } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 
 // Importing HTML into the open project (PC6, gate 10). The import stack parses and
@@ -230,6 +230,8 @@ function summarize(proposalId: string, name: string, proposal: ImportProposal, r
   const unread = proposal.resources.length - linked.readLinks;
   if (unread > 0) notes.push(`${unread} linked resource${unread === 1 ? " is" : "s are"} not fetched: imports work offline.`);
   const overridden = Object.values(proposal.nodes as Record<string, any>).filter((node) => Object.keys(importedStyle(node.style)).length < Object.keys(styleProperties(node.style)).length).length;
+  const outOfOrder = Object.values(proposal.nodes as Record<string, any>).filter((node) => styleOutOfWrittenOrder(node.style)).length;
+  if (outOfOrder > 0) notes.push(`${outOfOrder} layer${outOfOrder === 1 ? " has" : "s have"} overlapping style properties that the canvas applies in its own order, so ${outOfOrder === 1 ? "it" : "they"} may draw differently from the source.`);
   if (overridden > 0) notes.push(`${overridden} layer${overridden === 1 ? " has" : "s have"} style properties left out that a later shorthand in the same style overrides; the layer looks the same.`);
   return {
     proposalId,
@@ -340,6 +342,55 @@ export function styleProperties(style: unknown): Record<string, string> {
     }
   }
   return out;
+}
+
+// Shorthands and what they set, beyond their own name followed by "-" (margin-top).
+const SHORTHANDS = new Set(["margin", "padding", "inset", "border", "border-top", "border-right", "border-bottom", "border-left", "border-block", "border-inline", "border-block-start", "border-block-end", "border-inline-start", "border-inline-end", "border-width", "border-style", "border-color", "border-radius", "border-image", "outline", "background", "font", "flex", "flex-flow", "grid", "grid-template", "grid-area", "grid-row", "grid-column", "gap", "grid-gap", "place-items", "place-content", "place-self", "text-decoration", "list-style", "overflow", "transition", "animation", "mask", "columns", "scroll-margin", "scroll-padding", "inset-block", "inset-inline", "margin-block", "margin-inline", "padding-block", "padding-inline", "all"]);
+const SETS: Record<string, string[]> = {
+  inset: ["top", "right", "bottom", "left"],
+  gap: ["row-gap", "column-gap", "grid-gap", "grid-row-gap", "grid-column-gap"],
+  "grid-gap": ["row-gap", "column-gap", "gap", "grid-row-gap", "grid-column-gap"],
+  font: ["line-height"],
+  "flex-flow": ["flex-direction", "flex-wrap"],
+  "place-items": ["align-items", "justify-items"],
+  "place-content": ["align-content", "justify-content"],
+  "place-self": ["align-self", "justify-self"],
+  "border-width": ["border-top-width", "border-right-width", "border-bottom-width", "border-left-width"],
+  "border-style": ["border-top-style", "border-right-style", "border-bottom-style", "border-left-style"],
+  "border-color": ["border-top-color", "border-right-color", "border-bottom-color", "border-left-color"],
+  "border-radius": ["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"],
+  columns: ["column-count", "column-width"],
+  "inset-block": ["top", "bottom"],
+  "inset-inline": ["left", "right"],
+  "margin-inline": ["margin-left", "margin-right"],
+  "margin-block": ["margin-top", "margin-bottom"],
+  "padding-inline": ["padding-left", "padding-right"],
+  "padding-block": ["padding-top", "padding-bottom"],
+};
+const sets = (shorthand: string, name: string): boolean => SHORTHANDS.has(shorthand) && (shorthand === "all" || name.startsWith(`${shorthand}-`) || (SETS[shorthand]?.includes(name) ?? false));
+// A border's side and a border's part (border-top and border-color) each set some of the other.
+const BORDER_SIDE = /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?$/u;
+const BORDER_PART = /^border-(?:color|style|width)$/u;
+export const overlap = (x: string, y: string): boolean => sets(x, y) || sets(y, x) || (SHORTHANDS.has(x) && SHORTHANDS.has(y) && ((BORDER_SIDE.test(x) && BORDER_PART.test(y)) || (BORDER_PART.test(x) && BORDER_SIDE.test(y))));
+
+/**
+ * Whether a style can draw differently from its source (decided in P09, #369): two properties
+ * that overlap, in an order the canvas does not keep. The store sorts a style's names and the
+ * canvas applies shorthands first, so of two overlapping shorthands the last written need not
+ * win. Within the overlap table: other pairs (margin-left and margin-inline-start) are not seen.
+ * A longhand left beside its shorthand needs no report: importedStyle has already dropped one the
+ * shorthand resets, and the canvas applies the rest in order. Importance on one side settles a
+ * pair whatever the order. Linear in the names, for the few shorthands there can be.
+ */
+export function styleOutOfWrittenOrder(style: unknown): boolean {
+  const written = importedStyle(style);
+  const names = Object.keys(written);
+  const applied = new Map(Object.keys(shorthandsFirst(Object.fromEntries([...names].sort().map((name) => [name, ""])))).map((name, index) => [name, index]));
+  return names.some((shorthand, at) => SHORTHANDS.has(shorthand) && names.some((other, otherAt) => {
+    if (other === shorthand || !overlap(shorthand, other) || isLonghandOf(shorthand, other) || isLonghandOf(other, shorthand)) return false;
+    if (isImportant(written[shorthand]) !== isImportant(written[other])) return false;
+    return (at < otherAt) !== (applied.get(shorthand)! < applied.get(other)!);
+  }));
 }
 
 /** What an imported style says: its properties, without those a later shorthand overrides (#360). */

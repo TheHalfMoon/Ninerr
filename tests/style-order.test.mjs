@@ -9,7 +9,7 @@ import { openEditor, rendered, waitRevision, reloadEditor } from "./support/edit
 import { hostPool, ok } from "./support/host-api.mjs";
 import { isImportant, isLonghandOf, planElement, shorthandsFirst, withoutOverriddenLonghands } from "../packages/renderer/src/index.mjs";
 import { exportJsx, importJsx } from "../packages/studio-host/src/code.ts";
-import { importedStyle } from "../packages/studio-host/src/imports.ts";
+import { importedStyle, styleOutOfWrittenOrder } from "../packages/studio-host/src/imports.ts";
 
 // #172 (found by the PC8b review): the editor applied each change as its caller sent it, while
 // the store, and so every reload, keeps the journal's sorted key order: the same design could
@@ -450,4 +450,81 @@ test("a code import says when it leaves a declaration out, and the file is not c
   await page.waitForFunction(() => /left out that a later shorthand/u.test(document.getElementById("status")?.textContent ?? ""));
   assert.match(await page.locator("#status").textContent(), /1 layer has style properties left out/u);
   assert.deepEqual(editor.errors, []);
+});
+
+// The limit decided in P09 (#369): pinned, so a change to it is noticed, and checked against a
+// browser, so that what the import reports is exactly what draws differently.
+test("the import reports overlapping properties the canvas draws out of written order", browserTestOptions(), async (t) => {
+  const running = await editing(t);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, 1);
+  const names = ["border-top-color", "border-left-color", "border-top-left-radius", "margin-left", "top", "row-gap", "flex-direction", "outline-offset"];
+  // Computed, since a logical property such as margin-inline only resolves there.
+  await page.evaluate(() => {
+    window.computed = (probe, wanted) => {
+      document.body.append(probe);
+      const values = wanted.map((name) => getComputedStyle(probe).getPropertyValue(name)).join("|");
+      probe.remove();
+      return values;
+    };
+  });
+  const drawn = (entries) => page.evaluate(([list, wanted]) => {
+    const probe = document.createElement("div");
+    probe.style.position = "absolute";
+    // As the renderer applies a style: plain declarations, then important ones.
+    const important = (value) => /!\s*important\s*$/iu.test(value);
+    for (const [name, value] of list) if (!important(value)) probe.style.setProperty(name, value);
+    for (const [name, value] of list) if (important(value)) probe.style.setProperty(name, value.replace(/!\s*important\s*$/iu, "").trim(), "important");
+    return computed(probe, wanted);
+  }, [entries, names]);
+  const browser = (cssText) => page.evaluate(([text, wanted]) => {
+    const probe = document.createElement("div");
+    probe.style.cssText = `position: absolute; ${text}`;
+    return computed(probe, wanted);
+  }, [cssText, names]);
+  for (const [cssText, reported] of [
+    ["border-top: 1px solid blue; border-color: red", true],
+    ["border-color: red; border-top: 1px solid blue", false],
+    ["margin-left: 1px; margin-inline: 3px", true],
+    ["margin-inline: 3px; margin-left: 1px", false],
+    ["top: 1px; inset-block: 2px", true],
+    ["row-gap: 1px; grid-gap: 2px", true],
+    ["border-top: 1px solid blue !important; border-color: red", false],
+    ["margin: 0px; margin-left: 5px", false],
+    ["margin-left: 5px; margin: 0px", false],
+    ["color: red; top: 1px", false],
+    // A shorthand does not set everything its name begins: these draw alike, and are not reported.
+    ["border-radius: 4px; border: 1px solid red", false],
+    ["flex-direction: column; flex: 1", false],
+    ["outline-offset: 3px; outline: 1px solid red", false],
+    // Importance on both sides settles nothing, so the order still decides.
+    ["border-top: 1px solid blue !important; border-color: red !important", true],
+    ["margin-left: 1px !important; margin-inline: 3px !important", true],
+    ["margin: 11px !important; margin-left: 14px", false],
+    ["margin-left: 1px; top: 2px; width: 3px", false],
+  ]) {
+    const style = importedStyle({ cssText });
+    const stored = Object.fromEntries(Object.keys(style).sort().map((name) => [name, style[name]]));
+    const canvas = await drawn(Object.entries(shorthandsFirst(stored)));
+    assert.equal(styleOutOfWrittenOrder({ cssText }), reported, cssText);
+    assert.equal(canvas !== await browser(cssText), reported, `${cssText}: drawn ${canvas}`);
+  }
+  // Linear in a style's size, with shorthands present so that every name is compared.
+  const started = performance.now();
+  assert.equal(styleOutOfWrittenOrder({ cssText: `margin: 0; border: 0; ${Array.from({ length: 20_000 }, (_, index) => `x-${index}: 1px`).join(";")}` }), false);
+  assert.ok(performance.now() - started < 5_000);
+  assert.deepEqual(editor.errors, []);
+});
+
+test("the import review and a code import both say when a style may draw differently", async (t) => {
+  const running = await editing(t);
+  const code = 'export function A() { return <main><p style="border-top: 1px solid blue; border-color: red">a</p><p style="color: red">b</p></main>; }';
+  assert.equal((await ok(running.call("POST", "/api/code/import", { code }), "import")).layersWithStyleOutOfOrder, 1);
+  assert.equal((await ok(running.call("POST", "/api/code/import", { code: 'export function B() { return <p style="color: red">b</p>; }' }), "import")).layersWithStyleOutOfOrder, 0);
+  const review = await ok(running.call("POST", "/api/import", { html: '<main><p style="margin-left: 1px; margin-inline: 3px">a</p><p style="color: red">b</p></main>', name: "Page" }), "review");
+  assert.ok(review.notes.includes("1 layer has overlapping style properties that the canvas applies in its own order, so it may draw differently from the source."), JSON.stringify(review.notes));
+  const plain = await ok(running.call("POST", "/api/import", { html: '<main><p style="color: red">b</p></main>', name: "Plain" }), "review");
+  assert.ok(!plain.notes.some((note) => note.includes("overlapping")), JSON.stringify(plain.notes));
 });
