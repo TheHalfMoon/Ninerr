@@ -511,7 +511,79 @@ try {
         } else check("B", "the selected box shows a resize handle", false);
       } else unsupported("B", "drag the inserted box", "it is not drawn where it can be reached");
       await shot(page, "B-edited");
-      unsupported("B", "reorder, group or move a layer to another parent", "the editor has no control for it (an MCP agent can reorder with move_layers; journey E)");
+      // P09: reorder, move to another parent and group from the layers tree, and edit classes.
+      const boxRow = page.locator(`[role=treeitem][data-node-id="${boxId}"] > .row`);
+      const siblingsOf = (id) => doc().nodes[doc().nodes[id].parentId].children;
+      await boxRow.click();
+      const at = siblingsOf(boxId).indexOf(boxId);
+      if (at > 0) {
+        await timed("reorder (keyboard)", async () => {
+          await page.keyboard.press("Alt+ArrowUp");
+          await waitRevision(page, revision + 1);
+        });
+        revision += 1;
+        check("B", "Alt+Up moves the box up among its siblings, in one change", siblingsOf(boxId).indexOf(boxId) === at - 1 && doc().nodes[boxId].parentId === parentId);
+      } else unsupported("B", "reorder the box with Alt+Up", "it is the first of its siblings");
+      const intoId = siblingsOf(boxId)[siblingsOf(boxId).indexOf(boxId) - 1] ?? null;
+      if (intoId !== null && doc().nodes[intoId].type !== "text") {
+        await timed("move into another layer (keyboard)", async () => {
+          await page.keyboard.press("Alt+ArrowRight");
+          return waitRevision(page, revision + 1, 5000).then(() => true, () => false);
+        }).then(async (moved) => {
+          if (moved) revision += 1;
+          check("B", "Alt+Right moves the box into the layer above it", moved && doc().nodes[boxId].parentId === intoId, { status: await page.locator("#status").textContent() });
+        });
+        if (doc().nodes[boxId].parentId === intoId) {
+          await page.keyboard.press("Alt+ArrowLeft");
+          await waitRevision(page, revision + 1);
+          revision += 1;
+          check("B", "Alt+Left moves it back out, just after that layer", doc().nodes[boxId].parentId === parentId && siblingsOf(boxId).indexOf(boxId) === siblingsOf(intoId).indexOf(intoId) + 1);
+        }
+      } else unsupported("B", "move the box into the layer above it", "no layer that holds layers is just above it");
+      // By pointer: drag the box past its nearest sibling in the tree, and one Undo puts it back.
+      const order = [...siblingsOf(boxId)];
+      const at2 = order.indexOf(boxId);
+      const over = order[at2 > 0 ? at2 - 1 : at2 + 1] ?? null;
+      if (over !== null) {
+        const overRow = page.locator(`[role=treeitem][data-node-id="${over}"] > .row`);
+        const dragged = await timed("reorder (pointer)", async () => {
+          const box = await overRow.boundingBox();
+          await boxRow.dragTo(overRow, { targetPosition: { x: box.width / 2, y: box.height * (at2 > 0 ? 0.1 : 0.9) } });
+          return waitRevision(page, revision + 1, 5000).then(() => true, () => false);
+        });
+        if (dragged) revision += 1;
+        const expected = [...order];
+        expected[at2] = over;
+        expected[order.indexOf(over)] = boxId;
+        check("B", "dragging the box in the layers tree moves it past its sibling, in one change", dragged && JSON.stringify(siblingsOf(boxId)) === JSON.stringify(expected));
+        if (dragged) {
+          await page.locator("#action-undo").click();
+          await waitRevision(page, revision + 1);
+          revision += 1;
+          check("B", "one Undo puts the dragged box back", JSON.stringify(siblingsOf(boxId)) === JSON.stringify(order));
+        }
+      } else unsupported("B", "drag the box past a sibling in the layers tree", "it has no sibling");
+      await boxRow.click();
+      await timed("group (keyboard)", async () => {
+        await page.keyboard.press("Control+g");
+        await waitRevision(page, revision + 1);
+      });
+      revision += 1;
+      const groupId = doc().nodes[boxId].parentId;
+      check("B", "Ctrl+G groups the box in a new group layer where it was, and it stays where it is drawn", doc().nodes[groupId]?.type === "group" && doc().nodes[groupId].parentId === parentId && JSON.stringify(doc().nodes[groupId].children) === JSON.stringify([boxId]), { group: doc().nodes[groupId] });
+      await page.locator("#action-undo").click();
+      await waitRevision(page, revision + 1);
+      revision += 1;
+      check("B", "one Undo removes the group", doc().nodes[boxId].parentId === parentId && doc().nodes[groupId] === undefined);
+      await boxRow.click();
+      await timed("edit classes (inspector)", async () => {
+        await page.locator("#inspect-classes").fill("dogfood-check");
+        await page.locator("#inspect-classes").press("Tab");
+        await waitRevision(page, revision + 1);
+      });
+      revision += 1;
+      const drawnClass = await page.evaluate((id) => document.querySelector("iframe").contentDocument.querySelector(`[data-ninerr-id="${id}"]`)?.getAttribute("class") ?? null, boxId);
+      check("B", "the inspector sets the box's classes, and the canvas draws them", doc().nodes[boxId].props.attributes?.class === "dogfood-check" && drawnClass === "dogfood-check", { drawnClass });
       // Undo everything and redo it, comparing with each state on the way.
       const states = [];
       const entries = (await api(host, "GET", "/api/history")).json.entries.length;
@@ -745,16 +817,17 @@ try {
       const set = await tool("set_text", { nodeId: agentTarget, text: "Written by the agent" });
       await waitRevision(page, revision + 1);
       check("E", "the agent's text edit is applied, drawn, and attributed in the history", set?.isError === undefined && (await renderedText(page, agentTarget))?.includes("Written by the agent") && (await page.locator("#history li").first().getAttribute("class")) === "agent", set?.content?.[0]?.text);
-      // Undo is for the person's own changes: after the agent's edit it is not offered.
-      const undoOffered = await page.locator("#action-undo").isEnabled();
-      if (!undoOffered) finding("ux", "after an agent's edit the editor's Undo is unavailable; the agent's change is undone with Revert in the history, which a person may not look for");
-      // The person reverts it from the history, then undoes the revert.
-      await page.locator("#history li").first().locator("button.revert").click();
+      // P09: the agent's change is undone next to the editor's own Undo, named.
+      const offered = await page.waitForFunction(() => !document.getElementById("action-undo-agent").hidden, null, { timeout: 5000 }).then(() => true, () => false);
+      const offeredAs = offered ? await page.locator("#action-undo-agent").getAttribute("aria-label") : null;
+      check("E", "the editor offers Undo agent change next to Undo, naming the agent's change", offered && /^Undo agent change: .+ by /u.test(offeredAs ?? ""), { offeredAs });
+      // The person undoes it there, then undoes that with Undo.
+      await page.locator("#action-undo-agent").click();
       await waitRevision(page, revision + 2);
       const undoneText = doc().nodes[agentTarget].props.text;
       await page.locator("#action-undo").click();
       await waitRevision(page, revision + 3);
-      check("E", "the person reverts the agent's edit, and undoing the revert restores it", undoneText !== "Written by the agent" && doc().nodes[agentTarget].props.text === "Written by the agent", { undoneText });
+      check("E", "the person undoes the agent's edit with Undo agent change, and Undo brings it back", undoneText !== "Written by the agent" && doc().nodes[agentTarget].props.text === "Written by the agent", { undoneText });
       // Reorder within a parent: the move the editor has no control for.
       const current = doc();
       const parent = Object.values(current.nodes).find((node) => node.children.length > 1 && inFrame(node.id)) ?? null;
