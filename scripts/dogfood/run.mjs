@@ -584,6 +584,9 @@ try {
       revision += 1;
       const drawnClass = await page.evaluate((id) => document.querySelector("iframe").contentDocument.querySelector(`[data-ninerr-id="${id}"]`)?.getAttribute("class") ?? null, boxId);
       check("B", "the inspector sets the box's classes, and the canvas draws them", doc().nodes[boxId].props.attributes?.class === "dogfood-check" && drawnClass === "dogfood-check", { drawnClass });
+      // Tab left the focus in the next inspector field, where Ctrl+Z is that field's own text undo.
+      if (await page.evaluate(() => document.activeElement?.matches("input, textarea, select"))) finding("ux", "after a change committed by leaving an inspector field, Ctrl+Z in the next field is that field's text undo, not Undo; the toolbar's Undo works");
+      await boxRow.click();
       // Undo everything and redo it, comparing with each state on the way.
       const states = [];
       const entries = (await api(host, "GET", "/api/history")).json.entries.length;
