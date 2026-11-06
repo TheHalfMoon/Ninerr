@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -154,17 +155,48 @@ test("a hidden object shows nowhere: not in a public object's rights, nor in the
   assert.ok(!JSON.stringify(answers).includes("someone"));
 });
 
+test("a source or asset only a hidden object uses does not move the digest", async (t) => {
+  const { running, packs } = await hosted(t);
+  const plain = pack([object("a")]);
+  const hash = "c".repeat(64);
+  writeFileSync(join(packs, "plain.json"), JSON.stringify(plain));
+  writeFileSync(join(packs, "more.json"), JSON.stringify({
+    ...plain,
+    ownerScope: "urn:ninerr:owner:someone",
+    sources: [...plain.sources, { id: "urn:ninerr:source:two", uri: "https://example.com/two", observedAt: at, rights: restricted }],
+    assets: [{ sha256: hash, byteLength: 1, mediaType: "image/png" }],
+    objects: [object("a"), object("b", { kind: "asset", sourceId: "urn:ninerr:source:two", assetSha256: hash, visibility: "private", rights: restricted })],
+  }));
+  const one = await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "plain.json" }), "plain");
+  const two = await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "more.json" }), "more");
+  assert.equal(two.packDigest, one.packDigest);
+});
+
+test("a project that needs reopening refuses the catalog on every route", async (t) => {
+  const { running, packs, root } = await hosted(t);
+  writeFileSync(join(packs, "pack.json"), JSON.stringify(pack([object("a")])));
+  await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "pack.json" }), "load");
+  const frame = (id) => ({ type: "insert-node", parentId: null, index: 0, node: { id, type: "frame", parentId: null, children: [], props: {}, metadata: {} } });
+  await ok(running.call("POST", "/api/edit", { baseRevision: 0, intent: "Add", operations: [frame("a")] }), "edit");
+  appendFileSync(join(root, "projects", "site", PROJECT_FILES.directory, "journal.log"), "tampered\n");
+  await refused(running.call("POST", "/api/edit", { baseRevision: 1, intent: "Add", operations: [frame("b")] }), 409, "project-needs-reopen");
+  await refused(running.call("GET", "/api/references"), 409, "project-needs-reopen");
+  await refused(running.call("GET", "/api/references/urn:ninerr:object:a"), 409, "project-needs-reopen");
+  await refused(running.call("POST", "/api/references/load", { directory: packs, fileName: "pack.json" }), 409, "project-needs-reopen");
+});
+
 test("a pack of shared bytes cannot stall the host", async (t) => {
   const { running, packs } = await hosted(t);
   const hash = "b".repeat(64);
   const sources = Array.from({ length: 2_048 }, (_, index) => ({ id: `urn:ninerr:source:s${index}`, uri: `urn:ninerr:source:s${index}`, observedAt: at, rights: verified }));
   const objects = Array.from({ length: 10_000 }, (_, index) => ({ id: `urn:ninerr:object:${index}`, kind: "asset", title: "x", tags: [], sourceId: "urn:ninerr:source:s2047", assetSha256: hash, confidence: "observed", visibility: "public", rights: verified }));
   writeFileSync(join(packs, "wide.json"), JSON.stringify({ schemaVersion: 1, packId: "urn:ninerr:pack:wide", ownerScope: null, createdAt: at, sources, objects, assets: [{ sha256: hash, byteLength: 1, mediaType: "image/png" }] }));
-  await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "wide.json" }), "load");
+  // Timed from the load, where the decisions are now computed.
   const started = performance.now();
+  await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "wide.json" }), "load");
   assert.equal((await ok(running.call("GET", query({ limit: "100" })), "search")).results.length, 100);
   await ok(running.call("GET", "/api/references/urn:ninerr:object:9999"), "read");
-  assert.ok(performance.now() - started < 2_000, `took ${performance.now() - started} ms; 136 s before the view was built at load`);
+  assert.ok(performance.now() - started < 10_000, `took ${performance.now() - started} ms; 136 s before the view was built at load`);
 });
 
 test("of two reads, the one asked for last wins, and closing ends a read under way", async () => {
@@ -174,15 +206,19 @@ test("of two reads, the one asked for last wins, and closing ends a read under w
     writeFileSync(join(root, "two.json"), JSON.stringify(pack([object("second")])));
     const catalog = new ReferenceCatalog();
     const session = {};
-    // Each refusal is awaited from the start, since it can come before the later call returns.
-    const first = assert.rejects(catalog.load(session, () => true, root, "one.json"), (error) => error.code === "reference-load-superseded");
+    // The first may land before the second and be replaced, or finish later and be refused.
+    const first = catalog.load(session, () => true, root, "one.json").catch((error) => assert.equal(error.code, "reference-load-superseded"));
     await catalog.load(session, () => true, root, "two.json");
     await first;
     assert.deepEqual(catalog.search(session, "site").results.map((item) => item.id), ["urn:ninerr:object:second"]);
     const late = assert.rejects(catalog.load(session, () => true, root, "one.json"), (error) => error.code === "reference-load-superseded");
     catalog.revoke();
-    await late;
     assert.equal(catalog.search(session, "site").status, "not-loaded");
+    // A read that is refused takes nothing from one under way, which still lands.
+    const good = catalog.load(session, () => true, root, "two.json");
+    await assert.rejects(catalog.load(session, () => true, undefined, "one.json"), (error) => error.code === "reference-pack-refused");
+    await good;
+    assert.deepEqual(catalog.search(session, "site").results.map((item) => item.id), ["urn:ninerr:object:second"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

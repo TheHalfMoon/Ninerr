@@ -147,6 +147,27 @@ test("metadata permits reuse only when source rights, object rights and visibili
   assert.equal(referenceReuseDecision(fixture(), "urn:ninerr:object:absent").metadataPermits, false);
 });
 
+test("a decision's reason: source rights first, and the first refusal among the same bytes", () => {
+  const SOURCE = "source rights do not permit redistribution";
+  const OBJECT = "object visibility or rights do not permit redistribution";
+  const rights = { status: "restricted", license: null, redistributable: false };
+  const both = fixture();
+  both.objects = [object("one", "restricted", { visibility: "public" })];
+  both.assets = [];
+  assert.equal(referenceReuseDecision(both, "urn:ninerr:object:one").reason, SOURCE, "source before object");
+  const shared = (first, second) => {
+    const f = fixture();
+    f.objects = [first, second];
+    return f;
+  };
+  const objectRefused = (id) => object(id, "owned", { kind: "asset", assetSha256: assetHash, rights });
+  const sourceRefused = (id) => object(id, "restricted", { kind: "asset", assetSha256: assetHash, visibility: "public", rights: { status: "verified", license: "Apache-2.0", redistributable: true } });
+  const early = shared(objectRefused("a"), sourceRefused("b"));
+  assert.equal(referenceReuseDecision(early, "urn:ninerr:object:b").reason, OBJECT, "the first by id holds for both");
+  const late = shared(sourceRefused("a"), objectRefused("b"));
+  assert.equal(referenceReuseDecision(late, "urn:ninerr:object:b").reason, SOURCE);
+});
+
 test("objects with the same bytes are one work: the strictest statement holds for all", () => {
   const f = fixture();
   f.objects.push(object("copy", "restricted", { kind: "asset", assetSha256: assetHash }));
