@@ -94,10 +94,9 @@ export class ReferenceCatalog {
     }
     if (!isOpen()) throw new StudioError(409, "project-changed", "the project changed while the pack was being read");
     if (thisLoad < this.#landed) throw new StudioError(409, "reference-load-superseded", "a later read took the place of this one");
-    this.#landed = thisLoad;
     const view = publicView(read.pack);
     const packDigest = referencePackDigest(view);
-    this.#loaded = {
+    const loaded = {
       session,
       fileName: read.fileName,
       packDigest,
@@ -106,6 +105,8 @@ export class ReferenceCatalog {
       sources: new Map(view.sources.map((entry: any) => [entry.id, entry])),
       reuse: referenceReuseDecisions(view),
     };
+    this.#landed = thisLoad;
+    this.#loaded = loaded;
     return { status: "loaded", fileName: read.fileName, packId: view.packId, packDigest, createdAt: view.createdAt, objects: view.objects.length };
   }
 
