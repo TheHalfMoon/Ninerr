@@ -1,4 +1,5 @@
 import { CodeIrValidationError } from "./errors.ts";
+import { buildCodeIr } from "./ir.ts";
 import {
   type CodeIr,
   type DesignDoc,
@@ -10,7 +11,7 @@ import { canonicalCodeIrStringify, normalizeCodeIr, normalizeDesignDoc, sha256Te
 // that survives both exactly is written raw (with & < > { } as entities). Anything else
 // (edge spaces, tabs, line breaks) is written as a string literal child, which is exact.
 function emitText(text: string): string {
-  if (text !== "" && !/[\t\n\r]/u.test(text) && !text.startsWith(" ") && !text.endsWith(" ")) {
+  if (text !== "" && !/[\t\n\r]/u.test(text) && !/^\s|\s$/u.test(text)) {
     return text.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/\{/gu, "&#123;").replace(/\}/gu, "&#125;");
   }
   return `{${JSON.stringify(text)}}`;
@@ -22,7 +23,37 @@ function emitAttrValue(value: string): string {
   return /["&]/u.test(value) ? `{${JSON.stringify(value)}}` : `"${value}"`;
 }
 
+/**
+ * What the canvas shows for a {…} part's exact source. The part is written exactly as its source
+ * has it, so it must be one JSX child, valid in the plain function export writes, and nothing
+ * else: source that closes the element around it, or uses await, is refused here, never written.
+ */
+export function expressionShown(code: string): string {
+  const open = "function part() { return <>";
+  let ir: CodeIr;
+  try {
+    ir = buildCodeIr([{ path: "Part.tsx", content: `${open}${code}</>; }` }]);
+  } catch {
+    throw new CodeIrValidationError("a {…} part of this design is not valid TSX in a plain function");
+  }
+  const root = ir.rootIds.length === 1 ? ir.symbols[ir.rootIds[0]] : undefined;
+  const part = root?.kind === "fragment" && root.children.length === 1 && root.texts.length === 0 ? ir.symbols[root.children[0]] : undefined;
+  if (part?.kind !== "expression" || part.range.startOffset !== open.length || part.range.endOffset !== open.length + code.length) {
+    throw new CodeIrValidationError("a {…} part of this design is not one JSX child");
+  }
+  return `{${part.code}}`;
+}
+
+function emitExpression(code: string): string {
+  expressionShown(code);
+  return code;
+}
+
+const isPart = (node: DesignDocNode) => node.tag === "#text" || node.tag === "#expression";
+const emitPart = (node: DesignDocNode) => node.tag === "#text" ? emitText(node.text ?? "") : emitExpression(node.code ?? "");
+
 function emitNode(node: DesignDocNode, indent: string): string {
+  if (isPart(node)) return `${indent}${emitPart(node)}`;
   for (const [key, value] of Object.entries(node.props)) {
     if (typeof value === "string" && /[\r\n]/u.test(value)) {
       throw new CodeIrValidationError(`design prop ${key} must not span lines`);
@@ -35,9 +66,13 @@ function emitNode(node: DesignDocNode, indent: string): string {
       return ` ${key}=${emitAttrValue(value)}`;
     })
     .join("");
+  const text = node.text === undefined ? "" : emitText(node.text);
+  // Text and code parts alone stay on the element's line, as a source would write them.
+  if (node.children !== undefined && node.children.every(isPart)) {
+    return `${indent}<${node.tag}${props}>${text}${node.children.map(emitPart).join("")}</${node.tag}>`;
+  }
   // One child per line: whitespace that touches a line break is not text in JSX.
   const children = (node.children ?? []).map((child) => `${emitNode(child, `${indent}  `)}\n`).join("");
-  const text = node.text === undefined ? "" : emitText(node.text);
   if (children === "" && text === "") return `${indent}<${node.tag}${props} />`;
   return `${indent}<${node.tag}${props}>${text}${children === "" ? "" : `\n${children}${indent}`}</${node.tag}>`;
 }

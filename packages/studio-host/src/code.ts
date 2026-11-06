@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { buildCodeIr, designToCode, exportedComponents, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
+import { buildCodeIr, designToCode, expressionShown, exportedComponents, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
 import { DRAWN_ID, planElement } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 import { styleProperties } from "./imports.ts";
@@ -10,7 +10,9 @@ import { styleProperties } from "./imports.ts";
 // first reduced by the renderer's own sanitizer (planElement), so the code says exactly
 // what the canvas shows: the same tags, attributes and style. A text layer folds into its
 // parent's text when it is the parent's only content. `class` becomes `className`; style
-// is a CSS string prop (as Preact, Solid and Qwik accept it).
+// is a CSS string prop (as Preact, Solid and Qwik accept it). A {…} part of imported code
+// is written as its exact source, never as text (#361): it is code the sanitizer does not
+// reach, which the result counts (codeParts) so the person is told.
 //
 // Import: JSX in code-ir's supported subset becomes layers, inside a new page frame, as
 // one history transaction. Anything outside the subset is refused by code-ir, not guessed.
@@ -18,6 +20,8 @@ import { styleProperties } from "./imports.ts";
 const MAX_CODE_BYTES = 256 * 1024;
 const MAX_EXPORT_DEPTH = 32;
 const MAX_EXPORT_NODES = 5_000;
+// Each part is parsed, on the host's thread: this bounds the time a document can make it take.
+const MAX_EXPORT_CODE_PARTS_BYTES = 1024 * 1024;
 
 const pascal = (value: string, fallback: string) => {
   const name = value.replace(/[^A-Za-z0-9]+/gu, " ").trim().split(" ").filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join("");
@@ -26,14 +30,43 @@ const pascal = (value: string, fallback: string) => {
 
 const cssText = (style: Record<string, string>) => Object.entries(style).map(([name, value]) => `${name}: ${value}`).join("; ");
 
-/** A bare text layer: no tag, attributes or style of its own, so its text can fold. */
-function bareText(node: any): string | null {
-  if (node.type !== "text" || node.children.length > 0 || typeof node.props?.text !== "string") return null;
-  const props = node.props;
-  const plain = props.tag === undefined
+/** No tag, attributes or style of its own. */
+function plainLayer(props: any): boolean {
+  return props.tag === undefined
     && (props.attributes === undefined || Object.keys(props.attributes).length === 0)
     && (props.style === undefined || Object.keys(props.style).length === 0);
-  return plain ? props.text : null;
+}
+
+/** A layer that is a {…} part of imported code. */
+const isExpressionLayer = (node: any) => node.props?.codeExpression !== undefined || node.props?.codeSource?.tag === "#expression";
+
+/** A bare text layer: nothing of its own but its words, so its text can fold. */
+function bareText(node: any): string | null {
+  if (node.type !== "text" || node.children.length > 0 || typeof node.props?.text !== "string" || isExpressionLayer(node)) return null;
+  return plainLayer(node.props) ? node.props.text : null;
+}
+
+/**
+ * A code part's exact source. What the canvas shows must be what that source shows: an edit to
+ * the shown copy has no code to give, and a document saying one thing and holding another
+ * would export code nobody saw. Both are refused rather than exported as something else.
+ */
+function expressionSource(node: any): string {
+  const source = node.props.codeExpression;
+  const text = String(node.props.text ?? "a {…} part").slice(0, 100);
+  if (typeof source !== "string") {
+    throw new StudioError(422, "export-refused", `the source of ${text} is not recorded; bring this code in again to export it`);
+  }
+  let shown: string;
+  try {
+    shown = expressionShown(source);
+  } catch (error) {
+    throw new StudioError(422, "export-refused", error instanceof Error ? error.message.slice(0, 300) : "a {…} part cannot be exported");
+  }
+  if (node.props.text !== shown || node.children.length > 0) {
+    throw new StudioError(422, "export-refused", `${text} is not the code this layer holds, ${shown.slice(0, 100)}; restore it or delete the layer to export`);
+  }
+  return source;
 }
 
 /** The JSX for a layer and everything inside it. */
@@ -51,9 +84,11 @@ function appliedStylesheet(document: any, nodeId: string): string | null {
   return null;
 }
 
-export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; stylesheet: string | null } {
+export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; stylesheet: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   let layers = 0;
+  let codeParts = 0;
+  let codePartBytes = 0;
   // Ids, and the labels that name controls by them (for → id). The canvas draws ids under a
   // name of its own (DRAWN_ID), which the code never carries, but the code keeps them: each id
   // is unique in the export (a second copy of a form gets email-2), and a label points to its
@@ -143,20 +178,38 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
     if (labelTarget.has(id)) props.htmlFor = labelTarget.get(id)!;
     else if (props.htmlFor !== undefined) delete props.htmlFor; // names nothing in this export
     if (Object.keys(plan.style).length > 0) props.style = cssText(plan.style);
+    if (isExpressionLayer(node)) {
+      codeParts += 1;
+      codePartBytes += typeof node.props.codeExpression === "string" ? node.props.codeExpression.length : 0;
+      if (codePartBytes > MAX_EXPORT_CODE_PARTS_BYTES) throw new StudioError(422, "export-too-large", "the {…} parts of these layers are too large to export at once");
+      const part: DesignDocNode = { tag: "#expression", props: {}, code: expressionSource(node) };
+      // Styled, or exported alone, it keeps the element the canvas draws around it.
+      return depth > 1 && plainLayer(node.props) ? part : { tag: plan.tag, props, children: [part] };
+    }
     const out: DesignDocNode = { tag: plan.tag, props };
     const childIds: string[] = node.children;
     const folded = childIds.length > 0 && childIds.every((child) => bareText(document.nodes[child]) !== null);
     let text = typeof plan.text === "string" ? plan.text : "";
     if (folded) text += childIds.map((child) => bareText(document.nodes[child])).join("");
     if (text !== "") out.text = text;
-    if (!folded && childIds.length > 0) out.children = childIds.map((child) => convert(child, depth + 1));
+    if (!folded && childIds.length > 0) {
+      const wordsOf = (child: string | undefined) => child === undefined || document.nodes[child] === undefined ? null : bareText(document.nodes[child]);
+      out.children = childIds.map((child, at) => {
+        const words = wordsOf(child);
+        // Two runs side by side keep the element the canvas draws for each: bare, they would
+        // read back as one run with a space where the line break is.
+        if (words === null || wordsOf(childIds[at - 1]) !== null || wordsOf(childIds[at + 1]) !== null) return convert(child, depth + 1);
+        layers += 1;
+        return { tag: "#text", props: {}, text: words };
+      });
+    }
     return out;
   };
   const root = document.nodes[nodeId];
   const componentName = pascal(typeof root.props?.name === "string" ? root.props.name : "", "Layer");
   const design: DesignDoc = { componentName, root: convert(nodeId, 1) };
   try {
-    return { componentName, code: designToCode(design), layers, stylesheet: appliedStylesheet(document, nodeId) };
+    return { componentName, code: designToCode(design), layers, codeParts, stylesheet: appliedStylesheet(document, nodeId) };
   } catch (error) {
     throw new StudioError(422, "export-refused", error instanceof Error ? error.message.slice(0, 300) : "this layer cannot be exported");
   }
@@ -272,7 +325,9 @@ export function importJsx(source: unknown, options: ImportJsxOptions = {}): { op
     if (symbol.kind === "expression") {
       // A {…} part is code: a text layer that shows it, bound so a write-back knows to leave it.
       const shown = `{${symbol.code}}`;
-      const props: Record<string, unknown> = { name: "Code", text: shown };
+      // The whole part as written, for export: `shown` is shortened and its whitespace collapsed.
+      const exact = source.slice(symbol.range.startOffset, symbol.range.endOffset);
+      const props: Record<string, unknown> = { name: "Code", text: shown, codeExpression: exact };
       if (options.bind) props.codeSource = { file: options.path ?? "", component: componentName, path: path.join("."), tag: "#expression", base: { props: {} }, code: [shown] } satisfies CodeSource;
       nodes.push({ id, type: "text", parentId, children: [], props, metadata: {} });
       return id;
