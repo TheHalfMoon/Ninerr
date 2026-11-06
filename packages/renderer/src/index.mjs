@@ -268,7 +268,175 @@ export function planElement(node) {
     if (safeStylesheet(rawStylesheet)) stylesheet = rawStylesheet;
     else dropped += 1;
   }
-  return { tag, namespace, attributes, style, text, stylesheet, dropped };
+  return { tag, namespace, attributes, style: shorthandsFirst(style), text, stylesheet, dropped };
+}
+
+// #294 (decided in P09): a style's shorthand applies before its own longhands, so a longhand
+// always refines its shorthand, whatever order the entries are stored in. Nothing else moves.
+const LONGHANDS = Object.freeze({
+  inset: /^(?:top|right|bottom|left)$/u,
+  gap: /^(?:row|column)-gap$/u,
+  "grid-gap": /^grid-(?:row|column)-gap$/u,
+  "grid-area": /^grid-(?:row|column)(?:-start|-end)?$/u,
+  "place-items": /^(?:align|justify)-items$/u,
+  "place-content": /^(?:align|justify)-content$/u,
+  "place-self": /^(?:align|justify)-self$/u,
+  "flex-flow": /^flex-(?:direction|wrap)$/u,
+  columns: /^column-(?:width|count)$/u,
+  font: /^line-height$/u,
+  "border-color": /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?-color$/u,
+  "border-style": /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?-style$/u,
+  "border-width": /^border-(?:top|right|bottom|left|block|inline)(?:-start|-end)?-width$/u,
+  "border-radius": /^border-(?:top|bottom|start|end)-(?:left|right|start|end)-radius$/u,
+  "border-block-color": /^border-block-(?:start|end)-color$/u,
+  "border-block-style": /^border-block-(?:start|end)-style$/u,
+  "border-block-width": /^border-block-(?:start|end)-width$/u,
+  "border-inline-color": /^border-inline-(?:start|end)-color$/u,
+  "border-inline-style": /^border-inline-(?:start|end)-style$/u,
+  "border-inline-width": /^border-inline-(?:start|end)-width$/u,
+});
+// A logical side and a physical side (inset-block and top, margin-inline and margin-left) are
+// not paired: which physical side a logical one is depends on the writing mode. A physical
+// shorthand is refined by its logical parts (margin-inline after margin), since each sets a
+// subset of what the shorthand sets.
+
+/** Whether `name` is one of `shorthand`'s longhands (margin-left of margin, top of inset). */
+export function isLonghandOf(name, shorthand) {
+  if (name === shorthand || name.startsWith("--") || shorthand.startsWith("--")) return false;
+  return name.startsWith(`${shorthand}-`) || LONGHANDS[shorthand]?.test(name) === true;
+}
+
+/** Whether one of `name`'s shorthands is in `present`: the same test as isLonghandOf, by lookup. */
+function hasShorthandIn(name, present) {
+  if (name.startsWith("--")) return false;
+  for (let at = name.indexOf("-", 1); at > 0; at = name.indexOf("-", at + 1)) if (present.has(name.slice(0, at))) return true;
+  for (const [shorthand, pattern] of Object.entries(LONGHANDS)) if (present.has(shorthand) && pattern.test(name)) return true;
+  return false;
+}
+
+/**
+ * `style` with each longhand moved to just after its last shorthand. Shorthands keep their
+ * order among themselves (so of two overlapping ones the later still wins what they share),
+ * and every other entry keeps its place.
+ */
+export function shorthandsFirst(style) {
+  const names = Object.keys(style);
+  // Most styles have no shorthand with its own longhand: they are returned as they are.
+  const present = new Map(names.map((name, index) => [name, index]));
+  if (!names.some((name) => hasShorthandIn(name, present))) return style;
+  // Linear in the entries (a style can hold thousands): each longhand waits for its shorthands,
+  // and goes out where it stands if they have gone, or just after the last of them.
+  const waiting = names.map((name) => shorthandsIn(name, present));
+  const released = names.map(() => []);
+  waiting.forEach((shorthands, index) => shorthands.forEach((shorthand) => released[shorthand].push(index)));
+  const left = waiting.map((shorthands) => shorthands.length);
+  const ordered = [];
+  const done = names.map(() => false);
+  let walked = 0;
+  const emit = (index) => {
+    done[index] = true;
+    ordered.push(names[index]);
+    for (const next of released[index]) {
+      left[next] -= 1;
+      if (left[next] === 0 && next < walked && !done[next]) emit(next);
+    }
+  };
+  for (; walked < names.length; walked += 1) if (left[walked] === 0 && !done[walked]) emit(walked);
+  return Object.fromEntries(ordered.map((name) => [name, style[name]]));
+}
+
+/** The positions of `name`'s shorthands in `present` (name → position), the same test as isLonghandOf. */
+function shorthandsIn(name, present) {
+  if (name.startsWith("--")) return [];
+  const found = new Set();
+  for (let at = name.indexOf("-", 1); at > 0; at = name.indexOf("-", at + 1)) if (present.has(name.slice(0, at))) found.add(present.get(name.slice(0, at)));
+  for (const [shorthand, pattern] of Object.entries(LONGHANDS)) if (present.has(shorthand) && pattern.test(name)) found.add(present.get(shorthand));
+  found.delete(present.get(name));
+  return [...found];
+}
+
+// What each shorthand resets, per the CSS specifications. A name it merely starts with is not
+// among them (flex-direction under flex, border-collapse under border, overflow-wrap under
+// overflow), and a pair not listed here keeps both: an entry is left out only when it is certain.
+const SIDE = "(?:top|right|bottom|left|block|inline)(?:-start|-end)?";
+const RESETS = Object.freeze({
+  ...Object.fromEntries(["margin", "padding", "scroll-margin", "scroll-padding"].map((name) => [name, new RegExp(`^${name}-${SIDE}$`, "u")])),
+  ...Object.fromEntries(["margin", "padding", "scroll-margin", "scroll-padding", "inset"].flatMap((name) => ["block", "inline"].map((axis) => [`${name}-${axis}`, new RegExp(`^${name}-${axis}-(?:start|end)$`, "u")]))),
+  inset: /^(?:top|right|bottom|left|inset-(?:block|inline)(?:-start|-end)?)$/u,
+  border: new RegExp(`^border-(?:${SIDE}(?:-(?:color|style|width))?|color|style|width|image(?:-(?:source|slice|width|outset|repeat))?)$`, "u"),
+  ...Object.fromEntries(["top", "right", "bottom", "left", "block-start", "block-end", "inline-start", "inline-end"].map((side) => [`border-${side}`, new RegExp(`^border-${side}-(?:color|style|width)$`, "u")])),
+  "border-block": /^border-block-(?:(?:start|end)(?:-(?:color|style|width))?|color|style|width)$/u,
+  "border-inline": /^border-inline-(?:(?:start|end)(?:-(?:color|style|width))?|color|style|width)$/u,
+  ...Object.fromEntries(["color", "style", "width"].flatMap((part) => [`border-${part}`, `border-block-${part}`, `border-inline-${part}`].map((name) => [name, LONGHANDS[name]]))),
+  "border-radius": LONGHANDS["border-radius"],
+  "border-image": /^border-image-(?:source|slice|width|outset|repeat)$/u,
+  outline: /^outline-(?:color|style|width)$/u,
+  background: /^background-(?:color|image|position(?:-x|-y)?|size|repeat(?:-x|-y)?|attachment|origin|clip)$/u,
+  "background-position": /^background-position-[xy]$/u,
+  font: /^(?:font-(?:style|variant|variant-[a-z-]+|weight|stretch|size|family|size-adjust|kerning|feature-settings|language-override|variation-settings|optical-sizing)|line-height)$/u,
+  "font-variant": /^font-variant-[a-z-]+$/u,
+  "font-synthesis": /^font-synthesis-(?:small-caps|style|weight)$/u,
+  flex: /^flex-(?:grow|shrink|basis)$/u,
+  "flex-flow": LONGHANDS["flex-flow"],
+  grid: /^grid-(?:template(?:-(?:rows|columns|areas))?|auto-(?:rows|columns|flow))$/u,
+  "grid-template": /^grid-template-(?:rows|columns|areas)$/u,
+  "grid-area": LONGHANDS["grid-area"],
+  "grid-row": /^grid-row-(?:start|end)$/u,
+  "grid-column": /^grid-column-(?:start|end)$/u,
+  gap: LONGHANDS.gap,
+  "grid-gap": LONGHANDS["grid-gap"],
+  "place-items": LONGHANDS["place-items"],
+  "place-content": LONGHANDS["place-content"],
+  "place-self": LONGHANDS["place-self"],
+  columns: LONGHANDS.columns,
+  "column-rule": /^column-rule-(?:color|style|width)$/u,
+  container: /^container-(?:name|type)$/u,
+  marker: /^marker-(?:start|mid|end)$/u,
+  offset: /^offset-(?:anchor|distance|path|position|rotate)$/u,
+  "overscroll-behavior": /^overscroll-behavior-[xy]$/u,
+  "position-try": /^position-try-(?:fallbacks|order)$/u,
+  "scroll-timeline": /^scroll-timeline-(?:axis|name)$/u,
+  "view-timeline": /^view-timeline-(?:axis|inset|name)$/u,
+  "text-box": /^text-box-(?:edge|trim)$/u,
+  "text-emphasis": /^text-emphasis-(?:color|style)$/u,
+  "text-wrap": /^text-wrap-(?:mode|style)$/u,
+  "white-space": /^white-space-collapse$/u,
+  "text-decoration": /^text-decoration-(?:line|style|color|thickness)$/u,
+  "list-style": /^list-style-(?:type|position|image)$/u,
+  overflow: /^overflow-[xy]$/u,
+  transition: /^transition-(?:property|duration|timing-function|delay|behavior)$/u,
+  animation: /^animation-(?:name|duration|timing-function|delay|iteration-count|direction|fill-mode|play-state|timeline|range(?:-start|-end)?)$/u,
+  "animation-range": /^animation-range-(?:start|end)$/u,
+  mask: /^mask-(?:image|mode|repeat|position|clip|origin|size|composite)$/u,
+  "-webkit-mask-box-image": /^-webkit-mask-box-image-(?:outset|repeat|slice|source|width)$/u,
+});
+
+/**
+ * A style as written in one declaration, without the longhands a later shorthand of theirs
+ * overrides (#360): since shorthands apply first here, keeping one would bring it back. An
+ * !important longhand is not overridden by a later shorthand unless that is important too.
+ */
+export function withoutOverriddenLonghands(style) {
+  const names = Object.keys(style);
+  const later = new Map(); // shorthand met so far, walking back → whether it is important
+  const kept = [];
+  for (let at = names.length - 1; at >= 0; at -= 1) {
+    const name = names[at];
+    const strong = isImportant(style[name]);
+    let overridden = false;
+    for (const [shorthand, shorthandStrong] of later) {
+      if ((shorthandStrong || !strong) && RESETS[shorthand].test(name)) overridden = true;
+    }
+    if (!overridden) kept.unshift(name);
+    if (Object.hasOwn(RESETS, name)) later.set(name, strong);
+  }
+  return kept.length === names.length ? style : Object.fromEntries(kept.map((name) => [name, style[name]]));
+}
+
+/** Whether a declaration's value is !important, whatever comments follow it. */
+export function isImportant(value) {
+  // A comment's body cannot run past its own end, so this takes linear time per candidate.
+  return /!\s*important\s*(?:\/\*(?:[^*]|\*(?!\/))*\*\/\s*)*$/iu.test(value);
 }
 
 function sanitizeAttribute(tag, namespace, name, rawValue) {
@@ -460,12 +628,19 @@ export function createRenderer(root) {
     }
     element.removeAttribute("style");
     let rejected = 0;
-    for (const [name, raw] of Object.entries(plan.style)) {
-      const important = /\s*!important$/iu.test(raw);
-      const value = important ? raw.replace(/\s*!important$/iu, "") : raw;
-      element.style.setProperty(name, designViewportLengths(value), important ? "important" : "");
-      // The browser's CSS parser is the final judge; count what it refused.
-      if (element.style.getPropertyValue(name) === "") rejected += 1;
+    // As in CSS, a declaration marked !important wins over a plain one whatever their order,
+    // also where shorthands overlap (border-top and border-color): the plain ones are applied
+    // first, then the important ones, each in the plan's order.
+    const entries = Object.entries(plan.style);
+    for (const pass of [false, true]) {
+      for (const [name, raw] of entries) {
+        const important = /\s*!important$/iu.test(raw);
+        if (important !== pass) continue;
+        const value = important ? raw.replace(/\s*!important$/iu, "") : raw;
+        element.style.setProperty(name, designViewportLengths(value), important ? "important" : "");
+        // The browser's CSS parser is the final judge; count what it refused.
+        if (element.style.getPropertyValue(name) === "") rejected += 1;
+      }
     }
     element.setAttribute("data-ninerr-type", node.type);
     applySheet(node.id, plan.stylesheet);

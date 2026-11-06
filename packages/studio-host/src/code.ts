@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { buildCodeIr, designToCode, expressionShown, exportedComponents, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
 import { DRAWN_ID, planElement } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
-import { styleProperties } from "./imports.ts";
+import { importedStyle } from "./imports.ts";
 
 // The design/code workflow (PC6, gate 11), over @ninerr/code-ir.
 //
@@ -342,7 +342,7 @@ export function importJsx(source: unknown, options: ImportJsxOptions = {}): { op
       const text = value === true ? "" : String(value);
       if (prop.name === "className") attributes.class = text;
       else if (prop.name === "htmlFor") attributes.for = text;
-      else if (prop.name === "style" && typeof value === "string") style = styleProperties({ cssText: value });
+      else if (prop.name === "style" && typeof value === "string") style = importedStyle({ cssText: value });
       else attributes[prop.name] = text;
     }
     // A component (Button, Item.Skeleton) or a name that is not a plain tag is kept as a named
