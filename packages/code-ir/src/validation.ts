@@ -290,9 +290,28 @@ export function normalizeMergeConflict(value: unknown, index: number): MergeConf
   return { startLine: value.startLine as number, endLineBase: value.endLineBase as number, reason: value.reason as string };
 }
 
+// As long as a source file code import reads (256 KiB).
+const MAX_DESIGN_EXPRESSION = 256 * 1024;
+
+function normalizeDesignPart(value: Record<string, unknown>, label: string): DesignDocNode {
+  const field = value.tag === "#text" ? "text" : "code";
+  assertAllowedKeys(value, ["tag", "props", field], label);
+  assertPlainObject(value.props, `${label}.props`);
+  if (Object.keys(value.props).length > 0) throw new CodeIrValidationError(`${label}.props must be empty`);
+  const content = value[field];
+  if (typeof content !== "string" || content.length > (field === "text" ? 4096 : MAX_DESIGN_EXPRESSION)) {
+    throw new CodeIrValidationError(`${label}.${field} must be a bounded string`);
+  }
+  if (!content.isWellFormed()) throw new CodeIrValidationError(`${label}.${field} contains a lone surrogate`);
+  return { tag: value.tag as string, props: {}, [field]: content };
+}
+
 function normalizeDesignNode(value: unknown, label: string, depth: number): DesignDocNode {
   if (depth > CODE_IR_HARD_LIMITS.maxDepth) throw new CodeIrValidationError("design document exceeds maxDepth");
   assertPlainObject(value, label);
+  // A child that is no element: a run of bare text, or a {…} part that is code. The emitter
+  // checks that a part's source is one JSX child before writing it.
+  if (depth > 0 && (value.tag === "#text" || value.tag === "#expression")) return normalizeDesignPart(value, label);
   assertAllowedKeys(value, ["tag", "props", "text", "children"], label);
   assertBoundedString(value.tag, `${label}.tag`, 128);
   if (!/^[A-Za-z][A-Za-z0-9]*$/u.test(value.tag as string)) {
