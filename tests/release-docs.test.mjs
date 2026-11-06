@@ -77,8 +77,11 @@ test("the MCP documentation matches the tool surface, classes and confirmation w
   assert.deepEqual(listed.sort(), [...MCP_TOOL_NAMES].sort(), "the class table names every tool once");
   // The rename table maps each earlier name to a current tool; an earlier name is unknown now.
   const renamed = [...doc.matchAll(/^\| `([a-z_]+)` \| `([a-z_]+)` \|$/gm)];
-  assert.equal(renamed.length, MCP_TOOL_NAMES.length);
-  assert.deepEqual(renamed.map((row) => row[2]).sort(), [...MCP_TOOL_NAMES].sort());
+  // Tools added after the rename have no earlier name.
+  const sinceRename = ["search_design_references", "get_design_reference"];
+  const renamedTools = MCP_TOOL_NAMES.filter((name) => !sinceRename.includes(name));
+  assert.equal(renamed.length, renamedTools.length);
+  assert.deepEqual(renamed.map((row) => row[2]).sort(), [...renamedTools].sort());
   for (const [, before, now] of renamed) {
     assert.notEqual(before, now);
     assert.equal(classifyTool(before), "unknown", `${before} is no longer a tool`);

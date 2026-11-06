@@ -23,16 +23,16 @@ The server identifies itself as `ninerr` and tells the agent to call `guide` fir
 
 ## Tools
 
-`MCP_TOOL_NAMES` is the catalog: the 16 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
+`MCP_TOOL_NAMES` is the catalog: the 18 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
 
 | Class | Tools | Capability required |
 | --- | --- | --- |
-| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `guide`, `finish_task` | `read` |
+| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task` | `read` |
 | write | `create_frame`, `set_text`, `rename_layers`, `set_styles`, `move_layers`, `duplicate_layers` | `document-write` |
 | consequential | `delete_layers` | `document-write` plus a confirmation |
 | unknown | any other name | denied without consulting a policy |
 
-So the 9 read-only tools need only `read`.
+So the 11 read-only tools need only `read`.
 
 - **Reading.**
   - `guide`: how Ninerr documents, layers and edits work; the server asks the agent to call it first.
@@ -41,6 +41,7 @@ So the 9 read-only tools need only `read`.
   - `find_layers`: search by name or text.
   - `selection`: what the person has selected in the editor.
   - `layer_code`: a layer as a JSX component.
+  - `search_design_references` and `get_design_reference`: the local reference pack the person has read into the open project. They return public references with their rights, never file bytes. They take no directory, URL or token, and with no pack read the answer says so; nothing is fetched instead.
 - **Editing.** Every write is one history transaction, attributed to the agent. The person sees it live on the canvas and can undo it with **Undo agent change**, next to Undo (Ctrl+Alt+Z; Cmd+Option+Z on a Mac): it reverts the agent's latest change in this session, and then the one before. `finish_task` changes nothing; it tells Ninerr the agent is done with some layers.
 - **Only the project the agent has read.** Tools act on the project open in Ninerr. An agent may write or delete only in the project it last connected to (`initialize`) or read with `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection` or `layer_code` (#260). Otherwise the call is refused, before the person is asked anything, and the agent is told to call `project_info` first. Two cases are refused this way:
   - the person has opened another project since the agent last read;

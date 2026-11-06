@@ -14,6 +14,8 @@ const CLASSES = Object.freeze({
   find_layers: "read",
   selection: "read",
   layer_code: "read",
+  search_design_references: "read",
+  get_design_reference: "read",
   guide: "read",
   finish_task: "read",
   create_frame: "write",
