@@ -356,23 +356,34 @@ test("a style's semicolons end declarations only outside comments, strings and p
   const started = performance.now();
   assert.deepEqual(style(`${"/*x*/".repeat(100_000)}color: red`), { color: "red" });
   assert.deepEqual(style(`color: red${" /* x".repeat(100_000)}`), { color: "red" });
+  // 14.8 s for the first of these when the reader re-read its growing value at each bracket.
+  for (const piece of ["(", "a(", "(a)", "url()", "\\\\", '"', "/**/", "["]) style(`x: ${piece.repeat(Math.floor(256 * 1024 / piece.length))}; top: 1px`);
   assert.ok(performance.now() - started < 2_000);
 });
 
-// Compared with a browser, so that this reader cannot drift from what a style means. The page
-// reads each style itself, and each property it finds must come out of this reader the same way.
+// Compared with a browser, so that this reader cannot drift from what a style means: the page
+// reads each style itself, and this reader's result, applied, must give the same values.
 test("a style reads the same here as in a browser, however odd", browserTestOptions(), async (t) => {
   const running = await editing(t);
   const editor = await openEditor(running.host);
   t.after(() => editor.close());
   const { page } = editor;
   await waitRevision(page, 1);
-  const names = ["color", "top", "width", "background-image", "font-family"];
+  const names = ["color", "top", "width", "background-image", "font-family", "margin-left", "margin-top"];
   const read = (cssText) => page.evaluate(([text, wanted]) => {
     const probe = document.createElement("div");
     probe.style.cssText = text;
-    return Object.fromEntries(wanted.map((name) => [name, probe.style.getPropertyValue(name)]).filter(([, value]) => value !== ""));
+    return Object.fromEntries(wanted.map((name) => [name, probe.style.getPropertyValue(name)]));
   }, [cssText, names]);
+  // This reader's result, applied as the canvas applies it: one property at a time, in its order.
+  const applied = (style) => page.evaluate(([entries, wanted]) => {
+    const probe = document.createElement("div");
+    for (const [name, value] of entries) {
+      const important = /!\s*important\s*$/iu.test(value);
+      probe.style.setProperty(name, value.replace(/!\s*important\s*$/iu, "").trim(), important ? "important" : "");
+    }
+    return Object.fromEntries(wanted.map((name) => [name, probe.style.getPropertyValue(name)]));
+  }, [Object.entries(shorthandsFirst(style)), names]);
   for (const cssText of [
     "color: red; top: 1px",
     "width: calc(1px /* don't */ + 2px); color: red",
@@ -397,16 +408,21 @@ test("a style reads the same here as in a browser, however odd", browserTestOpti
     'font-family: "a;b"; top: 1px',
     "top: 1px /* a; color: red */",
     "/* open; top: 1px",
+    `font-family: url(${" ".repeat(100)}"a)b"); top: 1px; color: red`,
+    'x: url( "a)b); top: 1px',
+    "x: xurl(a'b); top: 1px; color: 'red'",
+    "x: my-url(/*)*/; color: red; ); top: 1px",
+    'font-family: "a\r; color: red; top: 1px',
+    'font-family: "a\\\r\nb"; top: 1px; color: red',
+    "margin-left: 5px; margin: 0px )",
+    "margin-left: 5px; margin: 0px",
+    "margin: 0px; margin-left: 5px",
+    "margin-left: 5px !important; margin: 0px",
+    "color: blue; color: red; color: green",
+    "x: URL(a'b); top: 1px; color: red",
+    "x: (]; color: red; y: ); top: 1px",
   ]) {
-    const browser = await read(cssText);
-    const here = importedStyle({ cssText });
-    for (const [name, value] of Object.entries(browser)) {
-      assert.ok(Object.hasOwn(here, name), `${JSON.stringify(cssText)}: the browser has ${name} (${value}), this reader ${JSON.stringify(here)}`);
-    }
-    // What this reader finds that the browser ignores is refused later by the sanitizer or the
-    // browser itself; what must not happen is a valid declaration of the browser's being lost, or
-    // a declaration it swallowed coming back.
-    for (const name of names) if (!Object.hasOwn(browser, name) && Object.hasOwn(here, name)) assert.equal(await read(`${name}: ${here[name]}`).then((one) => one[name] ?? ""), "", `${JSON.stringify(cssText)}: this reader invents ${name}: ${here[name]}`);
+    assert.deepEqual(await applied(importedStyle({ cssText })), await read(cssText), JSON.stringify(cssText));
   }
   assert.deepEqual(editor.errors, []);
 });
