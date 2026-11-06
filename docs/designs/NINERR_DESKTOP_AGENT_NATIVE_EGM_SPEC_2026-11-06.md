@@ -12,7 +12,7 @@ Companion evidence: `docs/designs/EGM_05_07_RESOLUTION_MATRIX_2026-11-06.md`
 
 This document resolves the plan-level findings of independent Goldfish stages 05 (Zoom-Out), 06 (Comprehension) and 07 (Design Critic). It does **not** claim:
 
-- a complete or approved five-stage EGM review; stages 08 (second Zoom-Out) and 09 (Implementation Readiness) have not run;
+- a complete or approved five-stage EGM review; stages 08 (second Zoom-Out) and 09 (Implementation Readiness) have not been completed; stage 08 was attempted but hit a free model quota;
 - that any planning statement has been implemented, tested, packaged or released;
 - that P09, P10 or the v1.0.0 release gate has passed;
 - that installed stdio/headless MCP, PNG/SVG/PDF export, Astro round-trip, agent redo/reapply, full GUI↔MCP parity, Skilit packs, Build Kits or a full OS-level offline guarantee exist;
@@ -63,7 +63,7 @@ There is no verified public release in this worktree. "Shipped" in this document
 | 05 Zoom-Out | Completed | 10 findings (5 Blocker, 5 Major) |
 | 06 Comprehension | Completed | 12 findings |
 | 07 Design Critic | Completed | 12 findings |
-| 08 Zoom-Out again | **Not run** | Required for a full cycle |
+| 08 Zoom-Out again | **Attempted; blocked by free DeepSeek quota** | Incomplete; fresh independent rerun required |
 | 09 Implementation Readiness | **Not run** | Required for a full cycle |
 
 This revision is an author response to 05–07, not independent review evidence. Stage 08/09 reviewers must use fresh contexts and inspect source directly.
@@ -248,7 +248,7 @@ No exit gate may depend on a later milestone. The previous graph's missing `W3.2
 | A-04p Full parity target | W1+ | Every command marked "parity supported" has independently tested document/history/reference equivalence or a recorded exclusion. Never "all features" without the matrix. | Pending |
 | A-05 Security | R/W | Malicious client/page/asset/URL attempts refused; no secret/file/cross-project leakage; no public bind. | Not run |
 | A-06 Persistence/migration | R/W | Crash/replay/reopen and declared version matrix pass; no silent loss; v1 stays v1 until first v2 node. | Existing tests + new corpus pending |
-| A-07 Design fidelity v1 | R | Existing supported frames/tokens/accessibility pass; JSX export semantics correct. No PNG/SVG/PDF/vector claim. | Not run |
+| A-07 Design fidelity v1 | R | Existing supported frames/styles/accessibility pass; JSX export semantics correct. No PNG/SVG/PDF/vector claim. | Not run |
 | A-08 Source round-trip v1 | R | JSX/TSX byte identity on no-op, minimal diff on edit, unsupported source preserved/refused. | Not run |
 | A-08p Astro | W6 | Astro corpus: zero-edit byte identity, one-node minimal diff, unsupported fail-closed. | Pending |
 | A-09 Skilit local pack | W7 | 1,000-object mixed-rights pack searches/reopens; permitted IDs resolve; restricted assets never export. | Pending |
@@ -516,13 +516,13 @@ Every implementation grain needs: a regression test that fails first; a negative
 |---|---|
 | Source base SHA | `17edb22c283121c1e93bcd76d91f0fb918204ab5` |
 | Prior anchors | `8cba15c` (ancestor), `25145f2` (ancestor), `CURRENT.md` `1987c77` (stale) |
-| Design head SHA | **Not asserted**: `docs/designs/` is untracked and no commit was authorized in this task. The reviewer must record the commit/tree SHA at freeze. |
+| Design head SHA | See live head SHA on Draft PR #368; this document is versioned in that branch and must be pinned again for independent final review. |
 | Pinned PLAN | `docs/design-platform/PLAN.md` at `16f9d0f` (PR #359), absent at base |
 | Design authority | This document after founder approval; `MASTER_PLAN.md` for v1 |
-| EGM | 05/06/07 complete; 08/09 not run; no full approval |
-| Tests | Planning text only; no test executed in this revision |
+| EGM | 05/06/07 complete; stage 08 attempted but blocked by free quota; 08/09 incomplete; no full approval |
+| Tests | This documentation revision itself is not a product test; code PR #365/#367 have separate observed targeted and package CI evidence |
 | Release | Not done; v1.0.0 not tagged |
-| Code/CI/merge/push/commit/sign | None performed |
+| Code/CI/merge/push/commit/sign | This specification changes docs only on PR #368; no application code/merge/release/signing performed by the specification |
 | Founder approvals | W1–W8 not approved; only v1 P09/P10 remains authorized |
 | Next independent step | Stage 08 fresh-context Zoom-Out on this revision, then Stage 09 Implementation Readiness; resolve the 16 feature blockers in `EGM_05_07_RESOLUTION_MATRIX_2026-11-06.md` |
 | Release decision | Explicit founder decision after gates, never implied by planning |
