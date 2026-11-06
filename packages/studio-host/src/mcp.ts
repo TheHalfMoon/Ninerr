@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
-import { textLayerOf } from "@ninerr/document-model";
+import { isCodePart, textLayerOf } from "@ninerr/document-model";
 import { exportJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
@@ -260,11 +260,15 @@ const TOOLS: Tool[] = [
   {
     name: "set_text",
     title: "Set text",
-    description: "Replace a layer's text. For an element whose only content is a text layer, that layer's text.",
+    description: "Replace a layer's text. For an element whose only content is a text layer, that layer's text. A layer that is code in its source is refused.",
     inputSchema: object({ nodeId: { type: "string" }, text: { type: "string", maxLength: 100000 } }, ["nodeId", "text"]),
     run: ({ session, edit }, args) => {
       const node = nodeOf(session, args.nodeId);
       if (typeof args.text !== "string") throw new ToolError("text must be a string");
+      // A {…} part is code: its text is only what the canvas shows of it (#370). An element holding
+      // only such a part has no words of its own, and text set on it would sit beside the code.
+      const only = node.children.length === 1 ? (session.document as any).nodes[node.children[0]] : null;
+      if (isCodePart(node) || isCodePart(only)) throw new ToolError("this layer is code in its source, so its text cannot be set");
       // The words a person sees: an element's own text, or its only text layer's (#235).
       const target = textLayerOf(session.document, node.id) ?? node.id;
       return edit([{ type: "set-props", nodeId: target, set: { text: args.text } }], "Set text");

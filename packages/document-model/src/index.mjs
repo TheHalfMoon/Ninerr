@@ -479,6 +479,11 @@ export function textLayerOf(document, id) {
   return bare ? child.id : null;
 }
 
+/** Whether a layer is a {…} part of imported code: its text is a copy of code, not words to edit. */
+export function isCodePart(node) {
+  return node?.props?.codeExpression !== undefined || node?.props?.codeSource?.tag === "#expression";
+}
+
 export function isDescendant(document, ancestorId, candidateId) {
   getNode(document, ancestorId);
   getNode(document, candidateId);
