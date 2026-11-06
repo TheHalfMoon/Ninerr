@@ -888,7 +888,8 @@ export class ProjectStore {
     let validated;
     try {
       // In the journal form's key order, so the document applied here has the same key
-      // order as the one replay builds (style order is meaningful: a later shorthand wins).
+      // order as the one replay builds (the renderer applies a style's shorthands before their
+      // longhands, #294, and keeps every other entry's order).
       // This store's document is its own, validated when it was replayed or committed and
       // never handed out (the getter copies it), so its input check is skipped (#252).
       validated = applyTransaction(this.#document, withSortedKeys(transaction), { ownValidated: true });

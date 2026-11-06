@@ -2,11 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fchmodSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { applyPatch, buildCodeIr, exportedComponents } from "@ninerr/code-ir";
+import { shorthandsFirst } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 import { LEGACY_CODEBASE_LINKS_FILE, registrySource } from "./legacy.ts";
 import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
 import { type CodeSource, importJsx, layerName, sourceShape } from "./code.ts";
-import { styleProperties } from "./imports.ts";
+import { importedStyle, styleProperties } from "./imports.ts";
 
 // A connected codebase (PC11, #182): one local folder linked to a project, whose JSX and
 // TSX components the person can bring into the design with their source, and write
@@ -361,7 +362,9 @@ export interface WriteBackPlan {
 
 /** The layer's current value for a source prop, as source text. */
 function layerValue(node: any, prop: string): string | undefined {
-  if (prop === "style") return Object.entries(node.props?.style ?? {}).map(([name, value]) => `${name}: ${value}`).join("; ");
+  // In the order the canvas applies it: the store's sorted order would read a longhand that
+  // sorts before its shorthand as overridden by it (#360).
+  if (prop === "style") return Object.entries(shorthandsFirst(node.props?.style ?? {})).map(([name, value]) => `${name}: ${value}`).join("; ");
   const attributes = node.props?.attributes ?? {};
   const name = layerName(prop);
   return typeof attributes[name] === "string" ? attributes[name] : undefined;
@@ -471,8 +474,9 @@ function sameOverlapOrder(first: string[], second: string[]): boolean {
 function equalProp(prop: string, a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   if (prop === "style") {
-    const left = styleProperties({ cssText: a });
-    const right = styleProperties({ cssText: b });
+    // As a layer holds them: a longhand its later shorthand overrides is no difference (#360).
+    const left = importedStyle({ cssText: a });
+    const right = importedStyle({ cssText: b });
     return Object.keys(left).length === Object.keys(right).length && Object.entries(left).every(([name, value]) => right[name] === value);
   }
   return a === b;
@@ -485,7 +489,8 @@ function equalProp(prop: string, a: string | undefined, b: string | undefined): 
 function styleInSourceOrder(sourceText: string, style: Record<string, string>): string {
   const order = Object.keys(styleProperties({ cssText: sourceText }));
   const names = [...order.filter((name) => Object.hasOwn(style, name)), ...Object.keys(style).filter((name) => !order.includes(name))];
-  return names.map((name) => `${name}: ${style[name]}`).join("; ");
+  // The source's order, with each longhand after its shorthands, as the canvas draws it (#294).
+  return Object.keys(shorthandsFirst(Object.fromEntries(names.map((name) => [name, style[name]])))).map((name) => `${name}: ${style[name]}`).join("; ");
 }
 
 /** One hunk covering every changed line, with up to 3 lines of context. */
@@ -888,7 +893,7 @@ export function resolveWithFile(document: any, nodeId: unknown, field: unknown, 
   else {
     const base = { ...source.base, props: { ...source.base.props, [prop]: value } };
     set = prop === "style"
-      ? { style: styleProperties({ cssText: value }), codeSource: { ...source, base } }
+      ? { style: importedStyle({ cssText: value }), codeSource: { ...source, base } }
       : { attributes: { ...(node.props.attributes ?? {}), [layerName(prop)]: value }, codeSource: { ...source, base } };
   }
   return { operations: [{ type: "set-props", nodeId, set }], file: plan.file, field };

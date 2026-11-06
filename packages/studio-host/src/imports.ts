@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, frameStylesheet, importHtmlSnapshot, sanitizeImportedStylesheet, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
 import { inferSemantics, reviewImport } from "@ninerr/intake";
+import { isImportant, withoutOverriddenLonghands } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 
 // Importing HTML into the open project (PC6, gate 10). The import stack parses and
@@ -228,6 +229,8 @@ function summarize(proposalId: string, name: string, proposal: ImportProposal, r
   // The linked stylesheets read from chosen files are not among the resources left behind.
   const unread = proposal.resources.length - linked.readLinks;
   if (unread > 0) notes.push(`${unread} linked resource${unread === 1 ? " is" : "s are"} not fetched: imports work offline.`);
+  const overridden = Object.values(proposal.nodes as Record<string, any>).filter((node) => Object.keys(importedStyle(node.style)).length < Object.keys(styleProperties(node.style)).length).length;
+  if (overridden > 0) notes.push(`${overridden} layer${overridden === 1 ? " has" : "s have"} style properties left out that a later shorthand in the same style overrides; the layer looks the same.`);
   return {
     proposalId,
     name,
@@ -251,6 +254,8 @@ export function styleProperties(style: unknown): Record<string, string> {
       out[key] = value;
       continue;
     }
+    // A name written again takes the later value and the later place, since order decides what
+    // wins; but a plain one never beats an important one, as in CSS.
     for (const declaration of value.split(";")) {
       const at = declaration.indexOf(":");
       if (at <= 0) continue;
@@ -258,10 +263,19 @@ export function styleProperties(style: unknown): Record<string, string> {
       const text = declaration.slice(at + 1).trim();
       // Custom properties (--brand) keep their case; other names are lowercased.
       const name = declaration.slice(0, at).trim().startsWith("--") ? declaration.slice(0, at).trim() : property;
-      if ((/^-?[a-z][a-z0-9-]{0,63}$/u.test(name) || /^--[A-Za-z0-9_-]{1,64}$/u.test(name)) && text !== "" && text.length <= 2000) out[name] = text;
+      if ((/^-?[a-z][a-z0-9-]{0,63}$/u.test(name) || /^--[A-Za-z0-9_-]{1,64}$/u.test(name)) && text !== "" && text.length <= 2000) {
+        if (Object.hasOwn(out, name) && isImportant(out[name]) && !isImportant(text)) continue;
+        delete out[name];
+        out[name] = text;
+      }
     }
   }
   return out;
+}
+
+/** What an imported style says: its properties, without those a later shorthand overrides (#360). */
+export function importedStyle(style: unknown): Record<string, string> {
+  return withoutOverriddenLonghands(styleProperties(style));
 }
 
 // The document node import-stack's commitImportProposal makes for an imported node.
@@ -316,7 +330,7 @@ function importOperation(proposalInput: ImportProposal, name: string) {
     return {
       ...node,
       parentId: node.parentId === null ? frameId : node.parentId,
-      props: { ...node.props, style: styleProperties(node.props.style), ...(semantics.has(node.id) ? { semantics: semantics.get(node.id) } : {}) },
+      props: { ...node.props, style: importedStyle(node.props.style), ...(semantics.has(node.id) ? { semantics: semantics.get(node.id) } : {}) },
     };
   })];
   return {
