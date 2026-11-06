@@ -374,3 +374,204 @@ test("pairing labels with controls is linear, and an export too large is refused
   assert.throws(() => exportJsx(flat(5_000), "form"), /at most 5000 layers/u);
   assert.ok(performance.now() - refusedAt < 1_000, "refused before the pairing work");
 });
+
+// P09 criterion 4: the controls P09 added meet the same bar. Each is audited while it shows,
+// reached and used from the keyboard alone with a visible focus ring, and measured at 320 px and
+// for target size.
+const row = (page, id) => page.locator(`[id="layer-${id}"] > .row`);
+
+/** Press Tab until `id` has the focus, and require a visible ring on it. */
+async function tabTo(page, id) {
+  for (let index = 0; index < 60; index += 1) {
+    await page.keyboard.press("Tab");
+    const now = await page.evaluate(() => {
+      const element = document.activeElement;
+      const style = getComputedStyle(element);
+      const opaque = !/^rgba\([^)]*,\s*0\)$/u.test(style.outlineColor) && style.outlineColor !== "transparent";
+      return { id: element.id, ring: element.matches(":focus-visible") && style.outlineStyle !== "none" && style.outlineWidth !== "0px" && opaque };
+    });
+    if (now.id === id) {
+      assert.ok(now.ring, `${id} shows focus`);
+      return;
+    }
+  }
+  assert.fail(`${id} is not reachable by Tab`);
+}
+
+async function threeBoxes(page, host) {
+  await page.locator("#new-project-name").fill("p09");
+  await page.keyboard.press("Enter");
+  await waitRevision(page, 0);
+  const ids = [];
+  for (let made = 0; made < 3; made += 1) {
+    if (made > 0) await row(page, host.session.document.rootIds[0]).click();
+    await page.locator("#action-insert-box").click();
+    await waitRevision(page, made + 1);
+    ids.push(host.session.document.nodes[host.session.document.rootIds[0]].children.at(-1));
+  }
+  return ids;
+}
+
+/** An agent's change through MCP, so Undo agent change shows. */
+async function agentChange(host) {
+  const created = await fetch(`${host.url}/api/agents/create`, { method: "POST", headers: { authorization: `Bearer ${host.token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "Checker" }) });
+  const { token } = await created.json();
+  const post = (body) => fetch(host.mcpUrl, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", ...body }) });
+  await post({ id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } });
+  await post({ id: 1, method: "tools/call", params: { name: "create_frame", arguments: { name: "Landing", width: 640, height: 400 } } });
+}
+
+test("what P09 added audits clean while it shows: classes, a selection, a group, a drag under way", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    const [a, b, c] = await threeBoxes(page, host);
+    await row(page, a).click();
+    assert.equal(await page.locator("#inspect-classes").isVisible(), true, "the Classes field shows for a selected layer");
+    await audit(page, "the inspector with its Classes field");
+
+    await row(page, c).click({ modifiers: ["ControlOrMeta"] });
+    await page.waitForFunction((id) => document.getElementById(`layer-${id}`)?.getAttribute("aria-selected") === "true", c);
+    assert.equal(await page.locator("#action-group").isEnabled(), true);
+    await audit(page, "two layers selected, Group enabled");
+
+    await page.keyboard.press("ControlOrMeta+g");
+    await waitRevision(page, 4);
+    const group = host.session.document.nodes[host.session.document.rootIds[0]].children.find((id) => id.startsWith("group-"));
+    assert.ok(group);
+    await audit(page, "a group layer");
+    await page.keyboard.press("ControlOrMeta+z");
+    await waitRevision(page, 5);
+
+    // A drop mark, in the middle of a drag.
+    const from = await row(page, a).boundingBox();
+    const over = await row(page, b).boundingBox();
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(over.x + over.width / 2, over.y + over.height / 2 - 2, { steps: 5 });
+    await page.mouse.move(over.x + over.width / 2, over.y + over.height / 2, { steps: 2 });
+    await page.locator("#layers .drop-inside, #layers .drop-before, #layers .drop-after").first().waitFor();
+    await audit(page, "a drag under way");
+    // The audit reads text and backgrounds, not a mark's box-shadow, so its paint is checked here.
+    const mark = await page.evaluate(() => {
+      const style = getComputedStyle(document.querySelector("#layers .drop-inside, #layers .drop-before, #layers .drop-after"));
+      return `${style.boxShadow} ${style.outlineStyle} ${style.borderTopStyle} ${style.borderBottomStyle} ${style.backgroundColor}`;
+    });
+    const unmarked = await page.evaluate(() => {
+      const style = getComputedStyle(document.querySelector("#layers .row:not(.drop-inside):not(.drop-before):not(.drop-after):not([aria-selected])") ?? document.querySelector("#layers .row"));
+      return `${style.boxShadow} ${style.outlineStyle} ${style.borderTopStyle} ${style.borderBottomStyle} ${style.backgroundColor}`;
+    });
+    assert.notEqual(mark, unmarked, "a drop mark is painted");
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+
+    await agentChange(host);
+    await page.waitForFunction(() => !document.getElementById("action-undo-agent").hidden);
+    await audit(page, "Undo agent change beside Undo");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Group, Classes and Undo agent change are reached and used by Tab and Enter alone", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-keys-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    const [a, , c] = await threeBoxes(page, host);
+    let revision = 3;
+    // Into the layers tree by Tab, and on to the first box: the page, then its first child.
+    const toFirstBox = async () => {
+      await page.evaluate(() => document.activeElement.blur());
+      for (let index = 0; index < 60 && !(await page.evaluate(() => document.activeElement.getAttribute("role") === "treeitem")); index += 1) await page.keyboard.press("Tab");
+      await page.keyboard.press("Home");
+      await page.keyboard.press("ArrowDown");
+    };
+    await toFirstBox();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((id) => document.getElementById(`layer-${id}`)?.getAttribute("aria-selected") === "true", a);
+
+    await tabTo(page, "inspect-classes");
+    await page.keyboard.type("loud");
+    await page.keyboard.press("Tab");
+    await waitRevision(page, ++revision);
+    assert.equal(host.session.document.nodes[a].props.attributes.class, "loud");
+
+    // Two layers selected from the keyboard, then grouped.
+    await toFirstBox();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Shift+Enter");
+    await page.waitForFunction((id) => document.getElementById(`layer-${id}`)?.getAttribute("aria-selected") === "true", c);
+    await tabTo(page, "action-group");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, ++revision);
+    assert.match(host.session.document.nodes[a].parentId, /^group-/u);
+    assert.deepEqual(host.session.document.nodes[host.session.document.nodes[a].parentId].children, [a, c]);
+
+    await agentChange(host);
+    await waitRevision(page, ++revision);
+    await page.waitForFunction(() => !document.getElementById("action-undo-agent").hidden);
+    const before = host.session.document.rootIds.length;
+    await page.evaluate(() => document.activeElement.blur());
+    await tabTo(page, "action-undo-agent");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, ++revision);
+    assert.equal(host.session.document.rootIds.length, before - 1, "the agent's frame is gone");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("with every P09 control showing, the editor reflows at 320 px and each target is at least 24 px", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-reflow-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    const [a] = await threeBoxes(page, host);
+    await agentChange(host);
+    await page.waitForFunction(() => !document.getElementById("action-undo-agent").hidden);
+    // One layer selected: with two, the inspector does not show Classes.
+    await row(page, a).click();
+    const measured = ["action-undo-agent", "action-group", "inspect-classes"];
+    const targets = () => page.evaluate(() => [...document.querySelectorAll("button, input, textarea, select, [role=treeitem] > .row, a[href]")]
+      .filter((element) => element.getClientRects().length > 0 && !element.closest("dialog:not([open])"))
+      .map((element) => ({ id: element.id, name: element.id || element.getAttribute("aria-label") || element.textContent.trim().slice(0, 20), rect: element.getBoundingClientRect() }))
+      .map(({ id, name, rect }) => ({ id, name, width: rect.width, height: rect.height, right: rect.right })));
+
+    const wide = await targets();
+    for (const id of measured) assert.ok(wide.some((target) => target.id === id), `${id} is measured`);
+    assert.deepEqual(wide.filter(({ width, height }) => width < 24 || height < 24).map(({ name, width, height }) => `${name} ${width}x${height}`), [], "WCAG 2.5.8 target size");
+
+    await page.setViewportSize({ width: 320, height: 640 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 320, "no horizontal scrolling at 320 px");
+    const narrow = await targets();
+    const panel = await page.evaluate(() => {
+      const element = document.querySelector(".side-panel");
+      return { scroll: element.scrollWidth, client: element.clientWidth };
+    });
+    assert.ok(panel.scroll <= panel.client, `the inspector needs no sideways scrolling: ${JSON.stringify(panel)}`);
+    for (const id of measured) {
+      const target = narrow.find((each) => each.id === id);
+      assert.ok(target, `${id} shows at 320 px`);
+      assert.ok(target.right <= 321, `${id} fits at 320 px: ${target.right}`);
+    }
+    assert.deepEqual(narrow.filter(({ width, height }) => width < 24 || height < 24).map(({ name, width, height }) => `${name} ${width}x${height}`), [], "target size at 320 px");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
