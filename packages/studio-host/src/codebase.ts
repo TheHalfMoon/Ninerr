@@ -7,7 +7,7 @@ import { StudioError } from "./errors.ts";
 import { LEGACY_CODEBASE_LINKS_FILE, registrySource } from "./legacy.ts";
 import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
 import { type CodeSource, importJsx, layerName, sourceShape } from "./code.ts";
-import { styleProperties } from "./imports.ts";
+import { importedStyle, styleProperties } from "./imports.ts";
 
 // A connected codebase (PC11, #182): one local folder linked to a project, whose JSX and
 // TSX components the person can bring into the design with their source, and write
@@ -472,8 +472,9 @@ function sameOverlapOrder(first: string[], second: string[]): boolean {
 function equalProp(prop: string, a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   if (prop === "style") {
-    const left = styleProperties({ cssText: a });
-    const right = styleProperties({ cssText: b });
+    // As a layer holds them: a longhand its later shorthand overrides is no difference (#360).
+    const left = importedStyle({ cssText: a });
+    const right = importedStyle({ cssText: b });
     return Object.keys(left).length === Object.keys(right).length && Object.entries(left).every(([name, value]) => right[name] === value);
   }
   return a === b;
@@ -890,7 +891,7 @@ export function resolveWithFile(document: any, nodeId: unknown, field: unknown, 
   else {
     const base = { ...source.base, props: { ...source.base.props, [prop]: value } };
     set = prop === "style"
-      ? { style: styleProperties({ cssText: value }), codeSource: { ...source, base } }
+      ? { style: importedStyle({ cssText: value }), codeSource: { ...source, base } }
       : { attributes: { ...(node.props.attributes ?? {}), [layerName(prop)]: value }, codeSource: { ...source, base } };
   }
   return { operations: [{ type: "set-props", nodeId, set }], file: plan.file, field };

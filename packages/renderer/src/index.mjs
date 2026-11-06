@@ -338,6 +338,18 @@ export function shorthandsFirst(style) {
   return Object.fromEntries(names.map((name) => [name, style[name]]));
 }
 
+/**
+ * A style as written in one declaration, without the longhands a later shorthand of theirs
+ * overrides (#360): since shorthands apply first here, keeping one would bring it back. An
+ * !important longhand is not overridden by a later shorthand unless that is important too.
+ */
+export function withoutOverriddenLonghands(style) {
+  const names = Object.keys(style);
+  const important = (value) => /!\s*important\s*$/iu.test(value);
+  const kept = names.filter((name, at) => !names.slice(at + 1).some((later) => isLonghandOf(name, later) && (important(style[later]) || !important(style[name]))));
+  return kept.length === names.length ? style : Object.fromEntries(kept.map((name) => [name, style[name]]));
+}
+
 function sanitizeAttribute(tag, namespace, name, rawValue) {
   const value = typeof rawValue === "number" || typeof rawValue === "boolean" ? String(rawValue) : rawValue;
   if (typeof value !== "string" || value.length > MAX_VALUE) return null;

@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, rendered, waitRevision, reloadEditor } from "./support/editor.mjs";
 import { hostPool, ok } from "./support/host-api.mjs";
-import { isLonghandOf, planElement, shorthandsFirst } from "../packages/renderer/src/index.mjs";
-import { exportJsx } from "../packages/studio-host/src/code.ts";
+import { isLonghandOf, planElement, shorthandsFirst, withoutOverriddenLonghands } from "../packages/renderer/src/index.mjs";
+import { exportJsx, importJsx } from "../packages/studio-host/src/code.ts";
+import { importedStyle } from "../packages/studio-host/src/imports.ts";
 
 // #172 (found by the PC8b review): the editor applied each change as its caller sent it, while
 // the store, and so every reload, keeps the journal's sorted key order: the same design could
@@ -135,4 +136,119 @@ test("a code write-back writes a style's longhands after their shorthands, as th
   const preview = await ok(running.call("POST", "/api/codebase/preview", { nodeId: div.id }), "preview");
   await ok(running.call("POST", "/api/codebase/write", { nodeId: div.id, token: preview.token }), "write");
   assert.match(readFileSync(file, "utf8"), /style="inset: 0px; bottom: 1px"/u, "bottom still refines inset in the file");
+});
+
+// #360: a longhand written before its own shorthand is overridden by it. Import keeps what the
+// declaration means, since the canvas applies shorthands first whatever the stored order.
+test("a longhand a later shorthand overrides does not come into the layer", () => {
+  const style = (cssText) => importedStyle({ cssText });
+  assert.deepEqual(style("bottom: 1px; inset: 0px"), { inset: "0px" });
+  assert.deepEqual(style("inset: 0px; bottom: 1px"), { inset: "0px", bottom: "1px" });
+  assert.deepEqual(style("margin-left: 5px; margin: 0px; color: red"), { margin: "0px", color: "red" });
+  // Written again, a name takes the later place: margin overrides margin-left here too.
+  assert.deepEqual(style("margin: 1px; margin-left: 5px; margin: 2px"), { margin: "2px" });
+  // Important, as in CSS.
+  assert.deepEqual(style("margin-left: 5px !important; margin: 0px"), { "margin-left": "5px !important", margin: "0px" });
+  assert.deepEqual(style("margin-left: 5px; margin: 0px !important"), { margin: "0px !important" });
+  assert.deepEqual(style("margin-left: 5px !important; margin: 0px !important"), { margin: "0px !important" });
+  // Overlapping shorthands and unrelated names stay: neither is the other's longhand.
+  assert.deepEqual(Object.keys(style("border-color: red; border-top: 1px solid")), ["border-color", "border-top"]);
+  assert.deepEqual(Object.keys(style("--margin-left: 1px; --margin: 2px")), ["--margin-left", "--margin"]);
+  const plain = { color: "red" };
+  assert.equal(withoutOverriddenLonghands(plain), plain, "nothing overridden: the same object");
+  // Code import, as the layer and through export.
+  const nodes = importJsx('export function A() { return <div style="bottom: 1px; inset: 0px; left: 2px">a</div>; }').operations[0].nodes;
+  assert.deepEqual(nodes[1].props.style, { inset: "0px", left: "2px" });
+});
+
+test("what a style draws is the same as written, on the canvas, and after export and reimport", browserTestOptions(), async (t) => {
+  const running = await editing(t);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  await waitRevision(editor.page, 1);
+  const sources = [
+    "position: absolute; bottom: 1px; inset: 0px",
+    "position: absolute; inset: 0px; bottom: 1px",
+    "margin-left: 5px; margin: 0px",
+    "margin: 0px; margin-left: 5px",
+    "margin: 1px; margin-left: 5px; margin: 2px",
+    "margin-left: 5px !important; margin: 0px",
+    "column-gap: 1px; gap: 2px",
+    "border-top-color: rgb(1, 2, 3); border: 1px solid rgb(4, 5, 6)",
+  ];
+  const properties = ["position", "top", "bottom", "margin-left", "margin-top", "column-gap", "row-gap", "border-top-color", "border-left-color"];
+  // A probe beside the layer, in the canvas's own document, with the style as written.
+  const computed = (css) => editor.page.evaluate(([style, names]) => {
+    const canvas = document.querySelector("iframe").contentDocument;
+    const box = canvas.querySelector('[data-ninerr-id="box"]');
+    const probe = canvas.createElement("div");
+    probe.setAttribute("style", style);
+    box.parentElement.append(probe);
+    const values = Object.fromEntries(names.map((name) => [name, canvas.defaultView.getComputedStyle(probe).getPropertyValue(name)]));
+    probe.remove();
+    return values;
+  }, [css, properties]);
+  const drawn = () => editor.page.evaluate((names) => {
+    const canvas = document.querySelector("iframe").contentDocument;
+    const style = canvas.defaultView.getComputedStyle(canvas.querySelector('[data-ninerr-id="box"]'));
+    return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name)]));
+  }, properties);
+  const cssOf = (style) => Object.entries(shorthandsFirst(style)).map(([name, value]) => `${name}: ${value}`).join("; ");
+  let revision = 1;
+  for (const source of sources) {
+    const written = await computed(source);
+    const style = importJsx(`export function A() { return <div style="${source}">a</div>; }`).operations[0].nodes[1].props.style;
+    await ok(running.call("POST", "/api/edit", { baseRevision: revision, intent: "Style", operations: [{ type: "set-props", nodeId: "box", set: { style } }] }), source);
+    revision += 1;
+    await waitRevision(editor.page, revision);
+    assert.deepEqual(await drawn(), written, `${source}: on the canvas`);
+    const code = exportJsx(running.host.session.document, "box").code;
+    const again = importJsx(code).operations[0].nodes[1].props.style;
+    assert.deepEqual(await computed(cssOf(again)), written, `${source}: after export and reimport`);
+  }
+  assert.deepEqual(editor.errors, []);
+});
+
+test("a dead longhand in a file is no edit: an untouched style is never written back", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-style-dead-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const code = join(root, "code");
+  mkdirSync(code);
+  mkdirSync(join(root, "projects"));
+  const file = join(code, "Panel.jsx");
+  const source = 'export function Panel() {\n  return <div style="bottom: 1px; inset: 0px" title="a">Hi</div>;\n}\n';
+  writeFileSync(file, source);
+  const running = await pool.open(join(root, "projects"));
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  await ok(running.call("POST", "/api/codebase/connect", { folder: code }), "connect");
+  await ok(running.call("POST", "/api/codebase/import", { file: "Panel.jsx", component: "Panel" }), "import");
+  const div = Object.values(running.host.session.document.nodes).find((node) => node.props?.tag === "div" && node.props?.codeSource);
+  assert.deepEqual(div.props.style, { inset: "0px" });
+  const untouched = await ok(running.call("POST", "/api/codebase/preview", { nodeId: div.id }), "preview");
+  assert.equal(untouched.diff ?? "", "", "nothing to write");
+  // Another field written back leaves the style exactly as the file has it.
+  await ok(running.call("POST", "/api/edit", { baseRevision: running.host.session.revision, intent: "Title", operations: [{ type: "set-props", nodeId: div.id, set: { attributes: { title: "b" } } }] }), "edit");
+  const preview = await ok(running.call("POST", "/api/codebase/preview", { nodeId: div.id }), "preview");
+  await ok(running.call("POST", "/api/codebase/write", { nodeId: div.id, token: preview.token }), "write");
+  assert.equal(readFileSync(file, "utf8"), source.replace('title="a"', 'title="b"'));
+});
+
+test("the HTML import review says when a style loses a longhand its shorthand overrides", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-style-note-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const running = await pool.open(root);
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  const review = await ok(running.call("POST", "/api/import", { html: '<main><p style="bottom: 1px; inset: 0px">a</p><p style="inset: 0px; bottom: 1px">b</p></main>', name: "Page" }), "review");
+  assert.ok(review.notes.includes("1 layer has style properties left out that a later shorthand in the same style overrides; the layer looks the same."), JSON.stringify(review.notes));
+  await ok(running.call("POST", "/api/import/commit", { proposalId: review.proposalId }), "commit");
+  const styles = Object.values(running.host.session.document.nodes).filter((node) => node.props?.tag === "p").map((node) => node.props.style);
+  assert.deepEqual(styles, [{ inset: "0px" }, { inset: "0px", bottom: "1px" }]);
 });
