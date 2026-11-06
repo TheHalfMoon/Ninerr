@@ -474,7 +474,7 @@ export function textLayerOf(document, id) {
   const child = document.nodes[node.children[0]];
   const props = child.props ?? {};
   const empty = (value) => value === undefined || (typeof value === "object" && value !== null && Object.keys(value).length === 0);
-  const code = props.codeSource !== undefined && props.codeSource?.tag !== "#text";
+  const code = props.codeExpression !== undefined || (props.codeSource !== undefined && props.codeSource?.tag !== "#text");
   const bare = child.type === "text" && child.children.length === 0 && typeof props.text === "string" && props.tag === undefined && empty(props.attributes) && empty(props.style) && !code;
   return bare ? child.id : null;
 }

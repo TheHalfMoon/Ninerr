@@ -129,9 +129,14 @@ export interface MergeResult {
 }
 
 export interface DesignDocNode {
+  /**
+   * An element name; or, among an element's children, "#text" (a run of bare text, in `text`)
+   * or "#expression" (a {…} child that is code, its exact source with braces in `code`).
+   */
   tag: string;
   props: Record<string, string | number | boolean>;
   text?: string;
+  code?: string;
   children?: DesignDocNode[];
 }
 
