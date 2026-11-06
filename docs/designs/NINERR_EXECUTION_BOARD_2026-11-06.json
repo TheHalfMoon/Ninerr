@@ -72,7 +72,7 @@
     {
       "id": "R03",
       "title": "Complete P09 UI/UX",
-      "status": "ready",
+      "status": "in_progress",
       "deps": [
         "R01",
         "R02"
@@ -86,7 +86,11 @@
         "tests/layer-structure.test.mjs"
       ],
       "gate": "all P09 journeys pass from exact head",
-      "criteria": "docs/MASTER_PLAN.md, section P09 acceptance criteria"
+      "criteria": "docs/MASTER_PLAN.md, section P09 acceptance criteria",
+      "prs": [
+        374
+      ],
+      "evidence": "Criterion 4 tests in draft #374. Dogfooding rerun, #235 and #369 remain."
     },
     {
       "id": "R04",
@@ -122,7 +126,7 @@
     {
       "id": "M01",
       "title": "Qualify immutable reference pack contract",
-      "status": "draft_pr_review",
+      "status": "merged",
       "deps": [],
       "pr": 365,
       "owner": "import-stack",
@@ -131,12 +135,13 @@
         "tests/design-graph-reference-adapter.test.mjs"
       ],
       "gate": "20 local targeted cases and all required PR-head CI; rights fail closed",
-      "workFrom": "PR #365 head, not main"
+      "mergeCommit": "dfb177c566fcc13f68783fa54a80a9ff433dbdb3",
+      "evidence": "Exact-head CI on Linux, macOS, Windows at 02f083d; post-merge CI success. allowed stays false until a grant register exists. Open decisions: #373."
     },
     {
       "id": "M02",
       "title": "Qualify trusted local JSON file reader",
-      "status": "draft_pr_review",
+      "status": "merged",
       "deps": [
         "M01"
       ],
@@ -149,12 +154,13 @@
         "node scripts/identity-census.mjs --check"
       ],
       "gate": "all supported OS exact-head CI and filesystem negatives pass",
-      "workFrom": "PR #367 head, not main"
+      "mergeCommit": "2ba8dcb9aecbf2cf8308b51e3250d7df9a69071e",
+      "evidence": "Exact-head CI at 6711a04; post-merge CI success. Symlink and hard-link negatives ran on all three systems at 7c45cbc."
     },
     {
       "id": "M03",
       "title": "Project-scoped read-only reference catalog",
-      "status": "draft_pr_review",
+      "status": "merged",
       "deps": [
         "M02"
       ],
@@ -163,12 +169,14 @@
         "tests/reference-catalog.test.mjs"
       ],
       "gate": "1,000 local references, stable digest, project switch/revoke safe",
-      "pr": 371
+      "pr": 371,
+      "mergeCommit": "e047bdb4ec9b30176cbfd0ef0a95fe3c3f4af9ae",
+      "evidence": "Exact-head CI at 92465e5; post-merge CI success. In memory; non-public objects hidden until a project has an owner identity."
     },
     {
       "id": "M04",
       "title": "Add read-only MCP search/read reference tools",
-      "status": "draft_pr_review",
+      "status": "merged_post_merge_ci_pending",
       "deps": [
         "M03"
       ],
@@ -177,12 +185,14 @@
         "tests/mcp-references.test.mjs"
       ],
       "gate": "GUI/MCP metadata parity, no unauthorized paths",
-      "pr": 372
+      "pr": 372,
+      "mergeCommit": "5623fe71de8051abbca0a9e2386db3ce0269bfe3",
+      "evidence": "Exact-head CI at 9fa4a9e. Local endpoint only; packaged stdio helper is W03."
     },
     {
       "id": "M05",
       "title": "Desktop Research panel",
-      "status": "blocked_by_dependencies",
+      "status": "ready",
       "deps": [
         "M03"
       ],
