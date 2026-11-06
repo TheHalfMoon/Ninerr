@@ -25,11 +25,11 @@ const PERMISSIVE = new Set([...policy.allowed, "CC0-1.0", "OFL-1.1"]);
 const NOT_DISTRIBUTED = new Set(["optional-runtime"]);
 const distributedOrPermissive = (entry) => PERMISSIVE.has(entry.license) || (NOT_DISTRIBUTED.has(entry.kind) && entry.license.startsWith("NOT-DISTRIBUTED"));
 // GitHub projects tracked files may link to that are registered under another id, or are
-// not incorporated at all (the upstream of an upstream; an optional local dev tool).
+// not incorporated at all (the upstream of an upstream; an optional local dev tool; a research tool the plan names, with no code taken).
 // Node.js is built into the Electron runtime, which carries its license; the corresponding-source
 // record links its source.
 const URL_ALIASES = { "inikulin/parse5": "parse5", "Koromix/koffi": "koffi", "babel/babel": "@babel/parser", "fb55/entities": "entities", "microsoft/playwright": "playwright-core", "nodejs/node": "electron/electron" };
-const URL_NOT_INCORPORATED = new Set(["ehmo/platform-design-skills", "trailhq/Graft", "owner/repo", "TheHalfMoon/Ninerr"]); // owner/repo: the placeholder in docs; TheHalfMoon/Ninerr: this repository (its clone URL in docs/RELEASE.md)
+const URL_NOT_INCORPORATED = new Set(["ehmo/platform-design-skills", "trailhq/Graft", "CodeWithH-B/CraftAnything", "storytold/craft-anything", "owner/repo", "TheHalfMoon/Ninerr"]); // owner/repo: the placeholder in docs; TheHalfMoon/Ninerr: this repository (its clone URL in docs/RELEASE.md)
 // owner/name literals that are not upstream projects: rule ids, MIME types, Ninerr paths, and
 // MCP JSON-RPC method names (tools/list).
 const NOT_DONORS = /^(a11y|ninerr-mobile-method|application|text|packages|internal|NinerrImportStack|tools|notifications|resources|prompts|completion|logging|sampling|roots)\//u;
