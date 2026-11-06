@@ -347,6 +347,11 @@ const styleLeftOutNote = ({ layersWithStyleLeftOut: count }) => count > 0
   ? ` ${count} layer${count === 1 ? " has" : "s have"} style properties left out that a later shorthand in the same style overrides; the source file is not changed.`
   : "";
 
+/** The limit decided in P09 (#369): overlapping properties may draw differently from their source. */
+const styleOutOfOrderNote = ({ layersWithStyleOutOfOrder: count }) => count > 0
+  ? ` ${count} layer${count === 1 ? " has" : "s have"} overlapping style properties that the canvas applies in its own order, so ${count === 1 ? "it" : "they"} may draw differently from the source.`
+  : "";
+
 let selectionTimer = null;
 function shareSelection() {
   // MCP's selection reads what is selected here; send it after the selection settles.
@@ -544,7 +549,7 @@ async function openCodeDialog() {
             selectLayers([result.frameId]);
             canvas.fit();
             renderToolbar();
-            setStatus(`${result.intent}: ${result.layers} layers added.${styleLeftOutNote(result)}`);
+            setStatus(`${result.intent}: ${result.layers} layers added.${styleLeftOutNote(result)}${styleOutOfOrderNote(result)}`);
           } catch (failure) {
             if (failure instanceof HostError && failure.code === "project-needs-reopen") {
               close();
@@ -642,7 +647,7 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
             selectLayers([result.frameId]);
             canvas.fit();
             renderToolbar();
-            setStatus(`${result.intent}: ${result.layers} layers added.${styleLeftOutNote(result)}`);
+            setStatus(`${result.intent}: ${result.layers} layers added.${styleLeftOutNote(result)}${styleOutOfOrderNote(result)}`);
           } catch (failure) {
             bring.disabled = false;
             if (failure instanceof HostError && failure.code === "project-needs-reopen") {

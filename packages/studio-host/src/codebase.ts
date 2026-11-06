@@ -7,7 +7,7 @@ import { StudioError } from "./errors.ts";
 import { LEGACY_CODEBASE_LINKS_FILE, registrySource } from "./legacy.ts";
 import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
 import { type CodeSource, importJsx, layerName, sourceShape } from "./code.ts";
-import { importedStyle, styleProperties } from "./imports.ts";
+import { importedStyle, overlap, styleProperties } from "./imports.ts";
 
 // A connected codebase (PC11, #182): one local folder linked to a project, whose JSX and
 // TSX components the person can bring into the design with their source, and write
@@ -429,32 +429,6 @@ function fileMatchesLayer(prop: string, fileValue: string, mine: string): boolea
   if (prop === "style" && !plainStyle(fileValue)) return false;
   return equalProp(prop, fileValue, mine);
 }
-
-// Shorthands and what they set, beyond their own name followed by "-" (margin-top).
-const SHORTHANDS = new Set(["margin", "padding", "inset", "border", "border-top", "border-right", "border-bottom", "border-left", "border-block", "border-inline", "border-block-start", "border-block-end", "border-inline-start", "border-inline-end", "border-width", "border-style", "border-color", "border-radius", "border-image", "outline", "background", "font", "flex", "flex-flow", "grid", "grid-template", "grid-area", "grid-row", "grid-column", "gap", "grid-gap", "place-items", "place-content", "place-self", "text-decoration", "list-style", "overflow", "transition", "animation", "mask", "columns", "scroll-margin", "scroll-padding", "inset-block", "inset-inline", "margin-block", "margin-inline", "padding-block", "padding-inline", "all"]);
-const SETS: Record<string, string[]> = {
-  inset: ["top", "right", "bottom", "left"],
-  gap: ["row-gap", "column-gap", "grid-gap", "grid-row-gap", "grid-column-gap"],
-  "grid-gap": ["row-gap", "column-gap", "gap", "grid-row-gap", "grid-column-gap"],
-  font: ["line-height"],
-  "flex-flow": ["flex-direction", "flex-wrap"],
-  "place-items": ["align-items", "justify-items"],
-  "place-content": ["align-content", "justify-content"],
-  "place-self": ["align-self", "justify-self"],
-  "border-width": ["border-top-width", "border-right-width", "border-bottom-width", "border-left-width"],
-  "border-style": ["border-top-style", "border-right-style", "border-bottom-style", "border-left-style"],
-  "border-color": ["border-top-color", "border-right-color", "border-bottom-color", "border-left-color"],
-  "border-radius": ["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"],
-  columns: ["column-count", "column-width"],
-  "inset-block": ["top", "bottom"],
-  "inset-inline": ["left", "right"],
-  "margin-inline": ["margin-left", "margin-right"],
-  "margin-block": ["margin-top", "margin-bottom"],
-  "padding-inline": ["padding-left", "padding-right"],
-  "padding-block": ["padding-top", "padding-bottom"],
-};
-const sets = (shorthand: string, name: string): boolean => SHORTHANDS.has(shorthand) && (shorthand === "all" || name.startsWith(`${shorthand}-`) || (SETS[shorthand]?.includes(name) ?? false));
-const overlap = (x: string, y: string): boolean => sets(x, y) || sets(y, x);
 
 /**
  * Whether two styles with the same properties write a shorthand and what it sets (margin and
