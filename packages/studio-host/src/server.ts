@@ -161,6 +161,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
   };
   const confirmations = new ConfirmationBroker((pending) => broadcast("confirmations", { pending }));
   const closeSession = () => {
+    references.revoke();
     // A reviewed import belongs to the project it was reviewed for.
     imports.clear();
     if (session !== null) {
@@ -191,6 +192,11 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
   const requireSession = (): StudioSession => {
     if (session === null) throw new StudioError(409, "no-project", "no project is open");
     return session;
+  };
+  const requireWorkingSession = (): StudioSession => {
+    const current = requireSession();
+    if (current.failure !== null) throw new StudioError(409, "project-needs-reopen", current.failure);
+    return current;
   };
   const describe = () => {
     if (session === null) return { project: null };
@@ -329,15 +335,15 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     // connects one, brings a component in from it, or writes back to it.
     // The open project's reference catalog (M03). Only the owner names a directory.
     "POST /api/references/load": (body) => {
-      const current = requireSession();
+      const current = requireWorkingSession();
       return references.load(current, () => session === current, body?.directory, body?.fileName);
     },
     "GET /api/references": (params) => {
-      const current = requireSession();
+      const current = requireWorkingSession();
       return references.search(current, current.name, params);
     },
     "GET /api/references/:id": (params) => {
-      const current = requireSession();
+      const current = requireWorkingSession();
       return references.get(current, current.name, params.id);
     },
     "GET /api/codebase": () => {
