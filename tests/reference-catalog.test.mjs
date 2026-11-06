@@ -174,13 +174,14 @@ test("of two reads, the one asked for last wins, and closing ends a read under w
     writeFileSync(join(root, "two.json"), JSON.stringify(pack([object("second")])));
     const catalog = new ReferenceCatalog();
     const session = {};
-    const first = catalog.load(session, () => true, root, "one.json");
+    // Each refusal is awaited from the start, since it can come before the later call returns.
+    const first = assert.rejects(catalog.load(session, () => true, root, "one.json"), (error) => error.code === "reference-load-superseded");
     await catalog.load(session, () => true, root, "two.json");
-    await assert.rejects(first, (error) => error.code === "reference-load-superseded");
+    await first;
     assert.deepEqual(catalog.search(session, "site").results.map((item) => item.id), ["urn:ninerr:object:second"]);
-    const late = catalog.load(session, () => true, root, "one.json");
+    const late = assert.rejects(catalog.load(session, () => true, root, "one.json"), (error) => error.code === "reference-load-superseded");
     catalog.revoke();
-    await assert.rejects(late, (error) => error.code === "reference-load-superseded");
+    await late;
     assert.equal(catalog.search(session, "site").status, "not-loaded");
   } finally {
     rmSync(root, { recursive: true, force: true });
