@@ -503,7 +503,9 @@ test("Group, Classes and Undo agent change are reached and used by Tab and Enter
     await waitRevision(page, ++revision);
     assert.equal(host.session.document.nodes[a].props.attributes.class, "loud");
 
-    // Two layers selected from the keyboard, then grouped.
+    // Two layers selected from the keyboard, then grouped: the hint and the tree both say how.
+    assert.match(await page.locator("#layers-keys").textContent(), /Shift\+Enter adds a layer to the selection or takes it out/u);
+    assert.match(await page.locator("#layers").getAttribute("aria-keyshortcuts"), /Shift\+Enter/u);
     await toFirstBox();
     await page.keyboard.press("Enter");
     await page.keyboard.press("ArrowDown");

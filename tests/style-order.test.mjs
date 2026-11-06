@@ -338,3 +338,116 @@ test("the HTML import review says when a style loses a longhand its shorthand ov
   // Layer ids are random, so the two come in either order.
   assert.deepEqual(styles.sort((a, b) => Object.keys(a).length - Object.keys(b).length), [{ inset: "0px" }, { inset: "0px", bottom: "1px" }]);
 });
+
+// #370, case 4: a browser reads comments, strings and parentheses, so a style's own reader must.
+test("a style's semicolons end declarations only outside comments, strings and parentheses", () => {
+  const style = (cssText) => importedStyle({ cssText });
+  assert.deepEqual(style("margin-left: 5px !important/*; margin: 0px"), { "margin-left": "5px !important" }, "a comment left open runs to the end");
+  assert.deepEqual(style("color: red /* ; margin: 0 */; top: 1px"), { color: "red", top: "1px" });
+  assert.deepEqual(style("/* a: b; */ color: red"), { color: "red" });
+  assert.deepEqual(style("margin-left: 5px; /* margin: 0 */"), { "margin-left": "5px" }, "a shorthand in a comment overrides nothing");
+  assert.deepEqual(style('content: "a;b"; color: red'), { content: '"a;b"', color: "red" });
+  assert.deepEqual(style('content: "a\\";b"; color: red'), { content: '"a\\";b"', color: "red" });
+  assert.deepEqual(style("background: url(data:image/png;base64,AAAA); color: red"), { background: "url(data:image/png;base64,AAAA)", color: "red" });
+  assert.deepEqual(style("background: url(a/*b*/c); color: red"), { background: "url(a/*b*/c)", color: "red" }, "not a comment inside url()");
+  assert.deepEqual(style("color: red; ;; top: 1px;"), { color: "red", top: "1px" });
+  assert.deepEqual(style("width: 1/**/px; top: 1px"), { width: "1 px", top: "1px" }, "a comment separates what it stands between");
+  // Linear: a long string of comments does not hold the host.
+  const started = performance.now();
+  assert.deepEqual(style(`${"/*x*/".repeat(100_000)}color: red`), { color: "red" });
+  assert.deepEqual(style(`color: red${" /* x".repeat(100_000)}`), { color: "red" });
+  // 14.8 s for the first of these when the reader re-read its growing value at each bracket.
+  for (const piece of ["(", "a(", "(a)", "url()", "\\\\", '"', "/**/", "["]) style(`x: ${piece.repeat(Math.floor(256 * 1024 / piece.length))}; top: 1px`);
+  assert.ok(performance.now() - started < 2_000);
+});
+
+// Compared with a browser, so that this reader cannot drift from what a style means: the page
+// reads each style itself, and this reader's result, applied, must give the same values.
+test("a style reads the same here as in a browser, however odd", browserTestOptions(), async (t) => {
+  const running = await editing(t);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, 1);
+  const names = ["color", "top", "width", "background-image", "font-family", "margin-left", "margin-top"];
+  const read = (cssText) => page.evaluate(([text, wanted]) => {
+    const probe = document.createElement("div");
+    probe.style.cssText = text;
+    return Object.fromEntries(wanted.map((name) => [name, probe.style.getPropertyValue(name)]));
+  }, [cssText, names]);
+  // This reader's result, applied as the canvas applies it: one property at a time, in its order.
+  const applied = (style) => page.evaluate(([entries, wanted]) => {
+    const probe = document.createElement("div");
+    for (const [name, value] of entries) {
+      const important = /!\s*important\s*$/iu.test(value);
+      probe.style.setProperty(name, value.replace(/!\s*important\s*$/iu, "").trim(), important ? "important" : "");
+    }
+    return Object.fromEntries(wanted.map((name) => [name, probe.style.getPropertyValue(name)]));
+  }, [Object.entries(shorthandsFirst(style)), names]);
+  for (const cssText of [
+    "color: red; top: 1px",
+    "width: calc(1px /* don't */ + 2px); color: red",
+    "width: calc(1px /* \" */ + 2px); color: red",
+    "width: calc(1px /* ( */ + 2px); color: red",
+    "background-image: url(a'b); color: red",
+    'background-image: url(a"b); color: red',
+    "background-image: url(a;b); color: red",
+    "background-image: url( a/*b*/c ); color: red",
+    'background-image: url("a;b"); color: red',
+    "BACKGROUND-IMAGE: URL(a;b); color: red",
+    'font-family: "a\n; color: red; top: 1px',
+    'font-family: "a\r\n; color: red; top: 1px',
+    "color: red\\\"; top: 1px",
+    "x: \\(; top: 1px",
+    "width: 1px\\/*; top: 1px",
+    "x: [a; color: red; b]; top: 1px",
+    "x: {a; color: red; b}; top: 1px",
+    "color: red; x: (((; top: 1px",
+    "x: ); top: 1px",
+    "x: (]); top: 1px",
+    'font-family: "a;b"; top: 1px',
+    "top: 1px /* a; color: red */",
+    "/* open; top: 1px",
+    `font-family: url(${" ".repeat(100)}"a)b"); top: 1px; color: red`,
+    'x: url( "a)b); top: 1px',
+    "x: xurl(a'b); top: 1px; color: 'red'",
+    "x: my-url(/*)*/; color: red; ); top: 1px",
+    'font-family: "a\r; color: red; top: 1px',
+    'font-family: "a\\\r\nb"; top: 1px; color: red',
+    "margin-left: 5px; margin: 0px )",
+    "margin-left: 5px; margin: 0px",
+    "margin: 0px; margin-left: 5px",
+    "margin-left: 5px !important; margin: 0px",
+    "color: blue; color: red; color: green",
+    "x: URL(a'b); top: 1px; color: red",
+    "x: (]; color: red; y: ); top: 1px",
+  ]) {
+    assert.deepEqual(await applied(importedStyle({ cssText })), await read(cssText), JSON.stringify(cssText));
+  }
+  assert.deepEqual(editor.errors, []);
+});
+
+test("a code import says when it leaves a declaration out, and the file is not changed", browserTestOptions(), async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-style-left-out-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const running = await pool.open(root);
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  const left = 'export function A() { return <main><p style="bottom: 1px; inset: 0px">a</p><p style="inset: 0px; bottom: 1px">b</p></main>; }';
+  assert.equal((await ok(running.call("POST", "/api/code/import", { code: left }), "import")).layersWithStyleLeftOut, 1);
+  assert.equal((await ok(running.call("POST", "/api/code/import", { code: "export function B() { return <p style=\"inset: 0px; bottom: 1px\">b</p>; }" }), "import")).layersWithStyleLeftOut, 0);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, running.host.session.revision);
+  await page.locator("#action-code").click();
+  await page.locator("#code-import").fill(left);
+  await page.locator("#code-import").press("Tab");
+  await page.locator("#dialog[open] form button.primary, #dialog[open] form button[type=submit]").first().click();
+  await page.waitForFunction(() => /left out that a later shorthand/u.test(document.getElementById("status")?.textContent ?? ""));
+  assert.match(await page.locator("#status").textContent(), /1 layer has style properties left out/u);
+  assert.deepEqual(editor.errors, []);
+});

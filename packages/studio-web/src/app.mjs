@@ -342,6 +342,11 @@ function showConfirmations(pending) {
   });
 }
 
+/** What a code import left out of its layers' styles (#370): nothing that changes how they look. */
+const styleLeftOutNote = ({ layersWithStyleLeftOut: count }) => count > 0
+  ? ` ${count} layer${count === 1 ? " has" : "s have"} style properties left out that a later shorthand in the same style overrides; the source file is not changed.`
+  : "";
+
 let selectionTimer = null;
 function shareSelection() {
   // MCP's selection reads what is selected here; send it after the selection settles.
@@ -539,7 +544,7 @@ async function openCodeDialog() {
             selectLayers([result.frameId]);
             canvas.fit();
             renderToolbar();
-            setStatus(`${result.intent}: ${result.layers} layers added.`);
+            setStatus(`${result.intent}: ${result.layers} layers added.${styleLeftOutNote(result)}`);
           } catch (failure) {
             if (failure instanceof HostError && failure.code === "project-needs-reopen") {
               close();
@@ -637,7 +642,7 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
             selectLayers([result.frameId]);
             canvas.fit();
             renderToolbar();
-            setStatus(`${result.intent}: ${result.layers} layers added.`);
+            setStatus(`${result.intent}: ${result.layers} layers added.${styleLeftOutNote(result)}`);
           } catch (failure) {
             bring.disabled = false;
             if (failure instanceof HostError && failure.code === "project-needs-reopen") {
@@ -1748,6 +1753,11 @@ function renderInspector() {
   const textId = textLayerOf(doc, node.id);
   // A {…} part of imported code is code, not words: it has no Text field (#370).
   if (textId !== null && !isCodePart(doc.nodes[textId])) children.push(field("text", "Text", typeof doc.nodes[textId].props?.text === "string" ? doc.nodes[textId].props.text : "", true));
+  else if (isCodePart(node) || node.children.some((id) => isCodePart(doc.nodes[id]))) {
+    // Beside other content, an element's words are on layers of their own, which can be edited.
+    const onlyCode = isCodePart(node) || node.children.every((id) => isCodePart(doc.nodes[id]));
+    children.push(el("p", { class: "hint", id: "inspect-code-note" }, onlyCode ? "This layer shows code from its source, so its text is changed in the code." : "This layer holds code from its source, which is changed in the code. Its words are edited on their own layers."));
+  }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.

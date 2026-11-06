@@ -244,6 +244,75 @@ function summarize(proposalId: string, name: string, proposal: ImportProposal, r
   };
 }
 
+const CLOSES: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+// The name url, whole: not the end of a longer name such as my-url.
+const UNQUOTED_URL_NAME = /(?:^|[^-\w\\\u0080-\uffff])url$/iu;
+
+/** Whether, past CSS's own whitespace, the text at `from` opens a string. */
+function opensQuoted(text: string, from: number): boolean {
+  let at = from;
+  while (text[at] === " " || text[at] === "\t" || text[at] === "\n") at += 1;
+  return text[at] === "\"" || text[at] === "'";
+}
+
+/**
+ * A style's declarations, read as CSS reads them (differentially tested against a browser in
+ * tests/style-order.test.mjs). A semicolon ends one only outside strings, brackets and comments.
+ * A comment can sit anywhere but inside an unquoted url(), one left open runs to the end, a line
+ * break in a string or a stray closing bracket makes its declaration invalid, and a backslash
+ * takes the next character with it. An escaped name such as u\\72l( is not read as url(. Linear in
+ * the text.
+ */
+function declarationsOf(input: string): string[] {
+  const text = input.replace(/\r\n?|\f/gu, "\n");
+  const declarations: string[] = [];
+  const open: string[] = [];
+  let current = "";
+  let invalid = false;
+  const end = () => {
+    if (!invalid) declarations.push(current);
+    current = "";
+    invalid = false;
+  };
+  let at = 0;
+  while (at < text.length) {
+    const char = text[at];
+    if (char === "\\") {
+      current += text.slice(at, at + 2);
+      at += 2;
+    } else if (char === "/" && text[at + 1] === "*") {
+      const close = text.indexOf("*/", at + 2);
+      if (close < 0) break;
+      current += " ";
+      at = close + 2;
+    } else if (char === "\"" || char === "'") {
+      let scan = at + 1;
+      while (scan < text.length && text[scan] !== char && text[scan] !== "\n") scan += text[scan] === "\\" ? 2 : 1;
+      if (text[scan] === char) scan += 1;
+      else if (scan < text.length) invalid = true;
+      current += text.slice(at, scan);
+      at = scan;
+    } else if (char === "(" && UNQUOTED_URL_NAME.test(text.slice(Math.max(0, at - 4), at)) && !opensQuoted(text, at + 1)) {
+      // An unquoted url(): quotes and comments mean nothing in it, only its closing bracket.
+      let scan = at + 1;
+      while (scan < text.length && text[scan] !== ")") scan += text[scan] === "\\" ? 2 : 1;
+      current += text.slice(at, scan + 1);
+      at = scan + 1;
+    } else if (char === ";" && open.length === 0) {
+      end();
+      at += 1;
+    } else {
+      if (Object.hasOwn(CLOSES, char)) open.push(CLOSES[char]);
+      else if (char === open.at(-1)) open.pop();
+      else if (open.length === 0 && (char === ")" || char === "]" || char === "}")) invalid = true;
+      current += char;
+      at += 1;
+    }
+  }
+  end();
+  return declarations;
+}
+
 /** `cssText` (an imported inline style) as style properties; the renderer re-checks every value. */
 export function styleProperties(style: unknown): Record<string, string> {
   const out: Record<string, string> = {};
@@ -256,7 +325,7 @@ export function styleProperties(style: unknown): Record<string, string> {
     }
     // A name written again takes the later value and the later place, since order decides what
     // wins; but a plain one never beats an important one, as in CSS.
-    for (const declaration of value.split(";")) {
+    for (const declaration of declarationsOf(value)) {
       const at = declaration.indexOf(":");
       if (at <= 0) continue;
       const property = declaration.slice(0, at).trim().toLowerCase();
