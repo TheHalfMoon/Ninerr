@@ -381,13 +381,14 @@ test("pairing labels with controls is linear, and an export too large is refused
 const row = (page, id) => page.locator(`[id="layer-${id}"] > .row`);
 
 /** Press Tab until `id` has the focus, and require a visible ring on it. */
-async function tabTo(page, id, presses = 60) {
-  for (let index = 0; index < presses; index += 1) {
+async function tabTo(page, id) {
+  for (let index = 0; index < 60; index += 1) {
     await page.keyboard.press("Tab");
     const now = await page.evaluate(() => {
       const element = document.activeElement;
       const style = getComputedStyle(element);
-      return { id: element.id, ring: style.outlineStyle !== "none" && style.outlineWidth !== "0px" };
+      const opaque = !/^rgba\([^)]*,\s*0\)$/u.test(style.outlineColor) && style.outlineColor !== "transparent";
+      return { id: element.id, ring: element.matches(":focus-visible") && style.outlineStyle !== "none" && style.outlineWidth !== "0px" && opaque };
     });
     if (now.id === id) {
       assert.ok(now.ring, `${id} shows focus`);
@@ -420,7 +421,7 @@ async function agentChange(host) {
   await post({ id: 1, method: "tools/call", params: { name: "create_frame", arguments: { name: "Landing", width: 640, height: 400 } } });
 }
 
-test("what P09 added audits clean while it shows: classes, a selection, a group, a drop mark", browserTestOptions(), async () => {
+test("what P09 added audits clean while it shows: classes, a selection, a group, a drag under way", browserTestOptions(), async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-")));
   const host = await startStudioHost({ projectsRoot: root, now });
   const editor = await openEditor(host);
@@ -452,7 +453,17 @@ test("what P09 added audits clean while it shows: classes, a selection, a group,
     await page.mouse.move(over.x + over.width / 2, over.y + over.height / 2 - 2, { steps: 5 });
     await page.mouse.move(over.x + over.width / 2, over.y + over.height / 2, { steps: 2 });
     await page.locator("#layers .drop-inside, #layers .drop-before, #layers .drop-after").first().waitFor();
-    await audit(page, "a drop mark during a drag");
+    await audit(page, "a drag under way");
+    // The audit reads text and backgrounds, not a mark's box-shadow, so its paint is checked here.
+    const mark = await page.evaluate(() => {
+      const style = getComputedStyle(document.querySelector("#layers .drop-inside, #layers .drop-before, #layers .drop-after"));
+      return `${style.boxShadow} ${style.outlineStyle} ${style.borderTopStyle} ${style.borderBottomStyle} ${style.backgroundColor}`;
+    });
+    const unmarked = await page.evaluate(() => {
+      const style = getComputedStyle(document.querySelector("#layers .row:not(.drop-inside):not(.drop-before):not(.drop-after):not([aria-selected])") ?? document.querySelector("#layers .row"));
+      return `${style.boxShadow} ${style.outlineStyle} ${style.borderTopStyle} ${style.borderBottomStyle} ${style.backgroundColor}`;
+    });
+    assert.notEqual(mark, unmarked, "a drop mark is painted");
     await page.keyboard.press("Escape");
     await page.mouse.up();
 
@@ -473,22 +484,37 @@ test("Group, Classes and Undo agent change are reached and used by Tab and Enter
   const editor = await openEditor(host);
   try {
     const { page } = editor;
-    const [a] = await threeBoxes(page, host);
+    const [a, , c] = await threeBoxes(page, host);
     let revision = 3;
-    await row(page, a).click();
+    // Into the layers tree by Tab, and on to the first box: the page, then its first child.
+    const toFirstBox = async () => {
+      await page.evaluate(() => document.activeElement.blur());
+      for (let index = 0; index < 60 && !(await page.evaluate(() => document.activeElement.getAttribute("role") === "treeitem")); index += 1) await page.keyboard.press("Tab");
+      await page.keyboard.press("Home");
+      await page.keyboard.press("ArrowDown");
+    };
+    await toFirstBox();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((id) => document.getElementById(`layer-${id}`)?.getAttribute("aria-selected") === "true", a);
 
-    await page.evaluate(() => document.activeElement.blur());
     await tabTo(page, "inspect-classes");
     await page.keyboard.type("loud");
     await page.keyboard.press("Tab");
     await waitRevision(page, ++revision);
     assert.equal(host.session.document.nodes[a].props.attributes.class, "loud");
 
-    await page.evaluate(() => document.activeElement.blur());
+    // Two layers selected from the keyboard, then grouped.
+    await toFirstBox();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Shift+Enter");
+    await page.waitForFunction((id) => document.getElementById(`layer-${id}`)?.getAttribute("aria-selected") === "true", c);
     await tabTo(page, "action-group");
     await page.keyboard.press("Enter");
     await waitRevision(page, ++revision);
     assert.match(host.session.document.nodes[a].parentId, /^group-/u);
+    assert.deepEqual(host.session.document.nodes[host.session.document.nodes[a].parentId].children, [a, c]);
 
     await agentChange(host);
     await waitRevision(page, ++revision);
@@ -513,24 +539,30 @@ test("with every P09 control showing, the editor reflows at 320 px and each targ
   const editor = await openEditor(host);
   try {
     const { page } = editor;
-    const [a, , c] = await threeBoxes(page, host);
+    const [a] = await threeBoxes(page, host);
     await agentChange(host);
     await page.waitForFunction(() => !document.getElementById("action-undo-agent").hidden);
+    // One layer selected: with two, the inspector does not show Classes.
     await row(page, a).click();
-    await row(page, c).click({ modifiers: ["ControlOrMeta"] });
+    const measured = ["action-undo-agent", "action-group", "inspect-classes"];
     const targets = () => page.evaluate(() => [...document.querySelectorAll("button, input, textarea, select, [role=treeitem] > .row, a[href]")]
       .filter((element) => element.getClientRects().length > 0 && !element.closest("dialog:not([open])"))
       .map((element) => ({ id: element.id, name: element.id || element.getAttribute("aria-label") || element.textContent.trim().slice(0, 20), rect: element.getBoundingClientRect() }))
-      .map(({ id, name, rect }) => ({ id, name, width: Math.round(rect.width), height: Math.round(rect.height), right: rect.right })));
+      .map(({ id, name, rect }) => ({ id, name, width: rect.width, height: rect.height, right: rect.right })));
 
     const wide = await targets();
-    for (const id of ["action-undo-agent", "action-group"]) assert.ok(wide.some((target) => target.id === id), `${id} is measured`);
+    for (const id of measured) assert.ok(wide.some((target) => target.id === id), `${id} is measured`);
     assert.deepEqual(wide.filter(({ width, height }) => width < 24 || height < 24).map(({ name, width, height }) => `${name} ${width}x${height}`), [], "WCAG 2.5.8 target size");
 
     await page.setViewportSize({ width: 320, height: 640 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 320, "no horizontal scrolling at 320 px");
     const narrow = await targets();
-    for (const id of ["action-undo-agent", "action-group"]) {
+    const panel = await page.evaluate(() => {
+      const element = document.querySelector(".side-panel");
+      return { scroll: element.scrollWidth, client: element.clientWidth };
+    });
+    assert.ok(panel.scroll <= panel.client, `the inspector needs no sideways scrolling: ${JSON.stringify(panel)}`);
+    for (const id of measured) {
       const target = narrow.find((each) => each.id === id);
       assert.ok(target, `${id} shows at 320 px`);
       assert.ok(target.right <= 321, `${id} fits at 320 px: ${target.right}`);
