@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { normalizeReferencePack, REFERENCE_PACK_SCHEMA_VERSION, REFERENCE_PACK_LIMITS, ReferencePackValidationError } from "./reference-packs.mjs";
+import { normalizeReferencePack, REFERENCE_PACK_SCHEMA_VERSION, REFERENCE_PACK_LIMITS, ReferencePackValidationError, withoutUnsafeText } from "./reference-packs.mjs";
 
 /**
  * Offline, content-only adapter for a previously authorized design-graph snapshot.
@@ -41,10 +41,11 @@ function record(value, at) {
 }
 function title(value, fallback) {
   if (typeof value !== "string" || value.trim().length === 0) return fallback;
-  return value.trim().slice(0, 200).replace(/[\u0000-\u001f\u007f]/gu, " ").trim() || fallback;
+  return withoutUnsafeText(value.trim().slice(0, 200)).trim() || fallback;
 }
 function iso(value, field) {
-  if (typeof value !== "string") fail(field, "expected timestamp");
+  // With its zone: without one, the same export would name a different instant on each machine.
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) fail(field, "expected timestamp with a zone");
   const ms = Date.parse(value);
   if (!Number.isFinite(ms)) fail(field, "invalid timestamp");
   return new Date(ms).toISOString();
@@ -131,7 +132,8 @@ export function convertDesignGraphSnapshot(input, { ownerScope = null } = {}) {
     return { sha256: hash, mediaType: row.mediaType, byteLength: row.byteLength };
   });
   const createdAt = iso(input.exportedAt, "exportedAt");
-  const packId = scopedId("pack", String(input.packKey ?? "local-snapshot") + ":" + createdAt);
+  if (input.packKey !== undefined && typeof input.packKey !== "string") fail("packKey", "expected string");
+  const packId = scopedId("pack", (input.packKey ?? "local-snapshot") + ":" + createdAt);
   const usedSources = new Set(objects.map((entry) => entry.sourceId));
   const pack = normalizeReferencePack({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, ownerScope, createdAt,
     sources: outputSources.filter((entry) => usedSources.has(entry.id)), objects, assets: outputAssets });

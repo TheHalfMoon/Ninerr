@@ -55,7 +55,7 @@ const rejects = (value, pattern) => assert.throws(() => normalizeReferencePack(v
   return true;
 });
 
-const GOLDEN_DIGEST = "5afadffb131b45ae555d52a3336ef459f934d28fcc4ad99a33144d124f41e3d3";
+const GOLDEN_DIGEST = "fa65f7d9bda29a1b12da211fc6484ec0ee111aa0be9f91fa1154abbf426724cf";
 
 test("local reference pack normalizes deterministically and freezes nested metadata", () => {
   const input = fixture();
@@ -69,13 +69,14 @@ test("local reference pack normalizes deterministically and freezes nested metad
 });
 
 test("the digest format is pinned", () => {
-  assert.equal(referencePackDigest({ schemaVersion: 1, packId: "urn:ninerr:pack:golden", ownerScope: null, createdAt: at, sources: [], objects: [], assets: [] }), GOLDEN_DIGEST);
+  assert.equal(referencePackDigest(fixture()), GOLDEN_DIGEST, "a pack with sources, objects and assets, so their field order is pinned too");
 });
 
 test("search shows non-public objects only to the owner the pack names", () => {
   const search = (options) => searchReferencePack(fixture(), { query: "dashboard", ...options }).map((item) => item.id);
   assert.deepEqual(search({}), ["urn:ninerr:object:allowed"], "public only by default");
   assert.deepEqual(search({ ownerScope: "urn:ninerr:owner:other" }), ["urn:ninerr:object:allowed"]);
+  assert.deepEqual(search({ ownerScope: new String(OWNER) }), ["urn:ninerr:object:allowed"], "only the exact string");
   assert.equal(search({ ownerScope: OWNER }).length, 3);
   const unowned = fixture(); unowned.ownerScope = null;
   rejects(unowned, /requires an ownerScope/u);
@@ -86,14 +87,24 @@ test("search shows non-public objects only to the owner the pack names", () => {
 });
 
 test("text an agent reads back carries no direction overrides or line separators", () => {
-  for (const unsafe of ["\u202e", "\u2028", "\u200b", "\ufeff", "\u2066"]) {
+  for (const unsafe of ["\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2028", "\u2029", "\u200b", "\ufeff", "\u2066", "\u2067", "\u2068", "\u2069", "\u0085", "\u009b", "\u00ad", "\u2060", "\u2061", "\ufff9", "\u{E0041}", "\ud800"]) {
     const f = fixture(); f.objects[0].title = `a${unsafe}b`;
     rejects(f, /without controls/u);
   }
-  const f = fixture(); f.objects[0].title = "\u0645\u0631\u062d\u0628\u0627\u200c \u{1F468}\u200d\u{1F4BB}";
+  const f = fixture(); f.objects[0].title = "\u0645\u0631\u062d\u0628\u0627\u200c\u200f\u061c \u{1F468}\u200d\u{1F4BB}\ufe0f";
   assert.equal(normalizeReferencePack(f).objects[0].title, f.objects[0].title, "joiners stay");
   const long = fixture(); long[`x${"y".repeat(100_000)}\n`] = 1;
   assert.throws(() => normalizeReferencePack(long), (error) => error.message.length < 200);
+  const named = fixture(); named["a\u202eb"] = 1;
+  assert.throws(() => normalizeReferencePack(named), (error) => error.message.endsWith("unsupported field a?b"));
+});
+
+test("a pack of another version is told so before its fields are read", () => {
+  rejects({ ...fixture(), schemaVersion: 2, lineageId: "x" }, /unsupported schema/u);
+  const { ownerScope, ...older } = fixture();
+  assert.equal(ownerScope, OWNER);
+  rejects({ ...older, schemaVersion: 0 }, /unsupported schema/u);
+  rejects(null, /plain object/u);
 });
 
 test("local search is deterministic, supports kind/tag terms, and includes rights metadata", () => {

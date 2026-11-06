@@ -47,6 +47,43 @@ test("binary assets retain the stricter underlying storage-rights classification
   assert.equal(referenceReuseDecision(pack, icon.id).allowed, false);
 });
 
+test("an asset row's own classification holds: only permitted leaves it unknown", () => {
+  for (const change of [(row) => { delete row.rightsClassification; }, (row) => { row.rightsClassification = "prohibited"; }, (row) => { row.rightsClassification = "Permitted"; }]) {
+    const f = fixture();
+    f.artifacts[2].rightsClassification = "permitted";
+    change(f.assets[0]);
+    const icon = convertDesignGraphSnapshot(f).pack.objects.find((object) => object.kind === "asset");
+    assert.equal(icon.rights.status, "restricted");
+  }
+  const f = fixture();
+  f.artifacts[2].rightsClassification = "permitted";
+  f.assets[0].rightsClassification = "permitted";
+  assert.equal(convertDesignGraphSnapshot(f).pack.objects.find((object) => object.kind === "asset").rights.status, "unknown");
+});
+
+test("a title with text a pack refuses is cleaned, so one row does not abort the snapshot", () => {
+  const titled = (title) => {
+    const f = fixture();
+    f.artifacts = [{ ...f.artifacts[0], title }];
+    return convertDesignGraphSnapshot(f).pack.objects[0].title;
+  };
+  assert.equal(titled("Hello\u200bWorld"), "Hello World");
+  assert.equal(titled("a\u2028b\u202ec\u{E0041}d"), "a b c d");
+  assert.equal(titled("\u200b"), "screen", "nothing left: the fallback");
+  assert.equal(titled(`${"x".repeat(199)}\u{1F600}`).length, 199, "a cut emoji leaves no lone surrogate");
+});
+
+test("a timestamp must name its zone, and a pack key must be a string", () => {
+  for (const exportedAt of ["2026-11-06T00:00:00", "0", "Nov 6 2026"]) {
+    const f = fixture(); f.exportedAt = exportedAt;
+    assert.throws(() => convertDesignGraphSnapshot(f), /timestamp with a zone/u, exportedAt);
+  }
+  const offset = fixture(); offset.exportedAt = "2026-11-06T03:00:00+03:00";
+  assert.equal(convertDesignGraphSnapshot(offset).pack.createdAt, at);
+  const key = fixture(); key.packKey = { a: 1 };
+  assert.throws(() => convertDesignGraphSnapshot(key), /packKey/u);
+});
+
 test("private references are copied only for a named owner, and remain non-redistributable", () => {
   const owner = "urn:ninerr:owner:me";
   const { pack } = convertDesignGraphSnapshot(fixture(), { ownerScope: owner });
