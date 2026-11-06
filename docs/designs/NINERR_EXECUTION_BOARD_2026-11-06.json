@@ -1,6 +1,6 @@
 {
   "schema": "ninerr.execution-board/1",
-  "asOf": "2026-11-06",
+  "asOf": "2026-11-07",
   "repository": "TheHalfMoon/Ninerr",
   "planDocument": "docs/designs/NINERR_EXECUTION_READY_MASTER_PLAN_2026-11-06.md",
   "planStage": "ready_for_scoped_implementation",
@@ -10,7 +10,7 @@
   "mandatoryExternalInference": false,
   "agentToolchain": "OpenCode",
   "deepResearch": "DeepSeek+Craft Anything when free quota available",
-  "researchProviderAvailability": "OpenCode free DeepSeek quota exhausted; stages 08/09 pending",
+  "researchProviderAvailability": "OpenCode free DeepSeek quota exhausted; stages 08/09 completed on Pulse, whose free quota has since run out",
   "independentEGM": {
     "completed": [
       5,
@@ -67,7 +67,7 @@
       "gate": "computed styles match before and after reimport",
       "pr": 354,
       "mergeCommit": "165787c74852232e54d8fdd15a15cbc51bd1b756",
-      "evidence": "npm run check at 2f54039: 1051 tests, 1042 pass, 0 fail, 9 skipped; exact-head CI at a1f1159. Gate holds for longhand and shorthand pairs; overlapping shorthands remain: #369."
+      "evidence": "npm run check at 2f54039: 1051 tests, 1042 pass, 0 fail, 9 skipped; exact-head CI at a1f1159. Gate holds for longhand and shorthand pairs. Overlapping pairs are a founder-decided limit, reported on import: #384, d831dbf, closing #369."
     },
     {
       "id": "R03",
@@ -88,9 +88,20 @@
       "gate": "all P09 journeys pass from exact head",
       "criteria": "docs/MASTER_PLAN.md, section P09 acceptance criteria",
       "prs": [
-        374
+        374,
+        379,
+        380,
+        381,
+        384
       ],
-      "evidence": "Criterion 4 tests in draft #374. Dogfooding rerun, #235 and #369 remain."
+      "mergeCommits": {
+        "374": "752491c",
+        "379": "708236fac3d7c6e14ed6e9ed294be017e88c2428",
+        "380": "8776e55356f412ec1a94dafca0c852a3912ec364",
+        "381": "b0a18a7f2f524a70c3ce9bad104b957209c506c5",
+        "384": "d831dbf0ea7335f679638fa9487e3f9ba2cfc077"
+      },
+      "evidence": "Each PR above passed exact-head CI and post-merge CI. Gate not met: dogfooding rerun (#379, docs/evidence/P09_DOGFOODING_2026-11-06.md) passes journeys B and E on all seven projects, but journey F fails intermittently on sb-admin-2 (#377, cause inferred, not observed). Criterion 4: tests merged in #374; #376 remains. Criterion 5: style order is decided, with overlapping pairs recorded as a limit in #384 (#369 closed; #383 stays open); #235 stays open. #370 and #378 remain open. No installed-app test yet. Only CI's delegate-review spec ran on these PRs, not an Open Code Review, and Goldfish reviews wait on free Pulse quota."
     },
     {
       "id": "R04",
