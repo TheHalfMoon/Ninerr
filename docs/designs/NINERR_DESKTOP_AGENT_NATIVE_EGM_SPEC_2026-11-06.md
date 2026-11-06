@@ -97,7 +97,7 @@ This revision is an author response to 05–07, not independent review evidence.
 | Astro import/edit/write-back | PROPOSED | `.astro` is only an allowlisted file extension; no parser/patch adapter. | **Not in v1.** JSX/TSX only; Astro is a separate post-v1 grain. |
 | Agent undo/redo | SHIPPED-SCOPE, limited | Per-actor undo/redo; "Undo agent change" reverts the latest agent change; revert does not push a redo entry. | Apply → inspect → revert; **no redo of an agent revert claimed**. |
 | Offline policy and tests | SHIPPED-SCOPE, partial | Renderer requests and Chromium background requests are blocked; `tests/offline-guarantee.test.mjs` traps Node primitives; `docs/DESKTOP.md` admits main-process connections are not watched. | "Zero non-loopback" is not claimed until §7.2 proof. |
-| Skilit local reference packs | DRAFT | Draft branches `feat/local-reference-file-reader-20261106` and `test/offline-reference-packs-20261106` contain a bounded adapter; not merged or shipped. | **Not in v1.** |
+| Skilit local reference packs | DRAFT | Draft PR #365 (reference packs + source-graph adapter) and stacked PR #367 (trusted-root file reader) contain bounded local code; not merged or shipped. | **Not in v1.** |
 | Skilit Research/Lens/Assets/Design Intelligence/Build Kits | PROPOSED | No production UI, pack producer or Build Kit implementation. | **Not in v1.** |
 | P11–P16 tasks | PROPOSED | PLAN.md exists at `16f9d0f`, absent at base; PR #359 unmerged. | **Not in v1.** |
 
@@ -150,7 +150,7 @@ Keep the packaged Electron runtime and hardened local host. Record resource meas
 Ninerr's document IDs, schema, renderer, transactions and snapshot+journal remain the only editable-design truth. Skilit's PostgreSQL graph is never a second editable document owner. Post-v1 document schema 2 is additive and lazy (§9).
 
 ### ADR-D3: local intelligence storage
-Ship reference packs as a **manifest + content-addressed local files**, with stable `ninerr-ref://` identifiers, rights/confidence metadata and hashes. `ninerr-ref://` is an identifier, not a transport. No PostgreSQL, Redis, pgvector, S3/R2, hosted crawler or login. Start with bounded in-process manifest search; **no SQLite/FTS5 requirement**. If measured search need justifies an index, it is a disposable, rebuildable cache with its own ADR; canonical pack content remains readable without it.
+Ship reference packs as a **manifest + content-addressed local files**, with stable `urn:ninerr:{pack|source|object}:<id>` identifiers, rights/confidence metadata and hashes. The URN is an identity, not a network transport. No PostgreSQL, Redis, pgvector, S3/R2, hosted crawler or login. Start with bounded in-process manifest search; **no SQLite/FTS5 requirement**. If measured search need justifies an index, it is a disposable, rebuildable cache with its own ADR; canonical pack content remains readable without it.
 
 ### ADR-D4: local MCP transports (exact)
 - **v1 installed transport:** authenticated **loopback HTTP** at `127.0.0.1:<port>/mcp`, started by the app, with a bearer agent credential shown once, stored only as a hash, revocable in the app. It is long-lived per agent and may be shared if multiple clients share one agent credential. The user copies the credential into the MCP client configuration. This is the **only** v1 installed acceptance transport.
@@ -369,15 +369,45 @@ Gate rules:
 6. **S4 Build Kits:** machine-readable source-aware bundles of rights-qualified tokens, component specs, screenshots where permitted, and generation context, indexed by stable reference URNs. Local Research only; no hosted inference. Depends on S1, S3 and the rights ledger.
 7. **M4/M5:** replay representative Skilit/Ninerr workflows; verify authorized retrieval, no broken references, least privilege, offline operation and latency. Consolidation only after M4 and founder governance.
 
-### 8.2 ReferencePackV1 minimum contract
+### 8.2 ReferencePackV1 exact contract — aligned with Draft PR #365
 
-- `schema: "ninerr.reference-pack/1"`, `packId`, `createdAt`, `producer` (tool/version/source SHA).
-- `sources[]`: `sourceId`, `sourceUri`, `observedAt`, `sourceSha256`, rights object (`status`, `license`, `allowedLocal`, `allowedExport`, `allowedRedistribute`, `tenantId`, `verifiedBy`, `verifiedAt`).
-- `objects[]`: `objectId`, `kind` (`screen|flow|pattern|asset|token|component`), `sourceId`, `assetSha256`, `confidence` (`observed|documented|inferred|unknown`), `transform`, optional `preview`.
-- Identifier grammar: `ninerr-ref://<namespace>/<type>/<id>`, where `<id>` is a stable opaque ID, not a path.
-- Limits (proposed, enforced before S1 closes): max pack 512 MiB, max object 64 MiB, max 10,000 objects, max 1,000 sources, max path depth 16; rejects absolute paths, `..`, symlinks, reparse points, duplicate IDs and hash mismatch.
-- Install is atomic: stage → verify all hashes/rights → rename into the owner-chosen pack root → rollback on failure. GC removes only unreferenced, verified-installed objects and never canonical project data.
-- Search starts as a bounded in-process scan over the manifest. **No SQLite/FTS5 and no embeddings** until a measured benchmark proves need; then a separate ADR and a disposable index.
+**Canonical executable definition**: `packages/import-stack/src/reference-packs.mjs` in Draft PR #365 (stacked reader in #367). The adapter's schema is the **v1** contract. Earlier proposed `ninerr.reference-pack/1` and `ninerr-ref://` shapes were incompatible and are removed; any richer wire representation requires a separately versioned v2 ADR and migration tests. This planning document does not claim that the draft is merged.
+
+```js
+{
+  schemaVersion: 1,
+  packId: "urn:ninerr:pack:<lowercase-opaque-id>",
+  createdAt: "2026-11-06T00:00:00.000Z",
+  sources: [{
+    id: "urn:ninerr:source:<lowercase-opaque-id>",
+    uri: "urn:ninerr:source:<id>", // or HTTPS URL without query, fragment, credentials
+    observedAt: "2026-11-06T00:00:00.000Z",
+    rights: { status: "verified|restricted|unknown", license: null, redistributable: false }
+  }],
+  assets: [{
+    sha256: "<64-lowercase-hex>",
+    byteLength: 0,
+    mediaType: "image/png"
+  }],
+  objects: [{
+    id: "urn:ninerr:object:<lowercase-opaque-id>",
+    kind: "screen", // screen|flow|pattern|asset|token|component
+    title: "Reference",
+    tags: ["design"],
+    sourceId: "urn:ninerr:source:<lowercase-opaque-id>",
+    assetSha256: null, // declared SHA256 required for kind=asset
+    confidence: "documented", // observed|documented|inferred|unknown
+    visibility: "public", // public|workspace|private
+    rights: { status: "unknown", license: null, redistributable: false }
+  }]
+}
+```
+
+**Enforced limits in v1**: manifest ≤4 MiB UTF-8; ≤2,048 sources; ≤10,000 objects; ≤2,048 declared assets; one asset ≤32 MiB; aggregate assets ≤128 MiB. Strict IDs, UTC-millisecond timestamps, lower-case hashes, tag/field allowlists, uniqueness, source and asset references. Unknown fields refuse. `normalizeReferencePack` returns a frozen deterministic manifest, `referencePackDigest` hashes canonical JSON, `searchReferencePack` supports bounded local keyword/kind/tag search, `referenceReuseDecision` denies redistribution unless **both** source and object grants are verified and redistributable and object visibility is public. `verifyReferenceAssetBytes` checks the provided bytes, size and hash. The adapter's `convertDesignGraphSnapshot` accepts an **already actor-filtered**, authorized source export and never converts an upstream `permitted` classification into a verified grant. The stacked `readReferencePackFile` only reads an owner-trusted root plus allowlisted `.json` basename using existing filesystem guards; it does **not** prove full ACL/ownership or eliminate parent-directory TOCTOU.
+
+**Out-of-band policies**: A separate `RIGHTS_LEDGER.json` maintains verifier, evidence location, source grant and tenant/workspace proof, **never** impersonating fields already in the v1 wire schema. The source exporter MUST enforce tenant/workspace ACL **before** conversion; the packaged importer scopes packs to the current explicitly authorized local project, and an MCP caller NEVER supplies unrestricted filesystem paths. Build Kits are derived only from rights-approved source/object hashes. Additional metadata, `ninerr-ref://` aliases, larger pack formats, atomic multi-asset installation and ACL metadata are **proposed v2 features** and require a formal ADR, migration and negative tests. v1 manifest validation does not itself install or redistribute assets.
+
+**Acceptance**: exact-head tests in `tests/reference-packs.test.mjs`, `tests/design-graph-reference-adapter.test.mjs` and `tests/reference-pack-file.test.mjs`, plus host-level owner/ACL and realpath race tests, project authorization, UI/MCP equivalence, offline packaged tests and rights ledger checks before any user-facing claim. Both draft PRs remain unmerged until these gates pass.
 
 ### 8.3 Capability mapping
 
@@ -433,7 +463,7 @@ New proposed budgets (unmeasured until their workload exists; phase cannot close
 | Dry run | ≤1.2× the same edit's commit time |
 | `outline` | ≤200 ms p95 at 50,000 layers |
 | Proposal preview | ≤100 ms to draw 200 operations |
-| Pack install/verify | ≤10 s for 1,000 objects / 512 MiB on the reference machine |
+| Pack install/verify | ≤10 s for a 1,000-object ≤4 MiB manifest on the reference machine; asset verification separately benchmarked at the actual 128 MiB aggregate limit |
 | Local pack search | ≤100 ms p95 at 1,000 objects |
 | Pack reopen | ≤2 s at 1,000 objects |
 | v2 reopen | ≤1.25× the same v1 layer-count baseline |
