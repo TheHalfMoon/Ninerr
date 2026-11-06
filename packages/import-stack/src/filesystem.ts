@@ -1,13 +1,14 @@
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ImportConflictError, ImportSecurityError, ImportValidationError } from "./errors.ts";
 import { sha256Text } from "./validation.ts";
 
 export async function canonicalDirectory(path: string, label: string, create = false): Promise<string> {
   if (typeof path !== "string" || path.trim() === "") throw new ImportValidationError(`${label} must be a non-empty path`);
   if (create) await mkdir(path, { recursive: true });
-  const info = await lstat(path);
+  // Resolved first: on POSIX `link/` and `link/.` name the target, so lstat would pass them.
+  const info = await lstat(resolve(path));
   if (info.isSymbolicLink() || !info.isDirectory()) throw new ImportSecurityError(`${label} must be a regular non-symlink directory`);
   return await realpath(path);
 }

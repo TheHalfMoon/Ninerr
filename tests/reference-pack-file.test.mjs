@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { link, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import {
   ImportSecurityError,
@@ -37,6 +37,7 @@ const object = (index, overrides = {}) => ({
 const fixture = (count = 2) => ({
   schemaVersion: 1,
   packId: "urn:ninerr:pack:file-reader",
+  ownerScope: null,
   createdAt: AT,
   sources: [source()],
   assets: [],
@@ -183,8 +184,41 @@ test("a missing file in an allowed root is reported, not guessed", async () => {
   await withEmptyRoot(async ({ root }) => {
     await assert.rejects(
       () => readReferencePackFile({ directory: root, fileName: "absent.json" }),
-      (error) => error?.code === "ENOENT",
+      (error) => {
+        assert.ok(error instanceof ImportValidationError);
+        assert.match(error.message, /could not be read \(ENOENT\)/u);
+        assert.ok(!error.message.includes(root), "the absolute path is not echoed back");
+        return true;
+      },
     );
+  });
+});
+
+test("a directory must be an absolute local path", async () => {
+  await withPack(async ({ root }) => {
+    const refused = [".", "root", "", ...(process.platform === "win32"
+      ? ["\\\\localhost\\C$\\x", "\\\\127.0.0.1\\C$\\x", "\\\\?\\UNC\\localhost\\C$\\x", "\\\\?\\C:\\x", "\\\\.\\C:\\x", "//localhost/C$/x", "C:", "C:x"]
+      : [])];
+    for (const directory of refused) {
+      await assert.rejects(() => readReferencePackFile({ directory, fileName: "pack.json" }), ImportSecurityError, directory);
+    }
+    assert.equal((await readReferencePackFile({ directory: root, fileName: "pack.json" })).fileName, "pack.json");
+  });
+});
+
+test("a junction or link named with a trailing separator is still refused", async (t) => {
+  await withPack(async ({ dir, root }) => {
+    const linked = join(dir, "linked-root");
+    try {
+      // A junction needs no privilege on Windows, so this runs where symlinks skip.
+      await symlink(root, linked, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if (await skipIfUnsupported(t, error, "directory link")) return;
+      throw error;
+    }
+    for (const directory of [linked, `${linked}${sep}`, `${linked}${sep}.`]) {
+      await assert.rejects(() => readReferencePackFile({ directory, fileName: "pack.json" }), ImportSecurityError, directory);
+    }
   });
 });
 
@@ -307,7 +341,7 @@ test("the trusted root must be a real directory", async () => {
     );
     await assert.rejects(
       () => readReferencePackFile({ directory: "", fileName: "pack.json" }),
-      ImportValidationError,
+      ImportSecurityError,
     );
   });
 });
