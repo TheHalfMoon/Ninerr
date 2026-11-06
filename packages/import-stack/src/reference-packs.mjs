@@ -163,8 +163,13 @@ function object(value, index) {
   });
 }
 
+// Manifests this module made. They are deeply frozen, so a search or a decision on one need not
+// read the whole pack again.
+const NORMALIZED = new WeakSet();
+
 /** Validate untrusted JSON input; return a canonical, frozen manifest. No IO or network. */
 export function normalizeReferencePack(value) {
+  if (value !== null && typeof value === "object" && NORMALIZED.has(value)) return value;
   try {
     if (Buffer.byteLength(JSON.stringify(value), "utf8") > REFERENCE_PACK_LIMITS.maxManifestBytes) {
       fail("manifest", "exceeds size limit");
@@ -193,8 +198,10 @@ export function normalizeReferencePack(value) {
     if (entry.visibility !== "public" && ownerScope === null) fail(entry.id, "a non-public object requires an ownerScope");
     if (entry.assetSha256 !== null && !assetIds.has(entry.assetSha256)) fail(entry.id, "missing asset manifest entry");
   }
-  return Object.freeze({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, ownerScope, createdAt,
+  const manifest = Object.freeze({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, ownerScope, createdAt,
     sources: Object.freeze(sources), objects: Object.freeze(objects), assets: Object.freeze(assets) });
+  NORMALIZED.add(manifest);
+  return manifest;
 }
 
 export function referencePackDigest(value) {

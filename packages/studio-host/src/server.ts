@@ -12,6 +12,7 @@ import { exportJsx, importJsx } from "./code.ts";
 import { CodebaseLinks, assertFolder, bringIn, keptFields, planWriteBack, removeTemporary, resolveWithFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 import { ImportDesk, MAX_IMPORT_HTML_BYTES } from "./imports.ts";
 import { ConfirmationBroker, handleMcpMessage } from "./mcp.ts";
+import { ReferenceCatalog } from "./reference-catalog.ts";
 import { claimProjectsFolder } from "./folder-lock.ts";
 import { listenOnBrowserPort } from "./ports.ts";
 import { StudioSession, assertProjectName, lockLeftBy, type ChangeEvent, type StudioActor } from "./session.ts";
@@ -45,6 +46,26 @@ export interface StudioHost {
 }
 
 const LOOPBACK = "127.0.0.1";
+/** A reference id from its path: refused as absent when it cannot be read. */
+function referenceIdOf(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname.slice("/api/references/".length));
+  } catch {
+    throw new StudioError(404, "reference-not-found", "no such reference in this project");
+  }
+}
+
+/** A reference search from a query string. A limit that is no whole number stays invalid for the search to refuse. */
+function referenceSearchOf(params: URLSearchParams): { query?: string; kinds?: string[]; limit?: number } {
+  const limit = params.get("limit");
+  const kinds = params.get("kinds");
+  return {
+    ...(params.has("query") ? { query: params.get("query") as string } : {}),
+    ...(kinds === null ? {} : { kinds: kinds.split(",") }),
+    ...(limit === null ? {} : { limit: /^\d{1,6}$/u.test(limit) ? Number(limit) : Number.NaN }),
+  };
+}
+
 const MAX_BODY_BYTES = 1024 * 1024;
 const HEARTBEAT_MS = 15_000;
 const MAX_STREAMS = 32;
@@ -119,6 +140,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
   };
   // What the person has selected in the editor, for MCP's selection.
   let selection: string[] = [];
+  const references = new ReferenceCatalog();
   // The project each agent last connected to or read (#260).
   const agentLastRead = new Map<string, string>();
   let session: StudioSession | null = null;
@@ -210,6 +232,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     "POST /api/codebase/preview",
     "POST /api/codebase/write",
     "POST /api/codebase/resolve",
+    "POST /api/references/load",
   ]);
   const assertMadeForOpenProject = (request: IncomingMessage): void => {
     const header = request.headers["x-ninerr-project"];
@@ -304,6 +327,19 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     },
     // A connected codebase (PC11): only the person, through the editor's session, ever
     // connects one, brings a component in from it, or writes back to it.
+    // The open project's reference catalog (M03). Only the owner names a directory.
+    "POST /api/references/load": (body) => {
+      const current = requireSession();
+      return references.load(current, () => session === current, body?.directory, body?.fileName);
+    },
+    "GET /api/references": (params) => {
+      const current = requireSession();
+      return references.search(current, current.name, params);
+    },
+    "GET /api/references/:id": (params) => {
+      const current = requireSession();
+      return references.get(current, current.name, params.id);
+    },
     "GET /api/codebase": () => {
       const current = requireSession();
       const folder = codebases.get(current.name);
@@ -429,14 +465,17 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       openStream(response);
       return;
     }
-    const key = `${request.method} ${url.pathname}`;
+    const reference = request.method === "GET" && url.pathname.startsWith("/api/references/");
+    const key = reference ? "GET /api/references/:id" : `${request.method} ${url.pathname}`;
     const route = routes[key];
     if (route === undefined) throw new StudioError(404, "not-found", "not found");
     // An HTML import may be larger than other requests (the import stack's own limit).
     // JSON escaping can make HTML up to six times larger (control characters as \uXXXX).
-    const body = request.method === "POST" ? await readJson(request, url.pathname === "/api/import" ? MAX_IMPORT_HTML_BYTES * 6 + 64 * 1024 : MAX_BODY_BYTES) : undefined;
+    let body = request.method === "POST" ? await readJson(request, url.pathname === "/api/import" ? MAX_IMPORT_HTML_BYTES * 6 + 64 * 1024 : MAX_BODY_BYTES) : undefined;
+    if (reference) body = { id: referenceIdOf(url.pathname) };
+    else if (key === "GET /api/references") body = referenceSearchOf(url.searchParams);
     if (PROJECT_SCOPED.has(key)) assertMadeForOpenProject(request);
-    respondJson(response, 200, route(body));
+    respondJson(response, 200, await route(body));
   }
 
   // MCP over Streamable HTTP, request/response only: no server-initiated stream (GET), no
