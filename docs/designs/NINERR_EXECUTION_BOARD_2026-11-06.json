@@ -98,7 +98,7 @@
       "owner": "network-policy/desktop",
       "tests": [
         "tests/offline-guarantee.test.mjs",
-        "tests/main-process-egress.test.mjs (new) (new)",
+        "tests/main-process-egress.test.mjs (new)",
         "packaged OS packet sink negative control (new)"
       ],
       "gate": "external packets blocked for all processes, loopback works"
