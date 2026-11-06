@@ -18,6 +18,7 @@ import { StudioError } from "./errors.ts";
 interface Loaded {
   session: object;
   fileName: string;
+  /** The digest of the public view, so it can differ from the digest of the pack's file. */
   packDigest: string;
   view: any;
   objects: Map<string, any>;
@@ -61,7 +62,8 @@ function publicView(pack: any) {
 
 export class ReferenceCatalog {
   #loaded: Loaded | null = null;
-  #latestLoad = 0;
+  #lastAsked = 0;
+  #landed = 0;
 
   /** The loaded pack, if it was read for this very session: a later one never sees it. */
   #current(session: object): Loaded | null {
@@ -72,16 +74,17 @@ export class ReferenceCatalog {
   /** Forget the pack, when its project closes. A read still under way will not land. */
   revoke(): void {
     this.#loaded = null;
-    this.#latestLoad += 1;
+    this.#landed = ++this.#lastAsked;
   }
 
   /**
    * Read one pack from a directory the owner chose, in place of any before. This is the owner's
    * route alone: no agent names a directory. `isOpen` asks whether the session is still the open
-   * one, since the project can change during the read. Of two reads, the one asked for last wins.
+   * one, since the project can change during the read. Of two reads that succeed, the one asked
+   * for last wins; one that is refused takes nothing from a read under way.
    */
   async load(session: object, isOpen: () => boolean, directory: unknown, fileName: unknown) {
-    const thisLoad = ++this.#latestLoad;
+    const thisLoad = ++this.#lastAsked;
     let read: any;
     try {
       read = await readReferencePackFile({ directory: directory as string, fileName: fileName as string });
@@ -90,7 +93,8 @@ export class ReferenceCatalog {
       throw error;
     }
     if (!isOpen()) throw new StudioError(409, "project-changed", "the project changed while the pack was being read");
-    if (thisLoad !== this.#latestLoad) throw new StudioError(409, "reference-load-superseded", "a later read took the place of this one");
+    if (thisLoad < this.#landed) throw new StudioError(409, "reference-load-superseded", "a later read took the place of this one");
+    this.#landed = thisLoad;
     const view = publicView(read.pack);
     const packDigest = referencePackDigest(view);
     this.#loaded = {
