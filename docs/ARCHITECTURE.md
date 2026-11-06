@@ -66,6 +66,8 @@ Minimum concepts:
 
 Node mutations occur only through transactions. Transactions are the common unit for undo/redo, collaboration, agent attribution, visual history, and audit.
 
+An element's own text has two shapes, and both mean the same words (#235, decided in P09). Code import keeps an element's only text in the element's own `text`. HTML import gives the element a bare text layer of its own: a text layer with no tag, attributes or style. Mixed content, text between elements, is always held in text layers. A `{…}` part of imported code is code, not words, so a layer bound to one is never an element's words. `textLayerOf` in the document model names the layer that holds an element's words; agents' layer summaries show those words too. The inspector's Text field and an agent's `set_text` edit that layer, and code export folds a bare text layer into its parent, so both shapes edit, draw and export alike.
+
 ## Rendering contract
 
 The renderer consumes the canonical graph and produces web semantics. The model stores intent; the renderer decides concrete DOM/CSS representation.
@@ -75,7 +77,8 @@ Rules:
 - no renderer-only state that cannot be serialized;
 - explicit sandbox boundary for imported or generated markup;
 - deterministic layout test fixtures;
-- browser-engine differences documented where exact parity is impossible.
+- browser-engine differences documented where exact parity is impossible;
+- a style's shorthand applies before its own longhands, so a longhand always refines its shorthand, whatever order the entries are stored in (#294, decided in P09). Examples: `margin` before `margin-left`, `inset` before `top`, `gap` before `row-gap`. The canvas, code export and code write-back all take this order from the renderer, and every other entry keeps its place. Two exceptions follow CSS. A declaration marked `!important` wins over plain ones whatever their order, also where shorthands overlap (`border-top` and `border-color`). A logical side and a physical side, such as `inset-block` and `top`, are not paired, since the writing mode decides which side is which; a physical shorthand is refined by its logical parts (`margin-inline` after `margin`), each of which sets a subset of it.
 
 ## Code synchronization
 
