@@ -176,7 +176,7 @@
     {
       "id": "M04",
       "title": "Add read-only MCP search/read reference tools",
-      "status": "merged_post_merge_ci_pending",
+      "status": "merged",
       "deps": [
         "M03"
       ],
@@ -187,7 +187,7 @@
       "gate": "GUI/MCP metadata parity, no unauthorized paths",
       "pr": 372,
       "mergeCommit": "5623fe71de8051abbca0a9e2386db3ce0269bfe3",
-      "evidence": "Exact-head CI at 9fa4a9e. Local endpoint only; packaged stdio helper is W03."
+      "evidence": "Exact-head CI at 9fa4a9e; post-merge CI success. Local endpoint only; packaged stdio helper is W03."
     },
     {
       "id": "M05",
