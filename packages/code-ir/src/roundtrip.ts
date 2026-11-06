@@ -11,7 +11,7 @@ import { canonicalCodeIrStringify, normalizeCodeIr, normalizeDesignDoc, sha256Te
 // that survives both exactly is written raw (with & < > { } as entities). Anything else
 // (edge spaces, tabs, line breaks) is written as a string literal child, which is exact.
 function emitText(text: string): string {
-  if (text !== "" && !/[\t\n\r]/u.test(text) && !text.startsWith(" ") && !text.endsWith(" ")) {
+  if (text !== "" && !/[\t\n\r]/u.test(text) && !/^\s|\s$/u.test(text)) {
     return text.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;").replace(/\{/gu, "&#123;").replace(/\}/gu, "&#125;");
   }
   return `{${JSON.stringify(text)}}`;
@@ -23,21 +23,29 @@ function emitAttrValue(value: string): string {
   return /["&]/u.test(value) ? `{${JSON.stringify(value)}}` : `"${value}"`;
 }
 
-// A {…} part is written exactly as its source has it, so it must be one JSX child and nothing
-// else: source that closes the element around it is refused here, never written.
-function emitExpression(code: string): string {
-  const open = "<>";
+/**
+ * What the canvas shows for a {…} part's exact source. The part is written exactly as its source
+ * has it, so it must be one JSX child, valid in the plain function export writes, and nothing
+ * else: source that closes the element around it, or uses await, is refused here, never written.
+ */
+export function expressionShown(code: string): string {
+  const open = "function part() { return <>";
   let ir: CodeIr;
   try {
-    ir = buildCodeIr([{ path: "Part.tsx", content: `${open}${code}</>` }]);
+    ir = buildCodeIr([{ path: "Part.tsx", content: `${open}${code}</>; }` }]);
   } catch {
-    throw new CodeIrValidationError("a {…} part of this design is not valid code");
+    throw new CodeIrValidationError("a {…} part of this design is not valid code in a plain function");
   }
   const root = ir.rootIds.length === 1 ? ir.symbols[ir.rootIds[0]] : undefined;
   const part = root?.kind === "fragment" && root.children.length === 1 && root.texts.length === 0 ? ir.symbols[root.children[0]] : undefined;
   if (part?.kind !== "expression" || part.range.startOffset !== open.length || part.range.endOffset !== open.length + code.length) {
     throw new CodeIrValidationError("a {…} part of this design is not one JSX child");
   }
+  return `{${part.code}}`;
+}
+
+function emitExpression(code: string): string {
+  expressionShown(code);
   return code;
 }
 

@@ -180,7 +180,7 @@ const TOOLS: Tool[] = [
   {
     name: "layer_code",
     title: "Layer as JSX",
-    description: "A layer and everything inside it as a JSX function component, exactly as the canvas renders it (through code-ir).",
+    description: "A layer and everything inside it as a JSX function component (through code-ir), with the tags, attributes and style the canvas renders. codeParts counts {…} parts copied exactly from the source this design was brought in from: they are not sanitized, and the names they use must exist where the code runs.",
     inputSchema: object({ nodeId: { type: "string" } }, ["nodeId"]),
     run: ({ session }, args) => {
       try {

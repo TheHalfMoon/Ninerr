@@ -504,7 +504,7 @@ async function openCodeDialog() {
     const exportPart = exported === null
       ? el("p", {}, exportError ?? "Select one layer to see it as code.")
       : [
-        el("p", { id: "code-export-note" }, `The selected layer (${exported.layers} layer${exported.layers === 1 ? "" : "s"}) as the JSX component ${exported.componentName}, exactly as the canvas draws it.`),
+        el("p", { id: "code-export-note" }, `The selected layer (${exported.layers} layer${exported.layers === 1 ? "" : "s"}) as the JSX component ${exported.componentName}, as the canvas draws it.${exported.codeParts > 0 ? ` ${exported.codeParts} {…} part${exported.codeParts === 1 ? " is" : "s are"} code copied exactly from this design's source: not checked or sanitized, and using names that must exist where you run it. Review before running.` : ""}`),
         el("label", { for: "code-export" }, "JSX", output),
         el("div", { class: "actions" }, el("button", { type: "button", onclick: async () => {
           try {
