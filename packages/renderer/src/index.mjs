@@ -322,20 +322,37 @@ function hasShorthandIn(name, present) {
 export function shorthandsFirst(style) {
   const names = Object.keys(style);
   // Most styles have no shorthand with its own longhand: they are returned as they are.
-  const present = new Set(names);
+  const present = new Map(names.map((name, index) => [name, index]));
   if (!names.some((name) => hasShorthandIn(name, present))) return style;
-  for (const name of [...names]) {
-    const at = names.indexOf(name);
-    let last = -1;
-    names.forEach((other, index) => {
-      if (isLonghandOf(name, other)) last = index;
-    });
-    if (last > at) {
-      names.splice(at, 1);
-      names.splice(last, 0, name);
+  // Linear in the entries (a style can hold thousands): each longhand waits for its shorthands,
+  // and goes out where it stands if they have gone, or just after the last of them.
+  const waiting = names.map((name) => shorthandsIn(name, present));
+  const released = names.map(() => []);
+  waiting.forEach((shorthands, index) => shorthands.forEach((shorthand) => released[shorthand].push(index)));
+  const left = waiting.map((shorthands) => shorthands.length);
+  const ordered = [];
+  const done = names.map(() => false);
+  let walked = 0;
+  const emit = (index) => {
+    done[index] = true;
+    ordered.push(names[index]);
+    for (const next of released[index]) {
+      left[next] -= 1;
+      if (left[next] === 0 && next < walked && !done[next]) emit(next);
     }
-  }
-  return Object.fromEntries(names.map((name) => [name, style[name]]));
+  };
+  for (; walked < names.length; walked += 1) if (left[walked] === 0 && !done[walked]) emit(walked);
+  return Object.fromEntries(ordered.map((name) => [name, style[name]]));
+}
+
+/** The positions of `name`'s shorthands in `present` (name → position), the same test as isLonghandOf. */
+function shorthandsIn(name, present) {
+  if (name.startsWith("--")) return [];
+  const found = new Set();
+  for (let at = name.indexOf("-", 1); at > 0; at = name.indexOf("-", at + 1)) if (present.has(name.slice(0, at))) found.add(present.get(name.slice(0, at)));
+  for (const [shorthand, pattern] of Object.entries(LONGHANDS)) if (present.has(shorthand) && pattern.test(name)) found.add(present.get(shorthand));
+  found.delete(present.get(name));
+  return [...found];
 }
 
 // What each shorthand resets, per the CSS specifications. A name it merely starts with is not
@@ -348,14 +365,17 @@ const RESETS = Object.freeze({
   inset: /^(?:top|right|bottom|left|inset-(?:block|inline)(?:-start|-end)?)$/u,
   border: new RegExp(`^border-(?:${SIDE}(?:-(?:color|style|width))?|color|style|width|image(?:-(?:source|slice|width|outset|repeat))?)$`, "u"),
   ...Object.fromEntries(["top", "right", "bottom", "left", "block-start", "block-end", "inline-start", "inline-end"].map((side) => [`border-${side}`, new RegExp(`^border-${side}-(?:color|style|width)$`, "u")])),
-  "border-block": /^border-block(?:-start|-end)?-(?:color|style|width)$/u,
-  "border-inline": /^border-inline(?:-start|-end)?-(?:color|style|width)$/u,
+  "border-block": /^border-block-(?:(?:start|end)(?:-(?:color|style|width))?|color|style|width)$/u,
+  "border-inline": /^border-inline-(?:(?:start|end)(?:-(?:color|style|width))?|color|style|width)$/u,
   ...Object.fromEntries(["color", "style", "width"].flatMap((part) => [`border-${part}`, `border-block-${part}`, `border-inline-${part}`].map((name) => [name, LONGHANDS[name]]))),
   "border-radius": LONGHANDS["border-radius"],
   "border-image": /^border-image-(?:source|slice|width|outset|repeat)$/u,
   outline: /^outline-(?:color|style|width)$/u,
   background: /^background-(?:color|image|position(?:-x|-y)?|size|repeat(?:-x|-y)?|attachment|origin|clip)$/u,
+  "background-position": /^background-position-[xy]$/u,
   font: /^(?:font-(?:style|variant|variant-[a-z-]+|weight|stretch|size|family|size-adjust|kerning|feature-settings|language-override|variation-settings|optical-sizing)|line-height)$/u,
+  "font-variant": /^font-variant-[a-z-]+$/u,
+  "font-synthesis": /^font-synthesis-(?:small-caps|style|weight)$/u,
   flex: /^flex-(?:grow|shrink|basis)$/u,
   "flex-flow": LONGHANDS["flex-flow"],
   grid: /^grid-(?:template(?:-(?:rows|columns|areas))?|auto-(?:rows|columns|flow))$/u,
@@ -369,12 +389,26 @@ const RESETS = Object.freeze({
   "place-content": LONGHANDS["place-content"],
   "place-self": LONGHANDS["place-self"],
   columns: LONGHANDS.columns,
+  "column-rule": /^column-rule-(?:color|style|width)$/u,
+  container: /^container-(?:name|type)$/u,
+  marker: /^marker-(?:start|mid|end)$/u,
+  offset: /^offset-(?:anchor|distance|path|position|rotate)$/u,
+  "overscroll-behavior": /^overscroll-behavior-[xy]$/u,
+  "position-try": /^position-try-(?:fallbacks|order)$/u,
+  "scroll-timeline": /^scroll-timeline-(?:axis|name)$/u,
+  "view-timeline": /^view-timeline-(?:axis|inset|name)$/u,
+  "text-box": /^text-box-(?:edge|trim)$/u,
+  "text-emphasis": /^text-emphasis-(?:color|style)$/u,
+  "text-wrap": /^text-wrap-(?:mode|style)$/u,
+  "white-space": /^white-space-collapse$/u,
   "text-decoration": /^text-decoration-(?:line|style|color|thickness)$/u,
   "list-style": /^list-style-(?:type|position|image)$/u,
   overflow: /^overflow-[xy]$/u,
   transition: /^transition-(?:property|duration|timing-function|delay|behavior)$/u,
-  animation: /^animation-(?:name|duration|timing-function|delay|iteration-count|direction|fill-mode|play-state)$/u,
+  animation: /^animation-(?:name|duration|timing-function|delay|iteration-count|direction|fill-mode|play-state|timeline|range(?:-start|-end)?)$/u,
+  "animation-range": /^animation-range-(?:start|end)$/u,
   mask: /^mask-(?:image|mode|repeat|position|clip|origin|size|composite)$/u,
+  "-webkit-mask-box-image": /^-webkit-mask-box-image-(?:outset|repeat|slice|source|width)$/u,
 });
 
 /**
@@ -401,7 +435,8 @@ export function withoutOverriddenLonghands(style) {
 
 /** Whether a declaration's value is !important, whatever comments follow it. */
 export function isImportant(value) {
-  return /!\s*important\s*(?:\/\*.*?\*\/\s*)*$/isu.test(value);
+  // A comment's body cannot run past its own end, so this takes linear time per candidate.
+  return /!\s*important\s*(?:\/\*(?:[^*]|\*(?!\/))*\*\/\s*)*$/iu.test(value);
 }
 
 function sanitizeAttribute(tag, namespace, name, rawValue) {

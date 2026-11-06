@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, rendered, waitRevision, reloadEditor } from "./support/editor.mjs";
 import { hostPool, ok } from "./support/host-api.mjs";
-import { isLonghandOf, planElement, shorthandsFirst, withoutOverriddenLonghands } from "../packages/renderer/src/index.mjs";
+import { isImportant, isLonghandOf, planElement, shorthandsFirst, withoutOverriddenLonghands } from "../packages/renderer/src/index.mjs";
 import { exportJsx, importJsx } from "../packages/studio-host/src/code.ts";
 import { importedStyle } from "../packages/studio-host/src/imports.ts";
 
@@ -99,6 +99,10 @@ test("a style's shorthands come before their longhands, and nothing else moves",
   assert.equal(isLonghandOf("bottom", "inset-block"), false);
   assert.equal(isLonghandOf("margin-left", "margin-inline"), false);
   assert.deepEqual(Object.keys(shorthandsFirst({ "margin-inline": "5px", margin: "0px" })), ["margin", "margin-inline"]);
+  // A longhand already after its shorthand stays where it stands.
+  assert.deepEqual(Object.keys(shorthandsFirst({ margin: "0px", color: "red", "margin-left": "1px" })), ["margin", "color", "margin-left"]);
+  // One waits for the last of its shorthands, wherever they stand.
+  assert.deepEqual(Object.keys(shorthandsFirst({ "border-top-color": "red", color: "red", "border-top": "1px solid", border: "0" })), ["color", "border", "border-top", "border-top-color"]);
   // Vendor-prefixed shorthands pair with their own longhands.
   assert.deepEqual(Object.keys(shorthandsFirst({ "-webkit-mask-image": "none", "-webkit-mask": "none" })), ["-webkit-mask", "-webkit-mask-image"]);
   // Unrelated names, and custom properties, keep their order.
@@ -159,6 +163,16 @@ test("a longhand a later shorthand overrides does not come into the layer", () =
   const started = performance.now();
   assert.equal(Object.keys(style(`${many}; margin: 0px`)).length, 20_001);
   assert.ok(performance.now() - started < 5_000, "a style's size does not stall the host");
+  // Real pairs too, through the order the canvas applies them.
+  const pairs = Object.fromEntries(Array.from({ length: 20_000 }, (_, index) => [`margin-a${index}`, "1px"]));
+  const ordering = performance.now();
+  assert.equal(Object.keys(shorthandsFirst({ ...pairs, margin: "0px" }))[0], "margin");
+  assert.ok(performance.now() - ordering < 5_000, "ordering a large style does not stall the host");
+  // A long run of comments after a value must not take exponential time to read.
+  const comments = performance.now();
+  assert.equal(isImportant(`red !important${"/**/".repeat(490)}x`), false);
+  assert.equal(isImportant(`red !important${"/**/".repeat(490)}`), true);
+  assert.ok(performance.now() - comments < 1_000, "reading !important takes no exponential time");
   // Overlapping shorthands and unrelated names stay: neither is the other's longhand.
   assert.deepEqual(Object.keys(style("border-color: red; border-top: 1px solid")), ["border-color", "border-top"]);
   assert.deepEqual(Object.keys(style("--margin-left: 1px; --margin: 2px")), ["--margin-left", "--margin"]);
@@ -175,8 +189,12 @@ test("a longhand a later shorthand overrides does not come into the layer", () =
     const written = `${name}: initial; ${shorthand}: inherit`;
     assert.deepEqual(Object.keys(style(written)), [name, shorthand], written);
   }
-  // And one it does reset goes, as far down as it reaches.
+  // And one it does reset goes, as far down as it reaches. Kept, it would win: the store's
+  // sorted order puts a longhand after a shorthand its name starts with.
   for (const [name, shorthand] of [
+    ["border-block-start", "border-block"], ["background-position-x", "background-position"], ["font-variant-caps", "font-variant"],
+    ["column-rule-width", "column-rule"], ["overscroll-behavior-x", "overscroll-behavior"], ["text-emphasis-color", "text-emphasis"],
+    ["white-space-collapse", "white-space"], ["text-wrap-mode", "text-wrap"], ["animation-timeline", "animation"], ["offset-path", "offset"],
     ["flex-grow", "flex"], ["border-top-color", "border"], ["border-top-color", "border-top"], ["border-top", "border"], ["border-image-source", "border"],
     ["border-top-left-radius", "border-radius"], ["grid-template-rows", "grid"], ["grid-row-start", "grid-area"], ["grid-row-start", "grid-row"],
     ["overflow-x", "overflow"], ["background-position-x", "background"], ["line-height", "font"], ["font-size", "font"],
@@ -203,12 +221,15 @@ test("what a style draws is the same as written, on the canvas, and after export
     "margin: 1px; margin-left: 5px; margin: 2px",
     "margin-left: 5px !important; margin: 0px",
     "column-gap: 1px; gap: 2px",
+    "border-block-start: 1px solid rgb(1, 2, 3); border-block: 2px solid rgb(4, 5, 6)",
+    "background-position-x: 5px; background-position: 0px 0px",
+    "font-variant-caps: small-caps; font-variant: normal",
     "display: flex; flex-direction: column; flex: 1",
     "border-radius: 8px; border: 1px solid rgb(1, 2, 3)",
     "outline-offset: 3px; outline: 1px solid rgb(1, 2, 3)",
     "border-top-color: rgb(1, 2, 3); border: 1px solid rgb(4, 5, 6)",
   ];
-  const properties = ["position", "top", "bottom", "margin-left", "margin-top", "column-gap", "row-gap", "border-top-color", "border-left-color", "flex-direction", "flex-grow", "border-top-left-radius", "outline-offset"];
+  const properties = ["position", "top", "bottom", "margin-left", "margin-top", "column-gap", "row-gap", "border-top-color", "border-left-color", "flex-direction", "flex-grow", "border-top-left-radius", "outline-offset", "border-top-width", "background-position-x", "font-variant-caps"];
   // A probe beside the layer, in the canvas's own document, with the style as written.
   const computed = (css) => editor.page.evaluate(([style, names]) => {
     const canvas = document.querySelector("iframe").contentDocument;
