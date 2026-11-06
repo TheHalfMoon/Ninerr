@@ -6,7 +6,7 @@
 
 import { mountCanvas, insertNode, removeNodes, setStyle, setText } from "/packages/canvas/src/index.mjs";
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
-import { textLayerOf } from "/packages/document-model/src/index.mjs";
+import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -1746,7 +1746,8 @@ function renderInspector() {
   children.push(classesField);
   // An element's own words, wherever they are held (#235).
   const textId = textLayerOf(doc, node.id);
-  if (textId !== null) children.push(field("text", "Text", typeof doc.nodes[textId].props?.text === "string" ? doc.nodes[textId].props.text : "", true));
+  // A {…} part of imported code is code, not words: it has no Text field (#370).
+  if (textId !== null && !isCodePart(doc.nodes[textId])) children.push(field("text", "Text", typeof doc.nodes[textId].props?.text === "string" ? doc.nodes[textId].props.text : "", true));
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.

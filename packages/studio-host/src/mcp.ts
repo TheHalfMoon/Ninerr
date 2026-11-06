@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
-import { textLayerOf } from "@ninerr/document-model";
+import { isCodePart, textLayerOf } from "@ninerr/document-model";
 import { exportJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
@@ -228,6 +228,7 @@ const TOOLS: Tool[] = [
         "Every edit you make is one history transaction attributed to you; the person sees it live on the canvas and can undo it.",
         "Read with project_info, layer_tree, layer_children, layer_details, find_layers and selection; layer_code gives a layer as JSX.",
         "Edit with create_frame, set_text, rename_layers, set_styles, move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
+        "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
       ].join("\n"),
@@ -260,11 +261,17 @@ const TOOLS: Tool[] = [
   {
     name: "set_text",
     title: "Set text",
-    description: "Replace a layer's text. For an element whose only content is a text layer, that layer's text.",
+    description: "Replace a layer's text. For an element whose only content is a text layer, that layer's text. A layer that shows {…} code from its source is refused.",
     inputSchema: object({ nodeId: { type: "string" }, text: { type: "string", maxLength: 100000 } }, ["nodeId", "text"]),
     run: ({ session, edit }, args) => {
       const node = nodeOf(session, args.nodeId);
       if (typeof args.text !== "string") throw new ToolError("text must be a string");
+      // A {…} part is code: its text is only what the canvas shows of it (#370). Text set on an
+      // element holding one would sit beside the code, and never reach the source.
+      const nodes = (session.document as any).nodes;
+      if (isCodePart(node) || node.children.some((id: string) => isCodePart(nodes[id]))) {
+        throw new ToolError("this layer shows {…} code from its source, so its text cannot be set here; change it in the code. Its style, name and position can still change.");
+      }
       // The words a person sees: an element's own text, or its only text layer's (#235).
       const target = textLayerOf(session.document, node.id) ?? node.id;
       return edit([{ type: "set-props", nodeId: target, set: { text: args.text } }], "Set text");

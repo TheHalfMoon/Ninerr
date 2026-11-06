@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { textLayerOf } from "../packages/document-model/src/index.mjs";
+import { isCodePart, textLayerOf } from "../packages/document-model/src/index.mjs";
 import { exportJsx } from "../packages/studio-host/src/code.ts";
 import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
@@ -107,5 +107,98 @@ test("the inspector's Text field edits an HTML-imported paragraph's words", brow
   const drawn = await page.evaluate((id) => document.querySelector("iframe").contentDocument.querySelector(`[data-ninerr-id="${id}"]`).textContent, words.parentId);
   assert.equal(drawn, "Second", "the canvas draws the new words");
   assert.deepEqual(editor.foreign, []);
+  assert.deepEqual(editor.errors, []);
+});
+
+// #370: a {…} part is code. Its text is only what the canvas shows of it, so editing that copy
+// would change nothing in the code and block its export: both ways in refuse.
+const CODE = "export function A() { return <main><p>{title}</p><p>Words</p></main>; }";
+
+const refusedAsCode = (result) => {
+  assert.equal(result.isError, true, JSON.stringify(result));
+  assert.match(result.content[0].text, /shows \{…\} code from its source/u);
+};
+
+async function withCode(t, prefix) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const running = await pool.open(root);
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  await ok(running.call("POST", "/api/code/import", { code: CODE }), "import");
+  const nodes = () => running.host.session.document.nodes;
+  const part = Object.values(nodes()).find((each) => each.props?.text === "{title}");
+  const words = Object.values(nodes()).find((each) => each.props?.text === "Words");
+  return { running, nodes, part, words };
+}
+
+test("a code part is known by its source, recorded or bound; a run of words is not", () => {
+  assert.equal(isCodePart({ props: { codeExpression: "{a}" } }), true);
+  assert.equal(isCodePart({ props: { codeSource: { tag: "#expression" } } }), true, "bound before the source was recorded");
+  assert.equal(isCodePart({ props: { codeSource: { tag: "#text" } } }), false);
+  assert.equal(isCodePart({ props: { text: "{a}" } }), false, "braces a person typed");
+  assert.equal(isCodePart(undefined), false);
+});
+
+test("set_text refuses an element holding a code part beside other content, and export keeps it", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-code-part-mixed-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const running = await pool.open(root);
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  await ok(running.call("POST", "/api/code/import", { code: "export function A() { return <main><p>Hi {a}</p><p>{b}{c}</p></main>; }" }), "import");
+  const nodes = () => running.host.session.document.nodes;
+  const { token } = await ok(running.call("POST", "/api/agents/create", { name: "Writer" }), "agent");
+  const agent = mcpClient(running.host.mcpUrl, token);
+  await agent.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
+  const holders = [...new Set(Object.values(nodes()).filter(isCodePart).map((part) => part.parentId))];
+  assert.equal(holders.length, 2);
+  for (const nodeId of holders) refusedAsCode(await agent.tool("set_text", { nodeId, text: "Replaced" }));
+  const code = (await ok(running.call("POST", "/api/code/export", { nodeId: nodes()[holders[0]].parentId }), "export")).code;
+  assert.ok(!code.includes("Replaced"));
+  assert.match(code, /\{a\}/u);
+  assert.match((await agent.tool("guide", {})).structuredContent.guide, /codeExpression/u, "the guide says so beforehand");
+});
+
+test("set_text refuses a code part, and an element holding only one, and export still works", async (t) => {
+  const { running, nodes, part, words } = await withCode(t, "ninerr-code-part-text-");
+  const { token } = await ok(running.call("POST", "/api/agents/create", { name: "Writer" }), "agent");
+  const agent = mcpClient(running.host.mcpUrl, token);
+  await agent.rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
+  const revision = running.host.session.revision;
+  for (const nodeId of [part.id, part.parentId]) {
+    refusedAsCode(await agent.tool("set_text", { nodeId, text: "Replaced" }));
+  }
+  assert.equal(running.host.session.revision, revision, "nothing changed");
+  assert.equal(nodes()[part.id].props.text, "{title}");
+  assert.equal(nodes()[part.parentId].props.text, undefined);
+  assert.equal((await agent.tool("set_text", { nodeId: words.id, text: "Still words" })).isError, undefined, "words stay editable");
+  assert.equal(nodes()[words.id].props.text, "Still words");
+  const main = nodes()[part.parentId].parentId;
+  assert.match((await ok(running.call("POST", "/api/code/export", { nodeId: main }), "export")).code, /<p>\{title\}<\/p>/u);
+});
+
+test("the inspector has no Text field for a code part or an element holding only one", browserTestOptions(), async (t) => {
+  const { running, part, words } = await withCode(t, "ninerr-code-part-inspector-");
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, running.host.session.revision);
+  const select = async (id) => {
+    await page.locator(`[id="layer-${id}"] > .row`).click();
+    await page.waitForFunction((nodeId) => document.getElementById(`layer-${nodeId}`)?.getAttribute("aria-selected") === "true", id);
+  };
+  await select(words.id);
+  assert.equal(await page.locator("#inspect-text").count(), 1, "words have a Text field");
+  await select(part.parentId);
+  assert.equal(await page.locator("#inspect-text").count(), 0, "the element holding only code has none");
+  await select(part.id);
+  assert.equal(await page.locator("#inspect-text").count(), 0, "the code part has none");
   assert.deepEqual(editor.errors, []);
 });
