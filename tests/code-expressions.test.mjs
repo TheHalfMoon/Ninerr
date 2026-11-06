@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildCodeIr, designToCode } from "../packages/code-ir/src/index.ts";
+import { buildCodeIr, designToCode, expressionShown } from "../packages/code-ir/src/index.ts";
 import { textLayerOf } from "../packages/document-model/src/index.mjs";
 import { exportJsx, importJsx } from "../packages/studio-host/src/code.ts";
 
@@ -69,13 +69,13 @@ test("the result counts the code parts, and a document cannot make the export ta
   assert.equal(exportJsx(none.document, none.rootId).codeParts, 0);
   // Over the bound in total, each under what one source file can hold.
   const big = `{f("${"x".repeat(200 * 1024)}")}`;
-  const shown = `{${"f(\"" + "x".repeat(10)}}`;
+  const shown = expressionShown(big);
   const nodes = { p: { id: "p", type: "element", parentId: null, children: [], props: { tag: "p" }, metadata: {} } };
   for (let index = 0; index < 6; index += 1) {
     nodes[`t${index}`] = { id: `t${index}`, type: "text", parentId: "p", children: [], props: { text: shown, codeExpression: big }, metadata: {} };
     nodes.p.children.push(`t${index}`);
   }
-  assert.throws(() => exportJsx({ id: "d", revision: 0, rootIds: ["p"], nodes }, "p"), (error) => error.code === "export-too-large" || error.code === "export-refused");
+  assert.throws(() => exportJsx({ id: "d", revision: 0, rootIds: ["p"], nodes }, "p"), (error) => error.code === "export-too-large");
 });
 
 test("export is a fixed point: bringing exported code in again exports the same code", () => {

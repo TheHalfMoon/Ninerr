@@ -34,7 +34,7 @@ export function expressionShown(code: string): string {
   try {
     ir = buildCodeIr([{ path: "Part.tsx", content: `${open}${code}</>; }` }]);
   } catch {
-    throw new CodeIrValidationError("a {…} part of this design is not valid code in a plain function");
+    throw new CodeIrValidationError("a {…} part of this design is not valid TSX in a plain function");
   }
   const root = ir.rootIds.length === 1 ? ir.symbols[ir.rootIds[0]] : undefined;
   const part = root?.kind === "fragment" && root.children.length === 1 && root.texts.length === 0 ? ir.symbols[root.children[0]] : undefined;
