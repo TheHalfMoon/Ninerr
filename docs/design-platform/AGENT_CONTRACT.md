@@ -1,6 +1,6 @@
 # Agent and MCP contract, version 2 (proposal)
 
-Status: proposal, not approved ([README](README.md)). It extends the MCP server at `packages/studio-host/src/mcp.ts`, which today has 16 tools, with the catalog in `packages/mcp-protocol/src/tools.mjs`. The rules in `docs/MCP.md` stay as they are:
+Status: proposal, not approved ([README](README.md)). It extends the MCP server at `packages/studio-host/src/mcp.ts`, which today has 18 tools, with the catalog in `packages/mcp-protocol/src/tools.mjs`. The rules in `docs/MCP.md` stay as they are:
 
 - every tool authorized per document;
 - each write one attributed transaction;

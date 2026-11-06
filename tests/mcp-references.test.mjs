@@ -61,6 +61,7 @@ test("an agent reads the same ids, titles and rights as the person", async (t) =
   const person = await ok(running.call("GET", "/api/references?query=dashboard"), "search");
   const found = (await agent.tool("search_design_references", { query: "dashboard" })).structuredContent;
   assert.deepEqual(found, person);
+  assert.equal(found.results[0].source.rights.status, "verified", "both carry the source's rights");
   assert.deepEqual(found.results.map((item) => item.id), ["urn:ninerr:object:a", "urn:ninerr:object:b"]);
   for (const { id } of found.results) {
     const read = (await agent.tool("get_design_reference", { id })).structuredContent;
@@ -116,11 +117,38 @@ test("switching projects and revoking the agent both end its reading", async (t)
   assert.equal(await agent.tool("get_design_reference", { id: "urn:ninerr:object:a" }), undefined, "no result at all for a revoked credential");
 });
 
+test("the read grant is required: without one, or with write alone, nothing is shown", async (t) => {
+  const { running, agent, agentId, packs } = await hosted(t);
+  await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "pack.json" }), "load");
+  assert.equal((await agent.tool("search_design_references", {})).isError, undefined);
+  for (const grants of [[], [{ principalKind: "actor", principalId: agentId, capabilities: ["document-write"] }]]) {
+    running.host.session.setAgentGrants(grants);
+    for (const [name, args] of [["search_design_references", {}], ["get_design_reference", { id: "urn:ninerr:object:a" }]]) {
+      const refusal = await agent.tool(name, args);
+      refused(refusal, /Not allowed/u);
+      assert.ok(!JSON.stringify(refusal).includes("Pattern a"));
+    }
+  }
+});
+
+test("an agent's answers carry no owner and no source only a hidden object uses", async (t) => {
+  const { running, agent, packs } = await hosted(t);
+  const hiddenSource = { id: "urn:ninerr:source:hidden", uri: "https://example.com/hidden", observedAt: at, rights: verified };
+  writeFileSync(join(packs, "both.json"), JSON.stringify({ ...pack, sources: [...pack.sources, hiddenSource], objects: [...pack.objects, object("other", { sourceId: hiddenSource.id, visibility: "private", rights: restricted })] }));
+  await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "both.json" }), "load");
+  const text = JSON.stringify((await agent.tool("search_design_references", {})).structuredContent);
+  for (const secret of ["ownerScope", "someone", "source:hidden", "example.com/hidden"]) assert.ok(!text.includes(secret), secret);
+  assert.ok(text.includes('"rights"'));
+});
+
 test("reading references does not count as reading the project: it unlocks no write", async (t) => {
   const { running, agent, packs } = await hosted(t);
   await ok(running.call("POST", "/api/references/load", { directory: packs, fileName: "pack.json" }), "load");
   await ok(running.call("POST", "/api/projects/create", { name: "other" }), "switch");
   await agent.tool("search_design_references", {});
-  const write = await agent.tool("create_frame", { name: "Frame" });
-  assert.equal(write.isError, true, "the agent has not read this project");
+  const write = await agent.tool("create_frame", { name: "Frame", width: 100, height: 100 });
+  assert.equal(write.isError, true);
+  assert.match(write.content[0].text, /read|project/iu, "refused as a project the agent has not read");
+  await agent.tool("project_info", {});
+  assert.equal((await agent.tool("create_frame", { name: "Frame", width: 100, height: 100 })).isError, undefined, "reading the project is what unlocks it");
 });

@@ -205,7 +205,7 @@ const TOOLS: Tool[] = [
     description: "Search the local reference pack the person has read into this project: public references with their rights. Read-only and offline. status is not-loaded when there is none, and nothing is fetched instead.",
     inputSchema: object({
       query: { type: "string", maxLength: 200 },
-      kinds: { type: "array", items: { type: "string", enum: ["screen", "flow", "pattern", "asset", "token", "component"] } },
+      kinds: { type: "array", maxItems: 6, items: { type: "string", enum: ["screen", "flow", "pattern", "asset", "token", "component"] } },
       limit: { type: "integer", minimum: 1, maximum: 100 },
     }),
     run: ({ session, references }, args) => references.search(session, session.name, onlyArguments(args, ["query", "kinds", "limit"])),
