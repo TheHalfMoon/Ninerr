@@ -2,7 +2,7 @@
 
 Date: 2026-11-06
 Status: **plan-level resolution only. No feature implementation is claimed. No full EGM approval.**
-Target: `docs/designs/NINERR_DESKTOP_AGENT_NATIVE_EGM_SPEC_2026-11-06.md` (R2)
+Target: `docs/designs/NINERR_DESKTOP_AGENT_NATIVE_EGM_SPEC_2026-11-06.md` (R2 corrected; execution companion NINERR_EXECUTION_READY_MASTER_PLAN_2026-11-06.md)
 Source base: `17edb22c283121c1e93bcd76d91f0fb918204ab5`
 Prior anchors: `8cba15c4e4af40b12476433a49e20a1696cfc0f8`, `25145f2cf780474ad2cb133c432bcb0bcbbfa2fd`
 
@@ -31,7 +31,7 @@ All 34 findings are dispositioned in the revised spec. Disposition means the pla
 | C02 Installed MCP transport and credentials | 05-2, 06-2, 06-3, 07-4 | Installed app has no bundled stdio helper; "without copying secrets" contradicts the bearer flow | v1 installed transport is authenticated loopback HTTP only; stdio is checkout-only and not bundled; v1 honestly uses a copied long-lived per-agent bearer; post-v1 W1 ships a separate signed helper/utility with zero-Node and one reviewed credential handoff | §2.1, §3 ADR-D4, §6.1 | F3 |
 | C03 GUI/MCP parity | 05-3, 06-12 | "Every GUI command" claim is undefined and false against 16 tools | Replace with a bounded matrix; v1 exposes only 16 tools and explicit omissions; full parity is a post-v1 program target with tested equivalence or recorded exclusion | §6.3 | F6 |
 | C04 Offline/main-process egress | 05-4, 06-11, 07-3 | Renderer filter is not a whole-process offline guarantee; no mode/egress tests | One main-process egress broker; Strict Offline Mode maps to `local-only` with host/MCP exception; add `mcp.local`/`export.local`/`lens.offline`; require OS packet/firewall proof and negative controls; no absolute claim until measured | §3 ADR-D8, §7.2 | F9 |
-| C05 Skilit data path/pack/resolver | 05-6, 06-9, 06-10, 07-7 | No producer, schema, URI grammar, rights, storage decision or capability mapping | Add build-time exporter (S0), `ReferencePackV1`, `ninerr-ref://` identifier grammar, hashes/limits/atomic install/rollback/GC, rights/tenant fields, capability map; no runtime PostgreSQL/cloud; no SQLite/FTS5 initially; draft adapters are unmerged | §3 ADR-D3/D6, §8 | F10, F11, F12, F13 |
+| C05 Skilit data path/pack/resolver | 05-6, 06-9, 06-10, 07-7 | No producer, schema, URI grammar, rights, storage decision or capability mapping | Use actual Draft #365 `schemaVersion:1` with `urn:ninerr:{pack|source|object}:...`, 4 MiB manifest, separate source/object rights; keep tenant/actor grants in out-of-band ledger and host context. Plan owner-filtered exporter, later atomic asset install/rollback and capability map; no runtime PostgreSQL/cloud or SQLite/FTS5. Draft #365/#367 unmerged | §3 ADR-D3/D6, §8 | F10, F11, F12, F13 |
 | C06 Authority/approval/baseline/labels | 05-7, 06-1, 06-7, 06-8, 07-1 | Three bases; PLAN.md absent; P11–P16 scheduled without approval; gate labels undefined | One source base and one review-freeze rule; `CURRENT.md` identified as stale; PLAN pinned at `16f9d0f` and task IDs/estimates inlined; explicit `G-AUTH`; P/M/V/J/A labels defined or inlined | §0.2, §4.2–4.4, §5, §12 | F1, F2 (v1 gates) |
 | C07 Scope/estimates/release vehicle | 05-9 | W3–W6 aggregate 139–204 days with no milestone; Build Kits missing | Two tracks; P11–P16 estimates and dependencies; W1–W8 milestones; Build Kits S4; no v1 overscope | §4.2–4.3, §8.3 | F13, F16 |
 | C08 Reuse vs new machinery | 05-10 | Plan reinvented capture, content addressing, provider routing, offline smoke; proposed unnecessary SQLite/capture worker | Reuse map: import-stack, persistence putObject/getObject, network-policy, agent-supervisor, existing offline/migration tests; no new capture service; no SQLite unless measured | §3 ADR-D3/D6, §7.1, §8.2 | F10, F11 |
@@ -119,7 +119,7 @@ This matrix does **not** claim: full EGM 5-stage approval; tests passed; release
 
 ## 7. Handoff
 
-1. Run **Stage 08** with a fresh context on this R2 spec and matrix; then **Stage 09**.
+1. Rerun **Stage 08** after the free DeepSeek quota blockage; then run independent **Stage 09**. Neither is complete or certified.
 2. Do not start W1–W8 without the recorded founder approval gate.
 3. Keep v1 at P09/P10 and the existing supported subset; do not widen gates for the new vision.
 4. Resolve F1–F2 through the canonical release process first; F3–F16 are post-v1.
