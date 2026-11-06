@@ -1754,7 +1754,9 @@ function renderInspector() {
   // A {…} part of imported code is code, not words: it has no Text field (#370).
   if (textId !== null && !isCodePart(doc.nodes[textId])) children.push(field("text", "Text", typeof doc.nodes[textId].props?.text === "string" ? doc.nodes[textId].props.text : "", true));
   else if (isCodePart(node) || node.children.some((id) => isCodePart(doc.nodes[id]))) {
-    children.push(el("p", { class: "hint", id: "inspect-code-note" }, "This layer shows code from its source, so its text is changed in the code."));
+    // Beside other content, an element's words are on layers of their own, which can be edited.
+    const onlyCode = isCodePart(node) || node.children.every((id) => isCodePart(doc.nodes[id]));
+    children.push(el("p", { class: "hint", id: "inspect-code-note" }, onlyCode ? "This layer shows code from its source, so its text is changed in the code." : "This layer holds code from its source, which is changed in the code. Its words are edited on their own layers."));
   }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));

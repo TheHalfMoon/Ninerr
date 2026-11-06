@@ -351,11 +351,64 @@ test("a style's semicolons end declarations only outside comments, strings and p
   assert.deepEqual(style("background: url(data:image/png;base64,AAAA); color: red"), { background: "url(data:image/png;base64,AAAA)", color: "red" });
   assert.deepEqual(style("background: url(a/*b*/c); color: red"), { background: "url(a/*b*/c)", color: "red" }, "not a comment inside url()");
   assert.deepEqual(style("color: red; ;; top: 1px;"), { color: "red", top: "1px" });
+  assert.deepEqual(style("width: 1/**/px; top: 1px"), { width: "1 px", top: "1px" }, "a comment separates what it stands between");
   // Linear: a long string of comments does not hold the host.
   const started = performance.now();
   assert.deepEqual(style(`${"/*x*/".repeat(100_000)}color: red`), { color: "red" });
   assert.deepEqual(style(`color: red${" /* x".repeat(100_000)}`), { color: "red" });
   assert.ok(performance.now() - started < 2_000);
+});
+
+// Compared with a browser, so that this reader cannot drift from what a style means. The page
+// reads each style itself, and each property it finds must come out of this reader the same way.
+test("a style reads the same here as in a browser, however odd", browserTestOptions(), async (t) => {
+  const running = await editing(t);
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, 1);
+  const names = ["color", "top", "width", "background-image", "font-family"];
+  const read = (cssText) => page.evaluate(([text, wanted]) => {
+    const probe = document.createElement("div");
+    probe.style.cssText = text;
+    return Object.fromEntries(wanted.map((name) => [name, probe.style.getPropertyValue(name)]).filter(([, value]) => value !== ""));
+  }, [cssText, names]);
+  for (const cssText of [
+    "color: red; top: 1px",
+    "width: calc(1px /* don't */ + 2px); color: red",
+    "width: calc(1px /* \" */ + 2px); color: red",
+    "width: calc(1px /* ( */ + 2px); color: red",
+    "background-image: url(a'b); color: red",
+    'background-image: url(a"b); color: red',
+    "background-image: url(a;b); color: red",
+    "background-image: url( a/*b*/c ); color: red",
+    'background-image: url("a;b"); color: red',
+    "BACKGROUND-IMAGE: URL(a;b); color: red",
+    'font-family: "a\n; color: red; top: 1px',
+    'font-family: "a\r\n; color: red; top: 1px',
+    "color: red\\\"; top: 1px",
+    "x: \\(; top: 1px",
+    "width: 1px\\/*; top: 1px",
+    "x: [a; color: red; b]; top: 1px",
+    "x: {a; color: red; b}; top: 1px",
+    "color: red; x: (((; top: 1px",
+    "x: ); top: 1px",
+    "x: (]); top: 1px",
+    'font-family: "a;b"; top: 1px',
+    "top: 1px /* a; color: red */",
+    "/* open; top: 1px",
+  ]) {
+    const browser = await read(cssText);
+    const here = importedStyle({ cssText });
+    for (const [name, value] of Object.entries(browser)) {
+      assert.ok(Object.hasOwn(here, name), `${JSON.stringify(cssText)}: the browser has ${name} (${value}), this reader ${JSON.stringify(here)}`);
+    }
+    // What this reader finds that the browser ignores is refused later by the sanitizer or the
+    // browser itself; what must not happen is a valid declaration of the browser's being lost, or
+    // a declaration it swallowed coming back.
+    for (const name of names) if (!Object.hasOwn(browser, name) && Object.hasOwn(here, name)) assert.equal(await read(`${name}: ${here[name]}`).then((one) => one[name] ?? ""), "", `${JSON.stringify(cssText)}: this reader invents ${name}: ${here[name]}`);
+  }
+  assert.deepEqual(editor.errors, []);
 });
 
 test("a code import says when it leaves a declaration out, and the file is not changed", browserTestOptions(), async (t) => {

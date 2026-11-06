@@ -244,40 +244,60 @@ function summarize(proposalId: string, name: string, proposal: ImportProposal, r
   };
 }
 
+const CLOSES: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+
 /**
- * A style's declarations, split at each semicolon that ends one: not one in a string, in
- * parentheses (a data URL) or in a comment. Comments go, as they do in CSS, and one left open
- * runs to the end. Linear in the text.
+ * A style's declarations, read as CSS reads them (differentially tested against a browser in
+ * tests/style-order.test.mjs). A semicolon ends one only outside strings, brackets and comments.
+ * A comment can sit anywhere but inside an unquoted url(), one left open runs to the end, a line
+ * break in a string makes its declaration invalid, and a backslash takes the next character with
+ * it. Linear in the text.
  */
 function declarationsOf(text: string): string[] {
   const declarations: string[] = [];
+  const open: string[] = [];
   let current = "";
-  let depth = 0;
-  let quote: string | null = null;
-  for (let at = 0; at < text.length; at += 1) {
+  let invalid = false;
+  const end = () => {
+    if (!invalid) declarations.push(current);
+    current = "";
+    invalid = false;
+  };
+  let at = 0;
+  while (at < text.length) {
     const char = text[at];
-    if (quote !== null) {
-      current += char;
-      if (char === "\\" && at + 1 < text.length) current += text[++at];
-      else if (char === quote) quote = null;
-    } else if (char === "\"" || char === "'") {
-      quote = char;
-      current += char;
-    } else if (depth === 0 && char === "/" && text[at + 1] === "*") {
-      const end = text.indexOf("*/", at + 2);
-      if (end < 0) break;
+    if (char === "\\") {
+      current += text.slice(at, at + 2);
+      at += 2;
+    } else if (char === "/" && text[at + 1] === "*") {
+      const close = text.indexOf("*/", at + 2);
+      if (close < 0) break;
       current += " ";
-      at = end + 1;
-    } else if (char === ";" && depth === 0) {
-      declarations.push(current);
-      current = "";
+      at = close + 2;
+    } else if (char === "\"" || char === "'") {
+      let scan = at + 1;
+      while (scan < text.length && text[scan] !== char && !/[\n\r\f]/u.test(text[scan])) scan += text[scan] === "\\" ? 2 : 1;
+      if (text[scan] === char) scan += 1;
+      else if (scan < text.length) invalid = true;
+      current += text.slice(at, scan);
+      at = scan;
+    } else if (char === "(" && /url$/iu.test(current) && !/^\s*["']/u.test(text.slice(at + 1, at + 80))) {
+      // An unquoted url(): quotes and comments mean nothing in it, only its closing bracket.
+      let scan = at + 1;
+      while (scan < text.length && text[scan] !== ")") scan += text[scan] === "\\" ? 2 : 1;
+      current += text.slice(at, scan + 1);
+      at = scan + 1;
+    } else if (char === ";" && open.length === 0) {
+      end();
+      at += 1;
     } else {
-      if (char === "(") depth += 1;
-      else if (char === ")" && depth > 0) depth -= 1;
+      if (Object.hasOwn(CLOSES, char)) open.push(CLOSES[char]);
+      else if (char === open.at(-1)) open.pop();
       current += char;
+      at += 1;
     }
   }
-  declarations.push(current);
+  end();
   return declarations;
 }
 
