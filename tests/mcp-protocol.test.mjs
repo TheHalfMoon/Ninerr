@@ -22,9 +22,9 @@ function makeConfig(names = MCP_TOOL_NAMES) {
   };
 }
 
-test("the catalog is Ninerr's 16-tool surface, frozen and without duplicates", () => {
-  assert.equal(MCP_TOOL_NAMES.length, 16);
-  assert.equal(new Set(MCP_TOOL_NAMES).size, 16);
+test("the catalog is Ninerr's 18-tool surface, frozen and without duplicates", () => {
+  assert.equal(MCP_TOOL_NAMES.length, 18);
+  assert.equal(new Set(MCP_TOOL_NAMES).size, 18);
   assert.ok(Object.isFrozen(MCP_TOOL_NAMES));
   for (const name of MCP_TOOL_NAMES) assert.match(name, /^[a-z]+(?:_[a-z]+)*$/u, name);
 });
@@ -38,7 +38,7 @@ test("each tool is classified by what it does to the document", () => {
   for (const name of ["future_tool", "get_screenshot", "get_tree_summary", "toString", "constructor", "__proto__"]) assert.equal(classifyTool(name), "unknown", name);
   assert.throws(() => classifyTool(""), MCPContractError);
   const classes = MCP_TOOL_NAMES.map(classifyTool);
-  assert.equal(classes.filter((value) => value === "read").length, 9);
+  assert.equal(classes.filter((value) => value === "read").length, 11);
   assert.equal(classes.filter((value) => value === "write").length, 6);
   assert.equal(classes.filter((value) => value === "consequential").length, 1);
 });

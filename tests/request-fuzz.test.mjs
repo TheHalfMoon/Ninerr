@@ -38,12 +38,13 @@ const ROUTES = [
   "POST /api/codebase/connect", "POST /api/codebase/disconnect", "POST /api/codebase/import", "POST /api/codebase/preview", "POST /api/codebase/write", "POST /api/codebase/resolve",
   "POST /api/confirmations/decide", "POST /api/edit", "POST /api/edit", "POST /api/import", "POST /api/import/commit", "POST /api/import/discard",
   "POST /api/projects/close", "POST /api/projects/create", "POST /api/projects/open", "POST /api/redo", "POST /api/revert", "POST /api/selection", "POST /api/undo",
+  "GET /api/references", "GET /api/references/urn:ninerr:object:a", "POST /api/references/load",
   "GET /api/nowhere", "POST /api/document", "DELETE /api/edit", "PUT /api/projects/open",
 ];
 // The keys and words the routes read, so generated bodies reach past the first check.
 const KEYS = ["name", "title", "baseRevision", "operations", "intent", "nodeId", "nodeIds", "transactionId", "token", "folder", "file", "component", "proposalId", "html", "code", "id", "approve", "breakStaleLock", "reason", "agentId", "type", "node", "parentId", "index", "set", "unset", "keep", "field", "stylesheets"];
 const WORDS = ["insert-node", "set-props", "remove-node", "move-node", "restore-subtree", "frame", "text", "fuzz"];
-const TOOLS = ["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "guide", "finish_task", "create_frame", "set_text", "rename_layers", "set_styles", "move_layers", "duplicate_layers", "delete_layers", "no_such_tool"];
+const TOOLS = ["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "search_design_references", "get_design_reference", "guide", "finish_task", "create_frame", "set_text", "rename_layers", "set_styles", "move_layers", "duplicate_layers", "delete_layers", "no_such_tool"];
 const TOOL_KEYS = ["nodeId", "nodeIds", "text", "name", "width", "height", "renames", "updates", "moves", "styles", "parentId", "index", "query", "depth"];
 // Valid JSON nested far deeper than any document allows, under the 1 MiB body limit.
 const DEEP = ["[".repeat(50_000) + "]".repeat(50_000), `${'{"a":'.repeat(20_000)}1${"}".repeat(20_000)}`];
