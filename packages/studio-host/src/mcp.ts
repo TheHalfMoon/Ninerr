@@ -3,6 +3,7 @@ import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classify
 import { textLayerOf } from "@ninerr/document-model";
 import { exportJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
+import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
 // Ninerr's MCP server. It runs inside the studio host, so agent edits go through the same
@@ -39,7 +40,15 @@ interface ToolContext {
   actor: StudioActor;
   toolName: string;
   selection: () => string[];
+  references: ReferenceCatalog;
   edit: (operations: unknown[], intent: string) => Json;
+}
+
+/** Tool arguments are the schema's and nothing else: no directory, URL, tenant or token gets through. */
+function onlyArguments(args: unknown, names: string[]): Record<string, unknown> {
+  const given = (args ?? {}) as Record<string, unknown>;
+  for (const name of Object.keys(given)) if (!names.includes(name)) throw new ToolError(`this tool takes no argument ${JSON.stringify(name.slice(0, 40))}`);
+  return given;
 }
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
@@ -191,6 +200,24 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "search_design_references",
+    title: "Search design references",
+    description: "Search the local reference pack the person has read into this project: public references with their rights. Read-only and offline. status is not-loaded when there is none, and nothing is fetched instead.",
+    inputSchema: object({
+      query: { type: "string", maxLength: 200 },
+      kinds: { type: "array", items: { type: "string", enum: ["screen", "flow", "pattern", "asset", "token", "component"] } },
+      limit: { type: "integer", minimum: 1, maximum: 100 },
+    }),
+    run: ({ session, references }, args) => references.search(session, session.name, onlyArguments(args, ["query", "kinds", "limit"])),
+  },
+  {
+    name: "get_design_reference",
+    title: "Read a design reference",
+    description: "One reference from the project's local pack by id: its metadata, source and rights, and whether reuse is allowed. Never file bytes. Reuse stays not allowed until a grant outside the pack confirms it.",
+    inputSchema: object({ id: { type: "string", maxLength: 144 } }, ["id"]),
+    run: ({ session, references }, args) => references.get(session, session.name, onlyArguments(args, ["id"]).id),
+  },
+  {
     name: "guide",
     title: "How to work with Ninerr",
     description: "How Ninerr documents, layers and edits work for an agent.",
@@ -202,6 +229,7 @@ const TOOLS: Tool[] = [
         "Read with project_info, layer_tree, layer_children, layer_details, find_layers and selection; layer_code gives a layer as JSX.",
         "Edit with create_frame, set_text, rename_layers, set_styles, move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
+        "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
       ].join("\n"),
     }),
   },
@@ -501,6 +529,7 @@ export class ConfirmationBroker {
 export interface McpContext {
   session: () => StudioSession | null;
   selection: () => string[];
+  references: ReferenceCatalog;
   confirmations: ConfirmationBroker;
   now: () => string;
   confirmationWaitMs?: number;
@@ -595,6 +624,7 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       actor,
       toolName,
       selection: context.selection,
+      references: context.references,
       edit: (operations, intent) => {
         if (operations.length === 0) throw new ToolError("nothing to change");
         const event = session.edit(actor, { baseRevision: session.revision, operations, intent, tool: toolName }, "mcp");

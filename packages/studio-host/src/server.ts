@@ -494,7 +494,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       respondJson(response, 400, { jsonrpc: "2.0", id: null, error: { code: -32600, message: "batches are not supported" } });
       return;
     }
-    const answer = await handleMcpMessage({ session: () => session, selection: () => selection, confirmations, now, lastRead: agentLastRead, ...(options.confirmationWaitMs ? { confirmationWaitMs: options.confirmationWaitMs } : {}) }, actor, message);
+    const answer = await handleMcpMessage({ session: () => session, selection: () => selection, references, confirmations, now, lastRead: agentLastRead, ...(options.confirmationWaitMs ? { confirmationWaitMs: options.confirmationWaitMs } : {}) }, actor, message);
     if (answer === null) {
       response.writeHead(202, SECURITY_HEADERS);
       response.end();
