@@ -66,6 +66,16 @@
       "reason": "Dated reverse-engineering study records (2026-10-18) name the third-party products observed, among them Paper Desktop; they are not Ninerr's identity, and no code or asset of those products enters Ninerr."
     },
     {
+      "id": "dated-nov06-design-research",
+      "category": "IMMUTABLE_HISTORICAL_FACT",
+      "path": "^(?:docs/designs/NINERR_EXECUTION_READY_MASTER_PLAN_2026-11-06\\.md|docs/designs/egm-review-20261106/07-design-critic-findings\\.md|docs/research/rea-2026-11-06/CRAFT_ANYTHING_CAPTURE_LEDGER\\.md|docs/research/rea-2026-11-06/PRIMARY_SOURCE_COMPETITOR_FINDINGS\\.md|docs/strategy/DEEP_REA_OPENCODE_CRAFT_ANYTHING_2026-11-06\\.md|docs/strategy/DESKTOP_FIRST_AGENT_NATIVE_BLUEPRINT_2026-11-06\\.md|docs/strategy/FOUNDER_SOURCE_AUTHORIZATION_2026-11-06\\.md|docs/strategy/NINERR_SKILIT_FOUNDATION_2026-11-06\\.md|docs/strategy/REA_COMPETITORS_AND_CRAFT_ANYTHING_2026-11-06\\.md)$",
+      "terms": [
+        "paper",
+        "docling"
+      ],
+      "reason": "These nine exactly named, 2026-11-06 design strategy/review/evidence documents quote observed competitor Paper and third-party Docling as historical research/provenance. They contain no active Ninerr runtime identity, API, or bundled donor file. Only these dated documents and these two terms are exempt; any same term in app code or other docs stays gated."
+    },
+    {
       "id": "legacy-project-fixture",
       "category": "LEGACY_COMPATIBILITY",
       "path": "^tests/fixtures/(projects/v1-[a-z0-9-]+|corpus/legacy-[a-z0-9-]+)/\\.lilac/",
