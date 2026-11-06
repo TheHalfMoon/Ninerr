@@ -35,9 +35,11 @@ const object = (id, from = "owned", overrides = {}) => ({
   rights: { status: from === "owned" ? "verified" : "restricted", license: from === "owned" ? "Apache-2.0" : null, redistributable: from === "owned" },
   ...overrides,
 });
+const OWNER = "urn:ninerr:owner:test";
 const fixture = () => ({
   schemaVersion: REFERENCE_PACK_SCHEMA_VERSION,
   packId: "urn:ninerr:pack:test",
+  ownerScope: OWNER,
   createdAt: at,
   sources: [source("owned"), source("restricted", "restricted", false), source("unknown", "unknown", false)],
   assets: [{ sha256: assetHash, byteLength: bytes.byteLength, mediaType: "image/png" }],
@@ -53,6 +55,8 @@ const rejects = (value, pattern) => assert.throws(() => normalizeReferencePack(v
   return true;
 });
 
+const GOLDEN_DIGEST = "5afadffb131b45ae555d52a3336ef459f934d28fcc4ad99a33144d124f41e3d3";
+
 test("local reference pack normalizes deterministically and freezes nested metadata", () => {
   const input = fixture();
   const output = normalizeReferencePack(input);
@@ -64,8 +68,36 @@ test("local reference pack normalizes deterministically and freezes nested metad
   assert.deepEqual(output.objects.map((o) => o.id), ["urn:ninerr:object:allowed", "urn:ninerr:object:private", "urn:ninerr:object:uncertain"]);
 });
 
+test("the digest format is pinned", () => {
+  assert.equal(referencePackDigest({ schemaVersion: 1, packId: "urn:ninerr:pack:golden", ownerScope: null, createdAt: at, sources: [], objects: [], assets: [] }), GOLDEN_DIGEST);
+});
+
+test("search shows non-public objects only to the owner the pack names", () => {
+  const search = (options) => searchReferencePack(fixture(), { query: "dashboard", ...options }).map((item) => item.id);
+  assert.deepEqual(search({}), ["urn:ninerr:object:allowed"], "public only by default");
+  assert.deepEqual(search({ ownerScope: "urn:ninerr:owner:other" }), ["urn:ninerr:object:allowed"]);
+  assert.equal(search({ ownerScope: OWNER }).length, 3);
+  const unowned = fixture(); unowned.ownerScope = null;
+  rejects(unowned, /requires an ownerScope/u);
+  unowned.objects = [unowned.objects[0]];
+  assert.equal(normalizeReferencePack(unowned).ownerScope, null, "a pack of public objects needs no owner");
+  const bad = fixture(); bad.ownerScope = "urn:ninerr:source:test";
+  rejects(bad, /invalid owner identifier/u);
+});
+
+test("text an agent reads back carries no direction overrides or line separators", () => {
+  for (const unsafe of ["\u202e", "\u2028", "\u200b", "\ufeff", "\u2066"]) {
+    const f = fixture(); f.objects[0].title = `a${unsafe}b`;
+    rejects(f, /without controls/u);
+  }
+  const f = fixture(); f.objects[0].title = "\u0645\u0631\u062d\u0628\u0627\u200c \u{1F468}\u200d\u{1F4BB}";
+  assert.equal(normalizeReferencePack(f).objects[0].title, f.objects[0].title, "joiners stay");
+  const long = fixture(); long[`x${"y".repeat(100_000)}\n`] = 1;
+  assert.throws(() => normalizeReferencePack(long), (error) => error.message.length < 200);
+});
+
 test("local search is deterministic, supports kind/tag terms, and includes rights metadata", () => {
-  const result = searchReferencePack(fixture(), { query: "dashboard responsive", kinds: ["pattern"] });
+  const result = searchReferencePack(fixture(), { query: "dashboard responsive", kinds: ["pattern"], ownerScope: OWNER });
   assert.deepEqual(result.map((item) => item.id), ["urn:ninerr:object:private", "urn:ninerr:object:uncertain"]);
   assert.equal(result[0].sourceRights.status, "restricted");
   assert.equal(result[0].rights.status, "restricted");
@@ -74,23 +106,52 @@ test("local search is deterministic, supports kind/tag terms, and includes right
   assert.throws(() => searchReferencePack(fixture(), { kinds: ["ghost"] }), ReferencePackValidationError);
 });
 
-test("unknown and restricted source metadata NEVER enables export", () => {
+test("a pack cannot grant its own permission: nothing it says makes reuse allowed", () => {
   const pack = fixture();
-  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").allowed, true);
-  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:private").allowed, false);
-  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:uncertain").allowed, false);
-  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:absent").allowed, false);
+  pack.sources[0].rights.license = pack.objects[0].rights.license = "All Rights Reserved";
+  const decision = referenceReuseDecision(pack, "urn:ninerr:object:allowed");
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.metadataPermits, true);
+  assert.match(decision.reason, /no grant register/u);
+});
+
+test("metadata permits reuse only when source rights, object rights and visibility all do", () => {
+  const verified = { status: "verified", license: "Apache-2.0", redistributable: true };
+  const notRedistributable = { status: "verified", license: "Apache-2.0", redistributable: false };
+  const restricted = { status: "restricted", license: null, redistributable: false };
+  const unknown = { status: "unknown", license: null, redistributable: false };
+  const all = [verified, notRedistributable, restricted, unknown];
+  let cases = 0;
+  for (const sourceRights of all) for (const objectRights of all) for (const visibility of ["public", "workspace", "private"]) {
+    const f = fixture();
+    f.sources = [{ ...source("owned"), rights: sourceRights }];
+    f.objects = [object("one", "owned", { rights: objectRights, visibility })];
+    f.assets = [];
+    const decision = referenceReuseDecision(f, "urn:ninerr:object:one");
+    assert.equal(decision.metadataPermits, sourceRights === verified && objectRights === verified && visibility === "public", JSON.stringify([sourceRights, objectRights, visibility]));
+    assert.equal(decision.allowed, false);
+    cases += 1;
+  }
+  assert.equal(cases, 48);
+  assert.equal(referenceReuseDecision(fixture(), "urn:ninerr:object:absent").metadataPermits, false);
+});
+
+test("objects with the same bytes are one work: the strictest statement holds for all", () => {
+  const f = fixture();
+  f.objects.push(object("copy", "restricted", { kind: "asset", assetSha256: assetHash }));
+  assert.equal(referenceReuseDecision(f, "urn:ninerr:object:allowed").metadataPermits, false);
+  assert.equal(referenceReuseDecision(fixture(), "urn:ninerr:object:allowed").metadataPermits, true);
 });
 
 test("object-specific access never inherits a broader source grant", () => {
   const pack = fixture();
   pack.objects[0].rights = { status: "restricted", license: null, redistributable: false };
-  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").allowed, false);
+  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").metadataPermits, false);
   pack.objects[0].rights = { status: "verified", license: "Apache-2.0", redistributable: true };
   pack.objects[0].visibility = "private";
-  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").allowed, false);
+  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").metadataPermits, false);
   pack.objects[0].visibility = "public";
-  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").allowed, true);
+  assert.equal(referenceReuseDecision(pack, "urn:ninerr:object:allowed").metadataPermits, true);
 });
 
 test("asset bytes are checked against manifest size AND SHA-256", () => {

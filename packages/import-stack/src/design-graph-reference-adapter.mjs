@@ -28,8 +28,12 @@ function uuid(value, field) {
 function scopedId(kind, original) {
   return `urn:ninerr:${kind}:${createHash("sha256").update(`${kind}:${original}`).digest("hex").slice(0, 32)}`;
 }
-function classification(value) {
-  return value === "restricted" || value === "metadata_only" ? DENIED : GRANT;
+// Only "permitted" leaves rights unknown (never verified); anything else is a restriction,
+// so a spelling or a state this adapter has not met cannot lose one. A row kind that carries no
+// classification stays unknown when it has none.
+function classification(value, absent = DENIED) {
+  if (value === undefined) return absent;
+  return value === "permitted" ? GRANT : DENIED;
 }
 function record(value, at) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) fail(at, "expected record");
@@ -48,12 +52,13 @@ function iso(value, field) {
 
 /**
  * Input is an **already access-filtered** export from the source system, not raw DB access.
- * Only public artifacts are copied by default. Private rows require an explicit local-only
- * flag and always remain non-redistributable; patterns/flows without visibility are private.
+ * Only public artifacts are copied by default. Private rows are copied only for an owner the
+ * caller names, which the pack records, and always remain non-redistributable; patterns/flows
+ * without visibility are private. Only sources an emitted object uses are emitted.
  */
-export function convertDesignGraphSnapshot(input, { includeNonPublic = false } = {}) {
+export function convertDesignGraphSnapshot(input, { ownerScope = null } = {}) {
   record(input, "snapshot");
-  if (typeof includeNonPublic !== "boolean") fail("includeNonPublic", "expected boolean");
+  const includeNonPublic = ownerScope !== null;
   const sources = rows(input.sources, "sources", REFERENCE_PACK_LIMITS.maxSources);
   const artifacts = rows(input.artifacts, "artifacts", REFERENCE_PACK_LIMITS.maxObjects);
   const assets = rows(input.assets, "assets", REFERENCE_PACK_LIMITS.maxAssets);
@@ -66,7 +71,7 @@ export function convertDesignGraphSnapshot(input, { includeNonPublic = false } =
     if (sourceMap.has(srcId)) fail(`sources[${i}]`, "duplicate source UUID");
     const id = scopedId("source", srcId);
     sourceMap.set(srcId, id);
-    return { id, uri: id, observedAt: iso(src.createdAt, `sources[${i}].createdAt`), rights: GRANT };
+    return { id, uri: id, observedAt: iso(src.createdAt, `sources[${i}].createdAt`), rights: classification(src.rightsClassification, GRANT) };
   });
   const byHash = new Map();
   for (const [i, value] of assets.entries()) {
@@ -103,7 +108,7 @@ export function convertDesignGraphSnapshot(input, { includeNonPublic = false } =
       }
       usedAssets.add(contentHash);
       assetSha256 = contentHash;
-      if (matching.rightsClassification === "restricted" || matching.rightsClassification === "metadata_only") objectRights = DENIED;
+      if (classification(matching.rightsClassification) === DENIED) objectRights = DENIED;
     }
     push({ id: scopedId("object", `artifact:${orig}`), kind,
       title: title(a.title, kind), tags: [String(a.kind)], sourceId, assetSha256,
@@ -118,16 +123,17 @@ export function convertDesignGraphSnapshot(input, { includeNonPublic = false } =
       if (!sourceId) fail(`${name}[${i}]`, "unknown source UUID");
       push({ id: scopedId("object", `${kind}:${orig}`), kind, title: title(row.title, kind),
         tags: [kind], sourceId, assetSha256: null, confidence: "documented",
-        visibility: "private", rights: GRANT });
+        visibility: "private", rights: classification(row.rightsClassification, GRANT) });
     }
   }
   const outputAssets = [...usedAssets].map((hash) => {
     const row = byHash.get(hash);
     return { sha256: hash, mediaType: row.mediaType, byteLength: row.byteLength };
   });
-  const packId = scopedId("pack", String(input.packKey ?? "local-snapshot") + ":" + input.exportedAt);
   const createdAt = iso(input.exportedAt, "exportedAt");
-  const pack = normalizeReferencePack({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, createdAt,
-    sources: outputSources, objects, assets: outputAssets });
+  const packId = scopedId("pack", String(input.packKey ?? "local-snapshot") + ":" + createdAt);
+  const usedSources = new Set(objects.map((entry) => entry.sourceId));
+  const pack = normalizeReferencePack({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, ownerScope, createdAt,
+    sources: outputSources.filter((entry) => usedSources.has(entry.id)), objects, assets: outputAssets });
   return Object.freeze({ pack, skipped: Object.freeze(skipped) });
 }

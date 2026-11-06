@@ -17,7 +17,10 @@ export const REFERENCE_PACK_LIMITS = Object.freeze({
   maxTotalAssetBytes: 128 * 1024 * 1024,
 });
 
-const ID = /^urn:ninerr:(?:pack|source|object):[a-z0-9][a-z0-9._:-]{0,127}$/u;
+const ID = /^urn:ninerr:(?:pack|source|object|owner):[a-z0-9][a-z0-9._:-]{0,127}$/u;
+// Text an agent or a person reads back: no controls, line separators, direction overrides,
+// zero-width spaces or byte-order marks. Joiners stay, which Arabic and emoji need.
+const UNSAFE_TEXT = /[\u0000-\u001f\u007f\u200b\u2028-\u202e\u2066-\u2069\ufeff]/u;
 const HASH = /^[a-f0-9]{64}$/u;
 const TAG = /^[a-z0-9][a-z0-9._/-]{0,31}$/u;
 const OBJECT_KINDS = new Set(["screen", "flow", "pattern", "asset", "token", "component"]);
@@ -39,14 +42,14 @@ function record(value, at, allowed, required = allowed) {
     || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) {
     fail(at, "expected a plain object");
   }
-  for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(at, `unsupported field ${key}`);
+  for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(at, `unsupported field ${key.slice(0, 64).replace(/[^\x21-\x7e]/gu, "?")}`);
   for (const key of required) if (!Object.hasOwn(value, key)) fail(at, `missing field ${key}`);
   return value;
 }
 
 function string(value, at, maximum = 256) {
   if (typeof value !== "string" || value.length === 0 || value.length > maximum
-    || value.trim() !== value || /[\u0000-\u001f\u007f]/u.test(value)) {
+    || value.trim() !== value || UNSAFE_TEXT.test(value)) {
     fail(at, `expected a nonempty trimmed string of at most ${maximum} characters without controls`);
   }
   return value;
@@ -166,9 +169,10 @@ export function normalizeReferencePack(value) {
     if (error instanceof ReferencePackValidationError) throw error;
     fail("manifest", "not JSON serializable");
   }
-  record(value, "manifest", ["schemaVersion", "packId", "createdAt", "sources", "objects", "assets"]);
+  record(value, "manifest", ["schemaVersion", "packId", "ownerScope", "createdAt", "sources", "objects", "assets"]);
   if (value.schemaVersion !== REFERENCE_PACK_SCHEMA_VERSION) fail("schemaVersion", "unsupported schema");
   const packId = id(value.packId, "packId", "pack");
+  const ownerScope = value.ownerScope === null ? null : id(value.ownerScope, "ownerScope", "owner");
   const createdAt = timestamp(value.createdAt, "createdAt");
   const sources = unique(array(value.sources, "sources", REFERENCE_PACK_LIMITS.maxSources).map(source), "id", "sources");
   const assets = unique(array(value.assets, "assets", REFERENCE_PACK_LIMITS.maxAssets).map(asset), "sha256", "assets");
@@ -180,9 +184,11 @@ export function normalizeReferencePack(value) {
   const assetIds = new Set(assets.map((entry) => entry.sha256));
   for (const entry of objects) {
     if (!sourceIds.has(entry.sourceId)) fail(entry.id, "unknown sourceId");
+    // A copied pack must not show one owner's objects to another: who may see them is stated.
+    if (entry.visibility !== "public" && ownerScope === null) fail(entry.id, "a non-public object requires an ownerScope");
     if (entry.assetSha256 !== null && !assetIds.has(entry.assetSha256)) fail(entry.id, "missing asset manifest entry");
   }
-  return Object.freeze({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, createdAt,
+  return Object.freeze({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, ownerScope, createdAt,
     sources: Object.freeze(sources), objects: Object.freeze(objects), assets: Object.freeze(assets) });
 }
 
@@ -190,15 +196,20 @@ export function referencePackDigest(value) {
   return createHash("sha256").update(JSON.stringify(normalizeReferencePack(value)), "utf8").digest("hex");
 }
 
-/** Deterministic local keyword search; even restricted references can be discovered but not exported. */
-export function searchReferencePack(value, { query = "", kinds = [], limit = 20 } = {}) {
+/**
+ * Deterministic local keyword search. Public objects, whatever their rights (a restricted one
+ * can be found but not reused); non-public ones only for the owner the pack names.
+ */
+export function searchReferencePack(value, { query = "", kinds = [], limit = 20, ownerScope = null } = {}) {
   const manifest = normalizeReferencePack(value);
+  const owner = ownerScope !== null && ownerScope === manifest.ownerScope;
   if (typeof query !== "string" || query.length > 200 || /[\u0000-\u001f\u007f]/u.test(query)) fail("query", "invalid search text");
   if (!Array.isArray(kinds) || kinds.some((kind) => !OBJECT_KINDS.has(kind))) fail("kinds", "invalid filter");
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail("limit", "expected 1..100");
   const terms = query.toLowerCase().trim().split(/\s+/u).filter(Boolean);
   const sourceMap = new Map(manifest.sources.map((entry) => [entry.id, entry]));
   return manifest.objects.filter((entry) => {
+    if (entry.visibility !== "public" && !owner) return false;
     if (kinds.length > 0 && !kinds.includes(entry.kind)) return false;
     const searchable = `${entry.title} ${entry.tags.join(" ")} ${entry.kind} ${entry.id}`.toLowerCase();
     return terms.every((term) => searchable.includes(term));
@@ -207,19 +218,29 @@ export function searchReferencePack(value, { query = "", kinds = [], limit = 20 
   }));
 }
 
-/** Rights gate only. A grant does not prove that separately supplied bytes are unmodified. */
+/**
+ * Rights gate only, and a pack cannot pass it alone: what a pack says about itself is not proof
+ * of permission, so `allowed` stays false until a grant register outside the pack confirms it
+ * (see docs/research/LOCAL_REFERENCE_PACK_FOUNDATION_2026-11-06.md). `metadataPermits` says
+ * whether the pack's own statements would permit reuse. Objects with the same bytes are one
+ * work: the strictest statement about any of them holds for all.
+ */
 export function referenceReuseDecision(value, objectId) {
   const manifest = normalizeReferencePack(value);
+  const decision = (metadataPermits, reason) => Object.freeze({ allowed: false, metadataPermits, reason });
   const entry = manifest.objects.find((object) => object.id === objectId);
-  if (!entry) return Object.freeze({ allowed: false, reason: "unknown object" });
-  const source = manifest.sources.find((item) => item.id === entry.sourceId);
-  if (source.rights.status !== "verified" || !source.rights.redistributable) {
-    return Object.freeze({ allowed: false, reason: "source rights do not permit redistribution" });
+  if (!entry) return decision(false, "unknown object");
+  const sameWork = entry.assetSha256 === null ? [entry] : manifest.objects.filter((object) => object.assetSha256 === entry.assetSha256);
+  for (const object of sameWork) {
+    const source = manifest.sources.find((item) => item.id === object.sourceId);
+    if (source.rights.status !== "verified" || !source.rights.redistributable) {
+      return decision(false, "source rights do not permit redistribution");
+    }
+    if (object.visibility !== "public" || object.rights.status !== "verified" || !object.rights.redistributable) {
+      return decision(false, "object visibility or rights do not permit redistribution");
+    }
   }
-  if (entry.visibility !== "public" || entry.rights.status !== "verified" || !entry.rights.redistributable) {
-    return Object.freeze({ allowed: false, reason: "object visibility or rights do not permit redistribution" });
-  }
-  return Object.freeze({ allowed: true, reason: "verified metadata allows reuse; verify asset bytes before export" });
+  return decision(true, "the pack's metadata permits reuse; no grant register has confirmed it");
 }
 
 /** Checks local bytes against declared size and SHA; deliberately has no file access. */

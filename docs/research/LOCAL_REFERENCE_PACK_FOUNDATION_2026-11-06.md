@@ -10,7 +10,7 @@ Ninerr's desktop product cannot depend on a hosted design catalog, remote databa
 - `packages/import-stack/src/reference-packs.mjs`: versioned bounded manifest, canonical ordering/digest, local keyword search, source **and per-object** rights/visibility checks, SHA-256 asset validation.
 - `packages/import-stack/src/design-graph-reference-adapter.mjs`: deterministic transformation from an already access-filtered graph snapshot into a portable local reference pack. It does not execute database queries or connect to a source system.
 - `packages/import-stack/src/index.ts`: exports both modules through the existing import-stack package.
-- `tests/reference-packs.test.mjs` and `tests/design-graph-reference-adapter.test.mjs`: 19 direct tests on the authored modules with Node 22.16. Full repo CI and native packaged qualification are separate.
+- `tests/reference-packs.test.mjs` and `tests/design-graph-reference-adapter.test.mjs`: direct tests on the authored modules. Full repo CI and native packaged qualification are separate.
 
 ## Required input: authorized graph snapshot
 A caller provides the source system's **already-authorized** `sources`, `artifacts`, `assets`, `patterns`, and `flows` arrays, `exportedAt` and `packKey`. The converter never attempts to bypass source-system authorization and must not be fed a raw cross-tenant database dump.
@@ -35,18 +35,21 @@ const matches = searchReferencePack(pack, {
 
 for (const result of matches) {
   const decision = referenceReuseDecision(pack, result.id);
-  // No asset reuse or public export unless source AND object rights are verified,
-  // redistributable, and object visibility is explicitly public.
-  console.log(result.id, decision.allowed, decision.reason);
+  // decision.allowed is false until a grant register outside the pack confirms reuse.
+  // decision.metadataPermits says whether the pack's own statements would permit it.
+  console.log(result.id, decision.allowed, decision.metadataPermits, decision.reason);
 }
 ```
 
 ## Rights and identity: fail closed
-- Upstream `permitted` is **not automatically** a verified redistribution grant: the adapter maps it to `unknown` with `redistributable:false`. `restricted` and `metadata_only` map to restricted. Source-level rights are also unknown until independently reconciled with a grant ledger.
-- Per-artifact visibility and rights are independent of source rights; private/workspace objects are never approved for redistribution by the local decision function.
+- **A pack cannot grant its own permission.** Whatever its rights fields say, `referenceReuseDecision` returns `allowed: false` until a grant register outside the pack exists and confirms reuse (board task M06). `metadataPermits` reports only what the pack itself states.
+- Upstream `permitted` is **not automatically** a verified redistribution grant: the adapter maps it to `unknown` with `redistributable:false`. Every other classification, including unrecognized spellings, maps to restricted. An artifact with none is restricted; a source, pattern or flow row with none is unknown.
+- Per-artifact visibility and rights are independent of source rights. Objects sharing one content hash are one work: the strictest statement about any of them holds for all.
+- **Owner scope.** A pack with non-public objects must name an `ownerScope` (`urn:ninerr:owner:*`). Search returns only public objects unless the caller names that owner, so a copied pack does not show one owner's objects to another. `ownerScope` is a statement the catalog must enforce against its own project identity, not authentication.
+- Titles and other text refuse controls, line separators, direction overrides, zero-width spaces and byte-order marks, since agents read them back. Joiners stay, which Arabic and emoji need.
 - A content hash is a **media integrity identifier**, not permission. `verifyReferenceAssetBytes` validates declared length and SHA256; it does not override rights.
 - Source/object URNs derive deterministically from the original UUID via SHA256. The pack does **not** include raw source account tokens, storage keys, secrets or end-user identity fields.
-- Repeated imports with a matching export key and UTC timestamp have the same pack ID; a different snapshot timestamp has a new pack ID. The exact source->local ID mapping must be independently preserved by the caller if trace-back to original source UUIDs is required.
+- Repeated imports with a matching export key and instant have the same pack ID; a different snapshot timestamp has a new pack ID. The exact source->local ID mapping must be independently preserved by the caller if trace-back to original source UUIDs is required.
 - No network, filesystem, remote model or external process is invoked by these pure functions; the trust boundary for reading actual disk bytes remains a future separate module.
 
 ## Explicitly not claimed
