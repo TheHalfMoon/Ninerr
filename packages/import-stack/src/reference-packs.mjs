@@ -163,8 +163,13 @@ function object(value, index) {
   });
 }
 
+// Manifests this module made. They are deeply frozen, so a search or a decision on one need not
+// read the whole pack again.
+const NORMALIZED = new WeakSet();
+
 /** Validate untrusted JSON input; return a canonical, frozen manifest. No IO or network. */
 export function normalizeReferencePack(value) {
+  if (value !== null && typeof value === "object" && NORMALIZED.has(value)) return value;
   try {
     if (Buffer.byteLength(JSON.stringify(value), "utf8") > REFERENCE_PACK_LIMITS.maxManifestBytes) {
       fail("manifest", "exceeds size limit");
@@ -193,8 +198,10 @@ export function normalizeReferencePack(value) {
     if (entry.visibility !== "public" && ownerScope === null) fail(entry.id, "a non-public object requires an ownerScope");
     if (entry.assetSha256 !== null && !assetIds.has(entry.assetSha256)) fail(entry.id, "missing asset manifest entry");
   }
-  return Object.freeze({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, ownerScope, createdAt,
+  const manifest = Object.freeze({ schemaVersion: REFERENCE_PACK_SCHEMA_VERSION, packId, ownerScope, createdAt,
     sources: Object.freeze(sources), objects: Object.freeze(objects), assets: Object.freeze(assets) });
+  NORMALIZED.add(manifest);
+  return manifest;
 }
 
 export function referencePackDigest(value) {
@@ -209,7 +216,7 @@ export function searchReferencePack(value, { query = "", kinds = [], limit = 20,
   const manifest = normalizeReferencePack(value);
   const owner = ownerScope !== null && ownerScope === manifest.ownerScope;
   if (typeof query !== "string" || query.length > 200 || /[\u0000-\u001f\u007f]/u.test(query)) fail("query", "invalid search text");
-  if (!Array.isArray(kinds) || kinds.some((kind) => !OBJECT_KINDS.has(kind))) fail("kinds", "invalid filter");
+  if (!Array.isArray(kinds) || kinds.length > OBJECT_KINDS.size || kinds.some((kind) => !OBJECT_KINDS.has(kind))) fail("kinds", "invalid filter");
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail("limit", "expected 1..100");
   const terms = query.toLowerCase().trim().split(/\s+/u).filter(Boolean);
   const sourceMap = new Map(manifest.sources.map((entry) => [entry.id, entry]));
@@ -231,21 +238,31 @@ export function searchReferencePack(value, { query = "", kinds = [], limit = 20,
  * work: the strictest statement about any of them holds for all.
  */
 export function referenceReuseDecision(value, objectId) {
+  return referenceReuseDecisions(value).get(objectId) ?? decide(false, "unknown object");
+}
+
+const decide = (metadataPermits, reason) => Object.freeze({ allowed: false, metadataPermits, reason });
+
+/** Every object's decision, by id, in time linear in the pack. */
+export function referenceReuseDecisions(value) {
   const manifest = normalizeReferencePack(value);
-  const decision = (metadataPermits, reason) => Object.freeze({ allowed: false, metadataPermits, reason });
-  const entry = manifest.objects.find((object) => object.id === objectId);
-  if (!entry) return decision(false, "unknown object");
-  const sameWork = entry.assetSha256 === null ? [entry] : manifest.objects.filter((object) => object.assetSha256 === entry.assetSha256);
-  for (const object of sameWork) {
-    const source = manifest.sources.find((item) => item.id === object.sourceId);
-    if (source.rights.status !== "verified" || !source.rights.redistributable) {
-      return decision(false, "source rights do not permit redistribution");
-    }
-    if (object.visibility !== "public" || object.rights.status !== "verified" || !object.rights.redistributable) {
-      return decision(false, "object visibility or rights do not permit redistribution");
-    }
+  const sources = new Map(manifest.sources.map((source) => [source.id, source]));
+  const refusal = (object) => {
+    const { rights } = sources.get(object.sourceId);
+    if (rights.status !== "verified" || !rights.redistributable) return "source rights do not permit redistribution";
+    if (object.visibility !== "public" || object.rights.status !== "verified" || !object.rights.redistributable) return "object visibility or rights do not permit redistribution";
+    return null;
+  };
+  // The first refusal among the objects with the same bytes holds for all of them.
+  const sameWork = new Map();
+  for (const object of manifest.objects) {
+    if (object.assetSha256 !== null && !sameWork.has(object.assetSha256)) sameWork.set(object.assetSha256, null);
+    if (object.assetSha256 !== null && sameWork.get(object.assetSha256) === null) sameWork.set(object.assetSha256, refusal(object));
   }
-  return decision(true, "the pack's metadata permits reuse; no grant register has confirmed it");
+  return new Map(manifest.objects.map((object) => {
+    const reason = object.assetSha256 === null ? refusal(object) : sameWork.get(object.assetSha256);
+    return [object.id, reason === null ? decide(true, "the pack's metadata permits reuse; no grant register has confirmed it") : decide(false, reason)];
+  }));
 }
 
 /** Checks local bytes against declared size and SHA; deliberately has no file access. */
