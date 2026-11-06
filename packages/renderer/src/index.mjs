@@ -338,6 +338,45 @@ export function shorthandsFirst(style) {
   return Object.fromEntries(names.map((name) => [name, style[name]]));
 }
 
+// What each shorthand resets, per the CSS specifications. A name it merely starts with is not
+// among them (flex-direction under flex, border-collapse under border, overflow-wrap under
+// overflow), and a pair not listed here keeps both: an entry is left out only when it is certain.
+const SIDE = "(?:top|right|bottom|left|block|inline)(?:-start|-end)?";
+const RESETS = Object.freeze({
+  ...Object.fromEntries(["margin", "padding", "scroll-margin", "scroll-padding"].map((name) => [name, new RegExp(`^${name}-${SIDE}$`, "u")])),
+  ...Object.fromEntries(["margin", "padding", "scroll-margin", "scroll-padding", "inset"].flatMap((name) => ["block", "inline"].map((axis) => [`${name}-${axis}`, new RegExp(`^${name}-${axis}-(?:start|end)$`, "u")]))),
+  inset: /^(?:top|right|bottom|left|inset-(?:block|inline)(?:-start|-end)?)$/u,
+  border: new RegExp(`^border-(?:${SIDE}(?:-(?:color|style|width))?|color|style|width|image(?:-(?:source|slice|width|outset|repeat))?)$`, "u"),
+  ...Object.fromEntries(["top", "right", "bottom", "left", "block-start", "block-end", "inline-start", "inline-end"].map((side) => [`border-${side}`, new RegExp(`^border-${side}-(?:color|style|width)$`, "u")])),
+  "border-block": /^border-block(?:-start|-end)?-(?:color|style|width)$/u,
+  "border-inline": /^border-inline(?:-start|-end)?-(?:color|style|width)$/u,
+  ...Object.fromEntries(["color", "style", "width"].flatMap((part) => [`border-${part}`, `border-block-${part}`, `border-inline-${part}`].map((name) => [name, LONGHANDS[name]]))),
+  "border-radius": LONGHANDS["border-radius"],
+  "border-image": /^border-image-(?:source|slice|width|outset|repeat)$/u,
+  outline: /^outline-(?:color|style|width)$/u,
+  background: /^background-(?:color|image|position(?:-x|-y)?|size|repeat(?:-x|-y)?|attachment|origin|clip)$/u,
+  font: /^(?:font-(?:style|variant|variant-[a-z-]+|weight|stretch|size|family|size-adjust|kerning|feature-settings|language-override|variation-settings|optical-sizing)|line-height)$/u,
+  flex: /^flex-(?:grow|shrink|basis)$/u,
+  "flex-flow": LONGHANDS["flex-flow"],
+  grid: /^grid-(?:template(?:-(?:rows|columns|areas))?|auto-(?:rows|columns|flow))$/u,
+  "grid-template": /^grid-template-(?:rows|columns|areas)$/u,
+  "grid-area": LONGHANDS["grid-area"],
+  "grid-row": /^grid-row-(?:start|end)$/u,
+  "grid-column": /^grid-column-(?:start|end)$/u,
+  gap: LONGHANDS.gap,
+  "grid-gap": LONGHANDS["grid-gap"],
+  "place-items": LONGHANDS["place-items"],
+  "place-content": LONGHANDS["place-content"],
+  "place-self": LONGHANDS["place-self"],
+  columns: LONGHANDS.columns,
+  "text-decoration": /^text-decoration-(?:line|style|color|thickness)$/u,
+  "list-style": /^list-style-(?:type|position|image)$/u,
+  overflow: /^overflow-[xy]$/u,
+  transition: /^transition-(?:property|duration|timing-function|delay|behavior)$/u,
+  animation: /^animation-(?:name|duration|timing-function|delay|iteration-count|direction|fill-mode|play-state)$/u,
+  mask: /^mask-(?:image|mode|repeat|position|clip|origin|size|composite)$/u,
+});
+
 /**
  * A style as written in one declaration, without the longhands a later shorthand of theirs
  * overrides (#360): since shorthands apply first here, keeping one would bring it back. An
@@ -345,9 +384,24 @@ export function shorthandsFirst(style) {
  */
 export function withoutOverriddenLonghands(style) {
   const names = Object.keys(style);
-  const important = (value) => /!\s*important\s*$/iu.test(value);
-  const kept = names.filter((name, at) => !names.slice(at + 1).some((later) => isLonghandOf(name, later) && (important(style[later]) || !important(style[name]))));
+  const later = new Map(); // shorthand met so far, walking back → whether it is important
+  const kept = [];
+  for (let at = names.length - 1; at >= 0; at -= 1) {
+    const name = names[at];
+    const strong = isImportant(style[name]);
+    let overridden = false;
+    for (const [shorthand, shorthandStrong] of later) {
+      if ((shorthandStrong || !strong) && RESETS[shorthand].test(name)) overridden = true;
+    }
+    if (!overridden) kept.unshift(name);
+    if (Object.hasOwn(RESETS, name)) later.set(name, strong);
+  }
   return kept.length === names.length ? style : Object.fromEntries(kept.map((name) => [name, style[name]]));
+}
+
+/** Whether a declaration's value is !important, whatever comments follow it. */
+export function isImportant(value) {
+  return /!\s*important\s*(?:\/\*.*?\*\/\s*)*$/isu.test(value);
 }
 
 function sanitizeAttribute(tag, namespace, name, rawValue) {

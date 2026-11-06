@@ -362,7 +362,9 @@ export interface WriteBackPlan {
 
 /** The layer's current value for a source prop, as source text. */
 function layerValue(node: any, prop: string): string | undefined {
-  if (prop === "style") return Object.entries(node.props?.style ?? {}).map(([name, value]) => `${name}: ${value}`).join("; ");
+  // In the order the canvas applies it: the store's sorted order would read a longhand that
+  // sorts before its shorthand as overridden by it (#360).
+  if (prop === "style") return Object.entries(shorthandsFirst(node.props?.style ?? {})).map(([name, value]) => `${name}: ${value}`).join("; ");
   const attributes = node.props?.attributes ?? {};
   const name = layerName(prop);
   return typeof attributes[name] === "string" ? attributes[name] : undefined;

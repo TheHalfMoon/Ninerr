@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { IMPORT_SCHEMA_VERSION, defaultImportPolicy, frameStylesheet, importHtmlSnapshot, sanitizeImportedStylesheet, validateImportProposal, type ImportProposal } from "@ninerr/import-stack";
 import { inferSemantics, reviewImport } from "@ninerr/intake";
-import { withoutOverriddenLonghands } from "@ninerr/renderer";
+import { isImportant, withoutOverriddenLonghands } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 
 // Importing HTML into the open project (PC6, gate 10). The import stack parses and
@@ -254,7 +254,8 @@ export function styleProperties(style: unknown): Record<string, string> {
       out[key] = value;
       continue;
     }
-    // A name written again takes the later value and the later place: order decides what wins.
+    // A name written again takes the later value and the later place, since order decides what
+    // wins; but a plain one never beats an important one, as in CSS.
     for (const declaration of value.split(";")) {
       const at = declaration.indexOf(":");
       if (at <= 0) continue;
@@ -263,6 +264,7 @@ export function styleProperties(style: unknown): Record<string, string> {
       // Custom properties (--brand) keep their case; other names are lowercased.
       const name = declaration.slice(0, at).trim().startsWith("--") ? declaration.slice(0, at).trim() : property;
       if ((/^-?[a-z][a-z0-9-]{0,63}$/u.test(name) || /^--[A-Za-z0-9_-]{1,64}$/u.test(name)) && text !== "" && text.length <= 2000) {
+        if (Object.hasOwn(out, name) && isImportant(out[name]) && !isImportant(text)) continue;
         delete out[name];
         out[name] = text;
       }

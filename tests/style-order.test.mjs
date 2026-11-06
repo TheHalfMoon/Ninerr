@@ -151,11 +151,40 @@ test("a longhand a later shorthand overrides does not come into the layer", () =
   assert.deepEqual(style("margin-left: 5px !important; margin: 0px"), { "margin-left": "5px !important", margin: "0px" });
   assert.deepEqual(style("margin-left: 5px; margin: 0px !important"), { margin: "0px !important" });
   assert.deepEqual(style("margin-left: 5px !important; margin: 0px !important"), { margin: "0px !important" });
+  assert.deepEqual(Object.keys(style("margin-left: 5px !important /* c */; margin: 0px")), ["margin-left", "margin"]);
+  // A plain repeat does not beat an important declaration of the same name.
+  assert.deepEqual(style("color: red !important; color: blue"), { color: "red !important" });
+  // Linear: one style of 20,000 declarations must not hold the host (85 s when quadratic).
+  const many = Array.from({ length: 20_000 }, (_, index) => `--x${index}: 1`).join("; ");
+  const started = performance.now();
+  assert.equal(Object.keys(style(`${many}; margin: 0px`)).length, 20_001);
+  assert.ok(performance.now() - started < 5_000, "a style's size does not stall the host");
   // Overlapping shorthands and unrelated names stay: neither is the other's longhand.
   assert.deepEqual(Object.keys(style("border-color: red; border-top: 1px solid")), ["border-color", "border-top"]);
   assert.deepEqual(Object.keys(style("--margin-left: 1px; --margin: 2px")), ["--margin-left", "--margin"]);
   const plain = { color: "red" };
   assert.equal(withoutOverriddenLonghands(plain), plain, "nothing overridden: the same object");
+  // A name that starts with a shorthand's but that the shorthand does not reset stays.
+  for (const [name, shorthand] of [
+    ["flex-direction", "flex"], ["flex-wrap", "flex"], ["flex-flow", "flex"],
+    ["border-collapse", "border"], ["border-spacing", "border"], ["outline-offset", "outline"],
+    ["overflow-wrap", "overflow"], ["overflow-anchor", "overflow"], ["background-blend-mode", "background"],
+    ["grid-row", "grid"], ["grid-column", "grid"], ["grid-area", "grid"], ["grid-gap", "grid"],
+    ["text-decoration-skip-ink", "text-decoration"], ["font-synthesis", "font"], ["border-radius", "border"],
+  ]) {
+    const written = `${name}: initial; ${shorthand}: inherit`;
+    assert.deepEqual(Object.keys(style(written)), [name, shorthand], written);
+  }
+  // And one it does reset goes, as far down as it reaches.
+  for (const [name, shorthand] of [
+    ["flex-grow", "flex"], ["border-top-color", "border"], ["border-top-color", "border-top"], ["border-top", "border"], ["border-image-source", "border"],
+    ["border-top-left-radius", "border-radius"], ["grid-template-rows", "grid"], ["grid-row-start", "grid-area"], ["grid-row-start", "grid-row"],
+    ["overflow-x", "overflow"], ["background-position-x", "background"], ["line-height", "font"], ["font-size", "font"],
+    ["margin-inline-start", "margin"], ["margin-inline-start", "margin-inline"], ["top", "inset"], ["row-gap", "gap"], ["outline-color", "outline"],
+  ]) {
+    const written = `${name}: initial; ${shorthand}: inherit`;
+    assert.deepEqual(Object.keys(style(written)), [shorthand], written);
+  }
   // Code import, as the layer and through export.
   const nodes = importJsx('export function A() { return <div style="bottom: 1px; inset: 0px; left: 2px">a</div>; }').operations[0].nodes;
   assert.deepEqual(nodes[1].props.style, { inset: "0px", left: "2px" });
@@ -174,9 +203,12 @@ test("what a style draws is the same as written, on the canvas, and after export
     "margin: 1px; margin-left: 5px; margin: 2px",
     "margin-left: 5px !important; margin: 0px",
     "column-gap: 1px; gap: 2px",
+    "display: flex; flex-direction: column; flex: 1",
+    "border-radius: 8px; border: 1px solid rgb(1, 2, 3)",
+    "outline-offset: 3px; outline: 1px solid rgb(1, 2, 3)",
     "border-top-color: rgb(1, 2, 3); border: 1px solid rgb(4, 5, 6)",
   ];
-  const properties = ["position", "top", "bottom", "margin-left", "margin-top", "column-gap", "row-gap", "border-top-color", "border-left-color"];
+  const properties = ["position", "top", "bottom", "margin-left", "margin-top", "column-gap", "row-gap", "border-top-color", "border-left-color", "flex-direction", "flex-grow", "border-top-left-radius", "outline-offset"];
   // A probe beside the layer, in the canvas's own document, with the style as written.
   const computed = (css) => editor.page.evaluate(([style, names]) => {
     const canvas = document.querySelector("iframe").contentDocument;
@@ -237,6 +269,38 @@ test("a dead longhand in a file is no edit: an untouched style is never written 
   assert.equal(readFileSync(file, "utf8"), source.replace('title="a"', 'title="b"'));
 });
 
+test("a longhand added after import is an edit, and an untouched style with one is not", async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-style-added-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  const code = join(root, "code");
+  mkdirSync(code);
+  mkdirSync(join(root, "projects"));
+  const added = join(code, "Added.jsx");
+  writeFileSync(added, 'export function Added() {\n  return <div style="inset: 0px">Hi</div>;\n}\n');
+  const kept = join(code, "Kept.jsx");
+  const keptSource = 'export function Kept() {\n  return <section style="inset: 0px; bottom: 1px">Hi</section>;\n}\n';
+  writeFileSync(kept, keptSource);
+  const running = await pool.open(join(root, "projects"));
+  await ok(running.call("POST", "/api/projects/create", { name: "site" }), "create");
+  await ok(running.call("POST", "/api/codebase/connect", { folder: code }), "connect");
+  await ok(running.call("POST", "/api/codebase/import", { file: "Added.jsx", component: "Added" }), "import");
+  await ok(running.call("POST", "/api/codebase/import", { file: "Kept.jsx", component: "Kept" }), "import");
+  const bound = (tag) => Object.values(running.host.session.document.nodes).find((node) => node.props?.tag === tag && node.props?.codeSource);
+  // bottom sorts before inset in the store, but it refines inset: a real edit, written back.
+  await ok(running.call("POST", "/api/edit", { baseRevision: running.host.session.revision, intent: "Bottom", operations: [{ type: "set-props", nodeId: bound("div").id, set: { style: { inset: "0px", bottom: "2px" } } }] }), "edit");
+  const edit = await ok(running.call("POST", "/api/codebase/preview", { nodeId: bound("div").id }), "preview");
+  await ok(running.call("POST", "/api/codebase/write", { nodeId: bound("div").id, token: edit.token }), "write");
+  assert.match(readFileSync(added, "utf8"), /style="inset: 0px; bottom: 2px"/u);
+  // And the same pair, untouched, is nothing to write.
+  const untouched = await ok(running.call("POST", "/api/codebase/preview", { nodeId: bound("section").id }), "preview");
+  assert.equal(untouched.diff ?? "", "");
+  assert.equal(readFileSync(kept, "utf8"), keptSource);
+});
+
 test("the HTML import review says when a style loses a longhand its shorthand overrides", async (t) => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-style-note-")));
   const pool = hostPool(now);
@@ -250,5 +314,6 @@ test("the HTML import review says when a style loses a longhand its shorthand ov
   assert.ok(review.notes.includes("1 layer has style properties left out that a later shorthand in the same style overrides; the layer looks the same."), JSON.stringify(review.notes));
   await ok(running.call("POST", "/api/import/commit", { proposalId: review.proposalId }), "commit");
   const styles = Object.values(running.host.session.document.nodes).filter((node) => node.props?.tag === "p").map((node) => node.props.style);
-  assert.deepEqual(styles, [{ inset: "0px" }, { inset: "0px", bottom: "1px" }]);
+  // Layer ids are random, so the two come in either order.
+  assert.deepEqual(styles.sort((a, b) => Object.keys(a).length - Object.keys(b).length), [{ inset: "0px" }, { inset: "0px", bottom: "1px" }]);
 });
