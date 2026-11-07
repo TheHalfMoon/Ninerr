@@ -151,6 +151,7 @@ const failedResponses = [];
 // The refusals of POST /api/selection seen (#377), and any answer to it the driver could not read.
 let selectionRefusals = 0;
 const selectionUnread = [];
+const reloadRefusals = [];
 let requests = 0;
 
 /** Fetched here, not in the page, so the answer is read even if the page is closing by then. */
@@ -165,12 +166,24 @@ async function shareSelection(route) {
   }
 }
 
+/** The tab's reload after a project changes (#377): refused ones are recorded with their bodies, and none is accepted. */
+async function readRefusal(route) {
+  try {
+    const response = await route.fetch();
+    if (response.status() >= 400) reloadRefusals.push(`${new URL(route.request().url()).pathname} ${response.status()} ${(await response.text()).slice(0, 200)}`);
+    await route.fulfill({ response });
+  } catch {
+    await route.abort().catch(() => {});
+  }
+}
+
 async function openEditor(host) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   await context.route("**/*", (route) => {
     const url = route.request().url();
     requests += 1;
     if (url === `${host.url}/api/selection` && route.request().method() === "POST") return shareSelection(route);
+    if (url === `${host.url}/api/document` || url === `${host.url}/api/history`) return readRefusal(route);
     if (url.startsWith(`${host.url}/`)) return route.continue();
     foreign.push(url);
     return route.abort();
@@ -947,6 +960,7 @@ try {
   result.failedResponses = failedResponses;
   // Accepted, and still reported.
   result.selectionRefusals = { seen: selectionRefusals, accepted: accepted.length, unread: selectionUnread };
+  result.reloadRefusals = reloadRefusals;
   const sandbox = await page.evaluate(() => document.querySelector("iframe")?.getAttribute("sandbox"));
   check("F", "the canvas frame is sandboxed without scripts", typeof sandbox === "string" && !sandbox.includes("allow-scripts"), { sandbox });
   const scripts = await page.evaluate(() => document.querySelector("iframe")?.contentDocument?.querySelectorAll("script").length ?? -1);
