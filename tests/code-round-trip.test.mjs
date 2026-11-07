@@ -56,7 +56,7 @@ test("a page the person has changed exports as itself, and still settles from th
   const first = imported(`export function Card() { return <section><h2>Title</h2></section>; }`);
   first.document.nodes[first.frameId].props.style = { ...first.document.nodes[first.frameId].props.style, background: "#000000" };
   const once = exportJsx(first.document, first.frameId).code;
-  assert.match(once, /background: #000000/u, "a styled page keeps its style");
+  assert.match(once, /background: "#000000"/u, "a styled page keeps its style");
   const twice = exportedPage(once);
   assert.equal(exportedPage(twice), twice);
   assert.equal(twice, once);
@@ -113,4 +113,51 @@ test("a connected file's object style shows on the canvas, and only a change to 
   await edit({ style: {} });
   plan = await ok(call("POST", "/api/codebase/preview", { nodeId: section }), "preview");
   assert.deepEqual(plan.notWritten.map((entry) => entry.reason), ["the style is code in the source and is not written back"]);
+});
+
+test("export writes styles as React style objects, which import reads back exactly", () => {
+  const { document, rootId } = imported(`export function A() { return <main>x</main>; }`);
+  document.nodes[rootId].props.style = {
+    "background-color": "#fafafa",
+    "-webkit-line-clamp": "3",
+    "-ms-transition": "none",
+    "--brand": "red",
+    "grid-template-areas": `"a b" "c d"`,
+    "font-family": "Inter, sans-serif",
+  };
+  const code = exportJsx(document, rootId).code;
+  assert.match(code, /<main style=\{\{ backgroundColor: "#fafafa", WebkitLineClamp: "3", msTransition: "none", "--brand": "red", gridTemplateAreas: '"a b" "c d"', fontFamily: "Inter, sans-serif" \}\}>/u);
+  const again = imported(code);
+  assert.equal(again.layersWithStyleLeftOut, 0);
+  assert.deepEqual(again.document.nodes[again.rootId].props.style, document.nodes[rootId].props.style);
+  assert.equal(exportedPage(code), code);
+});
+
+test("a style value with both kinds of quote exports as valid code, and comes back counted as left out", () => {
+  const { document, rootId } = imported(`export function A() { return <main>x</main>; }`);
+  document.nodes[rootId].props.style = { "font-family": `"Inter", 'Noto Sans'` };
+  const code = exportJsx(document, rootId).code;
+  assert.match(code, /fontFamily: "\\"Inter\\", 'Noto Sans'"/u);
+  assert.equal(imported(code).layersWithStyleLeftOut, 1);
+});
+
+test("a ; that would start another declaration keeps an object style as code", () => {
+  for (const value of [`"red; x: y"`, `"a) ; b"`, `"url(a;b"`]) {
+    assert.equal(objectStyleText(`style={{ color: ${value} }}`), null, value);
+  }
+  assert.equal(objectStyleText(`style={{ background: "url(a;b)" }}`), "background: url(a;b)");
+  assert.equal(objectStyleText(`style={{ content: "';'" }}`), "content: ';'");
+});
+
+test("a design node's style object is validated before it is written", async () => {
+  const { designToCode } = await import("../packages/code-ir/src/index.ts");
+  const doc = (root) => ({ componentName: "A", root });
+  assert.equal(designToCode(doc({ tag: "p", props: {}, style: {} })), "export function A() {\n  return (\n    <p />\n  );\n}\n", "an empty style is none");
+  for (const [root, pattern] of [
+    [{ tag: "p", props: { style: "color: red" }, style: { color: "red" } }, /both a style prop and a style object/u],
+    [{ tag: "p", props: {}, style: { "Color": "red" } }, /unsupported property name/u],
+    [{ tag: "p", props: {}, style: { "color;x": "red" } }, /unsupported property name/u],
+    [{ tag: "p", props: {}, style: { color: "red\nblue" } }, /bounded one-line string/u],
+    [{ tag: "p", props: {}, style: { color: 3 } }, /bounded one-line string/u],
+  ]) assert.throws(() => designToCode(doc(root)), pattern);
 });

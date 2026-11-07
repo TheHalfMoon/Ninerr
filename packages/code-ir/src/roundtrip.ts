@@ -1,5 +1,6 @@
 import { CodeIrValidationError } from "./errors.ts";
 import { buildCodeIr } from "./ir.ts";
+import { reactStyleKey, readStyleObject } from "./style.ts";
 import {
   type CodeIr,
   type DesignDoc,
@@ -49,6 +50,18 @@ function emitExpression(code: string): string {
   return code;
 }
 
+// A style value as a JS string: quoted so that it needs no escape when it can.
+function styleValue(value: string): string {
+  if (!/[\\"]/u.test(value)) return `"${value}"`;
+  if (!/[\\']/u.test(value)) return `'${value}'`;
+  return JSON.stringify(value);
+}
+
+function emitStyle(style: Record<string, string> | undefined): string {
+  if (style === undefined) return "";
+  return ` style={{ ${Object.entries(style).map(([name, value]) => `${reactStyleKey(name)}: ${styleValue(value)}`).join(", ")} }}`;
+}
+
 const isPart = (node: DesignDocNode) => node.tag === "#text" || node.tag === "#expression";
 const emitPart = (node: DesignDocNode) => node.tag === "#text" ? emitText(node.text ?? "") : emitExpression(node.code ?? "");
 
@@ -65,7 +78,7 @@ function emitNode(node: DesignDocNode, indent: string): string {
       if (typeof value === "number") return ` ${key}={${String(value)}}`;
       return ` ${key}=${emitAttrValue(value)}`;
     })
-    .join("");
+    .join("") + emitStyle(node.style);
   const text = node.text === undefined ? "" : emitText(node.text);
   // Text and code parts alone stay on the element's line, as a source would write them.
   if (node.children !== undefined && node.children.every(isPart)) {
@@ -87,16 +100,21 @@ export function designToCode(docInput: DesignDoc): string {
   return `export function ${doc.componentName}() {\n  return (\n${body}\n  );\n}\n`;
 }
 
-function symbolToDesignNode(ir: CodeIr, symbolId: string, depth: number): DesignDocNode {
+function symbolToDesignNode(ir: CodeIr, symbolId: string, depth: number, sources: Readonly<Record<string, string>>): DesignDocNode {
   if (depth > 32) throw new CodeIrValidationError("round-trip design exceeds maxDepth");
   const symbol = ir.symbols[symbolId];
   if (!symbol) throw new CodeIrValidationError(`round-trip symbol ${symbolId} is missing`);
   if (symbol.kind !== "element" && symbol.kind !== "component") {
     throw new CodeIrValidationError(`round-trip symbol ${symbolId} is not renderable`);
   }
-  // The design subset is literal: an attribute that is code has no design value.
-  if (symbol.codeProps !== undefined && symbol.codeProps.length > 0) {
-    throw new CodeIrValidationError(`round-trip symbol ${symbolId} has attributes that are code`);
+  // The design subset is literal: an attribute that is code has no design value, except a style
+  // object of literal values, read from its source when the source is given (#398).
+  let style: Record<string, string> | undefined;
+  for (const prop of symbol.codeProps ?? []) {
+    const content = prop.name === "style" && Object.hasOwn(sources, prop.range.file) ? sources[prop.range.file] : undefined;
+    const declarations = content === undefined ? null : readStyleObject(content.slice(prop.range.startOffset, prop.range.endOffset));
+    if (declarations === null) throw new CodeIrValidationError(`round-trip symbol ${symbolId} has attributes that are code`);
+    style = Object.fromEntries(declarations);
   }
   // defineProperty, so a prop named __proto__ is an own key that the design normal form
   // refuses, not an assignment that silently drops it.
@@ -105,18 +123,21 @@ function symbolToDesignNode(ir: CodeIr, symbolId: string, depth: number): Design
     Object.defineProperty(props, prop.name, { value: prop.literal.value, enumerable: true, writable: true, configurable: true });
   }
   const node: DesignDocNode = { tag: symbol.name, props };
+  if (style !== undefined && Object.keys(style).length > 0) node.style = style;
   const texts = symbol.texts.map((entry) => entry.value).join("");
   if (texts !== "") node.text = texts;
-  const children = symbol.children.map((child) => symbolToDesignNode(ir, child, depth + 1));
+  const children = symbol.children.map((child) => symbolToDesignNode(ir, child, depth + 1, sources));
   if (children.length > 0) node.children = children;
   return node;
 }
 
 /**
  * Convert parsed code back to a design document. Symbols outside the
- * renderable subset raise unsupported errors instead of guessing.
+ * renderable subset raise unsupported errors instead of guessing. With the
+ * parsed files' contents by path, a style object of literal values is read
+ * back as the node's style; without them it is code, and refused.
  */
-export function codeToDesign(irInput: CodeIr, rootSymbolId: string, componentName: string): DesignDoc {
+export function codeToDesign(irInput: CodeIr, rootSymbolId: string, componentName: string, sources: Readonly<Record<string, string>> = {}): DesignDoc {
   if (typeof rootSymbolId !== "string" || rootSymbolId === "") {
     throw new CodeIrValidationError("round-trip root symbol is required");
   }
@@ -124,7 +145,7 @@ export function codeToDesign(irInput: CodeIr, rootSymbolId: string, componentNam
     throw new CodeIrValidationError("round-trip component name must be a capitalized identifier");
   }
   const ir = normalizeCodeIr(irInput);
-  const root = symbolToDesignNode(ir, rootSymbolId, 0);
+  const root = symbolToDesignNode(ir, rootSymbolId, 0, sources);
   return normalizeDesignDoc({ componentName, root });
 }
 

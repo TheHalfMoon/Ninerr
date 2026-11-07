@@ -90,7 +90,7 @@ test("a part that is styled, or exported alone, keeps the element the canvas dra
   const part = document.nodes[rootId].children[0];
   assert.match(exportJsx(document, part).code, /<\w+>\{title\}<\/\w+>/u, "the root of a component must be an element");
   document.nodes[part].props.style = { color: "red" };
-  assert.match(exportJsx(document, rootId).code, /<p>\s*<\w+ style="color: red">\{title\}<\/\w+>\s*<\/p>/u);
+  assert.match(exportJsx(document, rootId).code, /<p>\s*<\w+ style=\{\{ color: "red" \}\}>\{title\}<\/\w+>\s*<\/p>/u);
 });
 
 test("a part that cannot be written exactly refuses the export", () => {
