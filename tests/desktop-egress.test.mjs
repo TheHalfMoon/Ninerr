@@ -60,3 +60,22 @@ test("a UDP connect sends nothing and is reported; what sends off this computer 
 200 write(5<UDP:[10.0.0.2:1->8.8.8.8:443]>, "x", 1) = 1`);
   assert.deepEqual(forbiddenAttempts(probe).map(({ call }) => call), ["write"]);
 });
+
+test("where the trace names only an inode, a send answers to what that socket connected to", () => {
+  const attempts = networkAttempts(`300 sendmsg(5<UDP:[777]>, {msg_name=NULL, msg_namelen=0}, 0) = 1
+301 connect(5<UDP:[777]>, {sa_family=AF_INET, sin_port=htons(11), sin_addr=inet_addr("192.0.2.1")}, 16) = 0
+302 connect(6<UDP:[778]>, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("8.8.8.8")}, 16) = 0
+303 write(7<UDP:[779]>, "x", 1) = 1
+304 connect(8<socket:[780]>, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("8.8.4.4")}, 16) = 0
+305 write(8<socket:[780]>, "x", 1) = 1
+306 connect(9<TCP:[781]>, {sa_family=AF_INET, sin_port=htons(1234), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+307 write(9<TCP:[781]>, "x", 1) = 1
+308 write(9<TCP:[900]>, "x", 1) = 1`);
+  // Another thread's send, before its connect in the trace, is held against that peer.
+  assert.deepEqual(forbiddenAttempts(attempts).map(({ pid, port }) => [pid, port]), [[300, 11], [304, 443], [305, 443]]);
+  // The route query alone stays a route query, a socket never connected names nothing, and
+  // loopback traffic stays allowed.
+  assert.deepEqual(routeQueries(attempts).map(({ pid }) => pid), [301, 302]);
+  assert.equal(attempts.some(({ pid }) => pid === 303 || pid === 308), false);
+  assert.deepEqual(attempts.filter(({ pid }) => pid === 307).map(({ address }) => address), ["127.0.0.1"]);
+});
