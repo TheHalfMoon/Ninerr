@@ -10,20 +10,21 @@
 // request there, and requests from the page to a font, update and provider host must be refused. The result is printed as one JSON line, and the exit code is 0 only if
 // every check held. A clean run is evidence for this run on this system, not for macOS or Windows,
 // and not for what the app might do in code this session never reached.
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TRACED_CALLS, forbiddenAttempts, networkAttempts, routeQueries } from "./desktop/egress.mjs";
 import { preparePackage, sleep, waitForRevision } from "./desktop/drive.mjs";
+import { forbiddenOutbound, macPackets, unattributedOutbound, windowsEvents } from "./desktop/egress-capture.mjs";
 
 const archive = process.argv[2] ? resolve(process.argv[2]) : null;
 if (archive === null || process.argv.length !== 3 || !existsSync(archive)) {
-  process.stderr.write("usage: node scripts/egress-desktop.mjs <Ninerr-linux-x64.tar.gz>\n");
+  process.stderr.write("usage: node scripts/egress-desktop.mjs <archive made by scripts/package-desktop.mjs>\n");
   process.exit(2);
 }
-if (process.platform !== "linux") {
-  process.stderr.write("the whole-process trace is on Linux only, for now\n");
+if (!["linux", "darwin", "win32"].includes(process.platform)) {
+  process.stderr.write(`no egress capture for ${process.platform}\n`);
   process.exit(2);
 }
 // io_uring's submissions cannot be read in a trace, so it is off: libuv then makes ordinary calls.
@@ -49,7 +50,7 @@ function traceOf(folder, prefix) {
   }).join("\n");
 }
 
-async function main() {
+async function traced() {
   const traces = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-egress-trace-")));
   try {
     // The negative control of the trap itself: the same trace of a child that reaches off this
@@ -166,6 +167,133 @@ async function main() {
     rmSync(traces, { recursive: true, force: true, maxRetries: 5 });
   }
 }
+
+/**
+ * Start the system's capture: on macOS, tcpdump on pktap, which charges each packet to a process;
+ * on Windows, the kernel's network events. Returns stop(), which gives the outbound events.
+ */
+async function startCapture(folder) {
+  if (process.platform === "darwin") {
+    const lines = [];
+    const capture = spawn("sudo", ["tcpdump", "-i", "pktap", "-k", "NP", "-nn", "-l"], { stdio: ["ignore", "pipe", "pipe"] });
+    let said = "";
+    capture.stdout.on("data", (chunk) => lines.push(String(chunk)));
+    capture.stderr.on("data", (chunk) => { said += String(chunk); });
+    for (let tries = 0; tries < 50 && !said.includes("listening on"); tries += 1) await sleep(200);
+    check("the capture starts", said.includes("listening on"), said.slice(-300));
+    return async () => {
+      spawnSync("sudo", ["pkill", "-INT", "-x", "tcpdump"]);
+      await Promise.race([new Promise((resolve) => capture.once("exit", resolve)), sleep(10_000)]);
+      const text = lines.join("");
+      return { events: macPackets(text), sample: text.split("\n").slice(0, 12).map((line) => line.slice(0, 200)) };
+    };
+  }
+  const etl = join(folder, "net.etl");
+  const xml = join(folder, "net.xml");
+  spawnSync("logman", ["stop", "NinerrNet", "-ets"]);
+  execFileSync("logman", ["start", "NinerrNet", "-p", "Microsoft-Windows-Kernel-Network", "0xFFFFFFFFFFFFFFFF", "0xff", "-o", etl, "-ets"], { stdio: "pipe" });
+  check("the capture starts", true);
+  return async () => {
+    execFileSync("logman", ["stop", "NinerrNet", "-ets"], { stdio: "pipe" });
+    execFileSync("tracerpt", [etl, "-o", xml, "-of", "XML", "-y"], { stdio: "pipe" });
+    const text = readFileSync(xml, "utf16le").replace(/^\uFEFF/u, "");
+    const plain = text.includes("<Event") ? text : readFileSync(xml, "utf8");
+    return { events: windowsEvents(plain), sample: plain.slice(0, 1500) };
+  };
+}
+
+/** The same session and controls, under a capture tagged by process (macOS and Windows). */
+async function captured() {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-egress-capture-")));
+  try {
+    const stop = await startCapture(folder);
+    // The control of the capture itself: a child that reaches off this computer by TCP and UDP.
+    const script = join(folder, "control.cjs");
+    writeFileSync(script, `
+      const net = require("node:net"), dgram = require("node:dgram");
+      const sent = dgram.createSocket("udp4");
+      sent.send("x", 9, ${JSON.stringify(RESERVED)}, () => {
+        sent.close();
+        net.connect({ port: 12, host: ${JSON.stringify(RESERVED)}, timeout: 1500 }).on("error", () => process.exit(0)).on("timeout", () => process.exit(0));
+      });`);
+    const child = spawn(process.execPath, [script], { stdio: "ignore" });
+    await new Promise((resolve) => child.once("exit", resolve));
+    const controlPid = child.pid;
+
+    const sessionPids = new Set();
+    const stunPids = new Set();
+    const run = await preparePackage(archive, { proxy: false });
+    const processesOf = async (launched, into) => {
+      into.add(launched.pid);
+      const cdp = await launched.browser.newBrowserCDPSession();
+      const { processInfo } = await cdp.send("SystemInfo.getProcessInfo");
+      for (const { id } of processInfo) into.add(id);
+      return processInfo.map(({ id, type }) => ({ id, type }));
+    };
+    let appProcesses = [];
+    try {
+      const ninerr = await run.launch();
+      const { page } = ninerr;
+      check("it runs as a packaged app", ninerr.packaged(), ninerr.output().slice(-300));
+      await page.locator("#new-project-name").fill("egress");
+      await page.locator("#dialog[open] button.primary", { hasText: "Create project" }).click();
+      await waitForRevision(page, 0);
+      await page.locator("#action-insert-box").click();
+      await waitForRevision(page, 1);
+      await page.locator("#inspect-name").fill("Captured");
+      await page.locator("#inspect-name").press("Tab");
+      await waitForRevision(page, 2);
+      await page.locator("#action-save").click();
+      await page.locator("#action-research").click();
+      await page.waitForFunction(() => document.getElementById("research-status")?.textContent !== "");
+      await page.keyboard.press("Escape");
+      appProcesses = await processesOf(ninerr, sessionPids);
+      for (const url of REFUSED) {
+        const answer = await page.evaluate((target) => fetch(target).then((response) => `answered ${response.status}`, (failure) => `refused: ${failure.message}`), url);
+        check(`the page is refused ${new URL(url).hostname}`, answer.startsWith("refused"), answer);
+      }
+      await sleep(IDLE_MS);
+      await processesOf(ninerr, sessionPids);
+      const quit = await ninerr.quit();
+      check("closing Ninerr quits it cleanly", quit === 0, { exit: quit, output: ninerr.output().slice(-300) });
+
+      // The control over Chromium itself, in a run of its own: a STUN request.
+      const stun = await run.launch();
+      await processesOf(stun, stunPids);
+      await stun.page.evaluate(async ([address, port]) => {
+        const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }] });
+        peer.createDataChannel("control");
+        await peer.setLocalDescription(await peer.createOffer());
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        peer.close();
+      }, [RESERVED, CHROMIUM_CONTROL_PORT]);
+      await processesOf(stun, stunPids);
+      await stun.quit();
+    } finally {
+      await run.close();
+    }
+    await sleep(1500);
+    const { events, sample } = await stop();
+    const control = forbiddenOutbound(events, new Set([controlPid]));
+    check("the capture charges a child's TCP off this computer to it", control.some(({ address, port }) => address === RESERVED && port === 12), { control, sample });
+    check("the capture charges a child's UDP off this computer to it", control.some(({ address, port }) => address === RESERVED && port === 9), { control, sample });
+    const stunSends = forbiddenOutbound(events, stunPids);
+    check("the capture saw Chromium's own send off this computer, in the control", stunSends.some(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT), { stunSends: stunSends.slice(0, 10), stunPids: [...stunPids] });
+    const types = new Set(appProcesses.map(({ type }) => type));
+    check("Chromium reports a browser, a renderer and more", types.has("browser") && types.has("renderer") && appProcesses.length >= 3, appProcesses);
+    // The capture charges the app's own traffic to its processes: if this does not hold, a clean
+    // result below would mean nothing.
+    check("the capture charged the app's loopback traffic to its processes", events.some(({ pid, address }) => sessionPids.has(pid) && address === "127.0.0.1"), { events: events.length, sample });
+    const forbidden = forbiddenOutbound(events, sessionPids);
+    check("nothing the app's processes sent left this computer", forbidden.length === 0, forbidden.slice(0, 20));
+    const unattributed = unattributedOutbound(events);
+    process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, events: events.length, unattributed: [...new Set(unattributed.map(({ address, port }) => `${address} port ${port}`))].slice(0, 20), checks })}\n`);
+  } finally {
+    rmSync(folder, { recursive: true, force: true, maxRetries: 5 });
+  }
+}
+
+const main = process.platform === "linux" ? traced : captured;
 
 main().catch((error) => {
   process.stdout.write(`${JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error), checks })}\n`);
