@@ -12,7 +12,7 @@
 // and not for what the app might do in code this session never reached.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TRACED_CALLS, forbiddenAttempts, networkAttempts, routeQueries } from "./desktop/egress.mjs";
 import { preparePackage, sleep, waitForRevision } from "./desktop/drive.mjs";
@@ -185,7 +185,9 @@ async function startCapture(folder) {
       spawnSync("sudo", ["pkill", "-INT", "-x", "tcpdump"]);
       await Promise.race([new Promise((resolve) => capture.once("exit", resolve)), sleep(10_000)]);
       const text = lines.join("");
-      return { events: macPackets(text), sample: text.split("\n").slice(0, 12).map((line) => line.slice(0, 200)) };
+      // This computer's own addresses, so a packet to them is read as inbound.
+      const local = new Set(Object.values(networkInterfaces()).flat().map(({ address }) => address.replace(/%.*$/u, "")));
+      return { events: macPackets(text, local), sample: text.split("\n").slice(0, 12).map((line) => line.slice(0, 200)) };
     };
   }
   const etl = join(folder, "net.etl");

@@ -35,6 +35,23 @@ const WINDOWS = `<Events>
 <Event xmlns="x"><System><EventID>42</EventID></System><EventData><Data Name="PID">1500</Data><Data Name="daddr">8.8.8.8</Data><Data Name="dport">53</Data></EventData></Event>
 </Events>`;
 
+test("the macOS runner's own lines: no direction, so a packet to this computer came in", () => {
+  // As tcpdump printed these on the macOS runner, in the control's run.
+  const lines = `09:28:08.044881 (proc Runner.Worker:18872, eproc Runner.Worker:18872) IP 140.82.112.21.443 > 192.168.64.13.49168: Flags [.], ack 2516846193, win 138
+09:28:08.103407 (proc Runner.Worker:18872) IP 192.168.64.13.49168 > 140.82.112.21.443: Flags [.], ack 282, win 2044, length 0
+09:28:08.318096 (proc node:23066) IP 192.168.64.13.62650 > 192.0.2.1.9: UDP, length 1
+09:28:08.321522 (proc node:23066) IP 192.168.64.13.49261 > 192.0.2.1.12: Flags [SEW], seq 1800027099, win 65535, length 0
+09:28:11.594684 (proc kernel_task:0, eproc provjobd12636654:974) IP 20.75.202.224.443 > 192.168.64.13.49183: Flags [P.], seq 39:63, ack 26, win 76`;
+  const local = new Set(["192.168.64.13"]);
+  assert.deepEqual(macPackets(lines, local).map(({ pid, name, address, port }) => [pid, name, address, port]), [
+    [18872, "Runner.Worker", "140.82.112.21", 443],
+    [23066, "node", "192.0.2.1", 9],
+    [23066, "node", "192.0.2.1", 12],
+  ]);
+  // Without knowing this computer's address, nothing is taken for inbound.
+  assert.equal(macPackets(lines).length, 5);
+});
+
 test("tracerpt's XML gives each outbound event with its process, and leaves receives out", () => {
   assert.deepEqual(windowsEvents(WINDOWS).map(({ id, pid, address, port }) => [id, pid, address, port]), [
     [12, 2100, "192.0.2.1", 12],

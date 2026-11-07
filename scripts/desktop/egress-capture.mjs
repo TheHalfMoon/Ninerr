@@ -22,14 +22,18 @@ function splitEnd(end) {
 /**
  * Every packet a pktap capture shows leaving for an internet address, with its process. A packet
  * whose process could not be read is kept, with a null pid, and is never taken for another's.
+ * Where the capture names no direction, as on the macOS runner, a packet addressed to one of this
+ * computer's own addresses (`local`, besides loopback) came in, and any other went out.
  */
-export function macPackets(text) {
+export function macPackets(text, local = new Set()) {
   const packets = [];
   for (const line of text.split("\n")) {
     const found = MAC_LINE.exec(line);
     if (found === null) continue;
     const meta = found.groups.meta;
-    if (!/(?:^|,\s*)out(?:,|$)/u.test(meta)) continue;
+    const direction = /(?:^|,\s*)(?<way>in|out)(?:,|$)/u.exec(meta)?.groups.way ?? null;
+    if (direction === "in") continue;
+    if (direction === null && local.has(splitEnd(found.groups.dst).address)) continue;
     const proc = MAC_PROC.exec(meta);
     packets.push({ pid: proc === null ? null : Number(proc.groups.pid), name: proc?.groups.name.trim() ?? null, ...splitEnd(found.groups.dst) });
   }
