@@ -6,9 +6,8 @@
 // The packaged app runs under strace, with no proxy, so a connection it tried would really leave
 // (scripts/desktop/egress.mjs reads the trace). It covers the main process, renderers, utility
 // processes and any child. Negative controls show the trap can fail: a traced child that reaches
-// for a reserved address must be seen, Chromium's own network process must be seen when a context
-// the app did not harden goes there, and requests from the page to a font, update and provider
-// host must be refused. The result is printed as one JSON line, and the exit code is 0 only if
+// for a reserved address must be seen, Chromium's own send must be seen when the page makes a STUN
+// request there, and requests from the page to a font, update and provider host must be refused. The result is printed as one JSON line, and the exit code is 0 only if
 // every check held. A clean run is evidence for this run on this system, not for macOS or Windows,
 // and not for what the app might do in code this session never reached.
 import { spawnSync } from "node:child_process";
@@ -121,12 +120,15 @@ async function main() {
       // Left idle a while, for anything that waits before it reaches out.
       await sleep(IDLE_MS);
 
-      // The app's control over Chromium itself: a context the app did not harden goes to the
-      // reserved address, so the network process really tries. The trace must see that.
-      const unhardened = await ninerr.browser.newContext();
-      const tab = await unhardened.newPage();
-      await tab.goto(`http://${RESERVED}:${CHROMIUM_CONTROL_PORT}/`, { timeout: 5000 }).catch(() => {});
-      await unhardened.close();
+      // The control over Chromium itself: a STUN request, which neither the app's request rules
+      // nor a page's content policy govern, so Chromium really sends it. The trace must see that.
+      await page.evaluate(async ([address, port]) => {
+        const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }] });
+        peer.createDataChannel("control");
+        await peer.setLocalDescription(await peer.createOffer());
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        peer.close();
+      }, [RESERVED, CHROMIUM_CONTROL_PORT]);
 
       const quit = await ninerr.quit();
       check("closing Ninerr quits it cleanly", quit === 0, { exit: quit, output: ninerr.output().slice(-300) });
@@ -144,7 +146,7 @@ async function main() {
     check("the trace saw the app's loopback traffic to its host", attempts.some(({ address }) => address === "127.0.0.1"), attempts.slice(0, 5));
     const isControl = ({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT;
     const forbidden = forbiddenAttempts(attempts);
-    check("the trap saw Chromium's network process reach off this computer, in the control", forbidden.some(isControl), forbidden.slice(0, 20));
+    check("the trap saw Chromium's own send off this computer, in the control", forbidden.some(isControl), forbidden.slice(0, 20));
     const others = forbidden.filter((attempt) => !isControl(attempt));
     check("nothing else in any process reached off this computer", others.length === 0, others.slice(0, 20));
     // Named in the result, so a new one is seen: these leave no packet.
