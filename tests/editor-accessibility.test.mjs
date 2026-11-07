@@ -786,6 +786,48 @@ test("deleting the last layer, or a project opened elsewhere, leaves the focus o
   }
 });
 
+// #378: leaving Classes with Tab commits, and focus lands in the next field, where Ctrl+Z is that
+// field's own. The inspector says so, and Undo in the toolbar undoes the change from there.
+test("after Classes commits, Ctrl+Z in the next field is the field's, and Undo undoes the change", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-undo-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    const [a] = await threeBoxes(page, host);
+    let revision = 3;
+    await row(page, a).click();
+    assert.match(await page.locator("#inspect-undo-note").textContent(), /Ctrl\+Z undoes your typing.*use Undo in the toolbar/u);
+    await page.locator("#inspect-classes").focus();
+    await page.keyboard.type("loud");
+    await page.keyboard.press("Tab");
+    await waitRevision(page, ++revision);
+    assert.equal(await page.evaluate(() => document.activeElement.tagName), "INPUT", "in the next field");
+
+    await page.keyboard.press("ControlOrMeta+z");
+    await page.waitForTimeout(300);
+    assert.equal(host.session.revision, revision, "Ctrl+Z here does not reach the editor's Undo");
+    assert.equal(host.session.document.nodes[a].props.attributes.class, "loud");
+
+    await tabTo(page, "action-undo");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, ++revision);
+    assert.equal(host.session.document.nodes[a].props.attributes?.class, undefined, "Undo undoes it");
+    await audit(page, "the inspector with its Undo note");
+    await page.setViewportSize({ width: 320, height: 640 });
+    const panel = await page.evaluate(() => {
+      const element = document.querySelector(".side-panel");
+      return { scroll: element.scrollWidth, client: element.clientWidth };
+    });
+    assert.ok(panel.scroll <= panel.client, `the note needs no sideways scrolling: ${JSON.stringify(panel)}`);
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the inspector's Text field is reached, edited and sized by the keyboard, at 320 px too", browserTestOptions(), async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-text-")));
   const host = await startStudioHost({ projectsRoot: root, now });

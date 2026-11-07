@@ -1785,6 +1785,8 @@ function renderInspector() {
     el("button", { type: "button", onclick: () => canvas.resizeBy(10, 0) }, "Wider"),
     el("button", { type: "button", onclick: () => canvas.resizeBy(0, -10) }, "Shorter"),
     el("button", { type: "button", onclick: () => canvas.resizeBy(0, 10) }, "Taller")));
+  // In a field Ctrl+Z is the field's own, as in any text field (#378).
+  children.push(el("p", { class: "hint", id: "inspect-undo-note" }, "In a field, Ctrl+Z undoes your typing. To undo a change already made, use Undo in the toolbar."));
   form.replaceChildren(...children);
   if (typing && typing.node === node.id) {
     const input = form.elements.namedItem(typing.field);
