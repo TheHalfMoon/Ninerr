@@ -99,7 +99,8 @@
         388,
         389,
         390,
-        392
+        392,
+        393
       ],
       "mergeCommits": {
         "374": "752491c",
@@ -113,14 +114,15 @@
         "388": "6162b8c714da5460cdb09c428c9cbbc28a4f8a25",
         "389": "05a5b4a196bb3b563e5216c38b3980fa04b0943d",
         "390": "48f132bd475cb19d326e03f56fbdeeaeebbdd6e1",
-        "392": "4c24f1526d3fa253b290c23f7a71f4cab273b4dd"
+        "392": "4c24f1526d3fa253b290c23f7a71f4cab273b4dd",
+        "393": "b08c3855542498eb8ad11c6e297e74c6e66d975d"
       },
       "evidence": "docs/evidence/P09_EXIT_2026-11-07.md: each criterion met, with limits. Seven-project dogfooding at 38c9254 with no failed check (docs/evidence/P09_DOGFOODING_2026-11-07.md; D unsupported on three; one Windows machine, from source). #235, #369, #370 and #378 closed. Open: #376 (real screen reader), #377 (intermittent refusal, GET 409s unread), #382, #383. Alibaba Open Code Review ran on #362 only; Goldfish reviews have not run."
     },
     {
       "id": "R04",
       "title": "Whole-process strict offline mode",
-      "status": "ready",
+      "status": "evidence_on_three_systems_with_limits",
       "deps": [
         "R03"
       ],
@@ -130,12 +132,21 @@
         "tests/main-process-egress.test.mjs (new)",
         "packaged OS packet sink negative control (new)"
       ],
-      "gate": "external packets blocked for all processes, loopback works"
+      "gate": "external packets blocked for all processes, loopback works",
+      "prs": [
+        394,
+        396
+      ],
+      "mergeCommits": {
+        "394": "8cd49cf7f290a0a43280cfe0a09ca57a72ee1a67",
+        "396": "e2e061480da29c38e9ef036115d3056f2b041106"
+      },
+      "evidence": "scripts/egress-desktop.mjs runs the packaged app in CI on every PR: strace -f on Linux, tcpdump on pktap on macOS, Kernel-Network ETW on Windows, held to the processes Chromium reports. At e2e0614's head: Linux 17/17, macOS 15/15, Windows 15/15; nothing the app's processes sent left the computer; every negative control seen (traced child TCP/UDP, Chromium's own STUN send, refused page requests). mcp.local is in CORE_FEATURES. Limits: name lookups the system makes for an app are unseen on Windows and only partly on macOS; one session, 20 s idle; libuv's epoll_ctl ring excused by signature; two macOS packets of no process not proven foreign. Not built: Strict Offline Mode and a main-process broker (no main-process egress seen). #395 (WebRTC UDP, no request rule governs it) open. No zero-egress release claim yet."
     },
     {
       "id": "R05",
       "title": "P10 cross-platform release qualification",
-      "status": "blocked_by_dependencies",
+      "status": "needs_founder_candidate_and_operator",
       "deps": [
         "R04"
       ],
@@ -146,7 +157,8 @@
         "packaged Windows macOS Linux journeys",
         "node scripts/identity-census.mjs --verify and --check"
       ],
-      "gate": "all exact-SHA release gates pass; separate public release authorization required"
+      "gate": "all exact-SHA release gates pass; separate public release authorization required",
+      "evidence": "Not started. P10 needs an exact candidate commit, gate 13 on the reference machine with the operator's power and quiet-machine statement, the seven-project dogfooding on that commit, and the release workflow, which only a tag runs and which needs the founder's release approval."
     },
     {
       "id": "M01",
