@@ -5,17 +5,18 @@
 //
 // The packaged app runs under strace, with no proxy, so a connection it tried would really leave
 // (scripts/desktop/egress.mjs reads the trace). It covers the main process, renderers, utility
-// processes and any child. Two negative controls show the trap can fail: a traced child that
-// reaches for a reserved address must be seen, and requests from the page to a font, update and
-// provider host must be refused. The result is printed as one JSON line, and the exit code is 0
-// only if every check held. A clean run is evidence for this run on this system, not for macOS or
-// Windows, and not for what the app might do in code this session never reached.
+// processes and any child. Negative controls show the trap can fail: a traced child that reaches
+// for a reserved address must be seen, Chromium's own network process must be seen when a context
+// the app did not harden goes there, and requests from the page to a font, update and provider
+// host must be refused. The result is printed as one JSON line, and the exit code is 0 only if
+// every check held. A clean run is evidence for this run on this system, not for macOS or Windows,
+// and not for what the app might do in code this session never reached.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { forbiddenAttempts, networkAttempts, routeQueries } from "./desktop/egress.mjs";
-import { preparePackage, waitForRevision } from "./desktop/drive.mjs";
+import { TRACED_CALLS, forbiddenAttempts, networkAttempts, routeQueries } from "./desktop/egress.mjs";
+import { preparePackage, sleep, waitForRevision } from "./desktop/drive.mjs";
 
 const archive = process.argv[2] ? resolve(process.argv[2]) : null;
 if (archive === null || process.argv.length !== 3 || !existsSync(archive)) {
@@ -26,8 +27,10 @@ if (process.platform !== "linux") {
   process.stderr.write("the whole-process trace is on Linux only, for now\n");
   process.exit(2);
 }
-const TRACED = ["-f", "-qq", "-yy", "-s", "8", "-e", "trace=connect,sendto,sendmsg,sendmmsg,write", "-e", "signal=none", "-ff"];
+const TRACED = ["-f", "-qq", "-yy", "-s", "8", "-e", `trace=${TRACED_CALLS}`, "-e", "signal=none", "-ff"];
 const RESERVED = "192.0.2.1"; // TEST-NET-1, RFC 5737: no such host, and nothing is ever answered from it.
+const CHROMIUM_CONTROL_PORT = 8931;
+const IDLE_MS = 20_000;
 const REFUSED = ["http://192.0.2.1/", "https://fonts.googleapis.com/css2?family=Inter", "https://update.electronjs.org/", "https://api.openai.com/v1/models", "https://example.com/"];
 
 const checks = [];
@@ -86,7 +89,7 @@ async function main() {
       wrap: (executable, args) => ["strace", [...TRACED, "-o", join(traces, "app"), executable, ...args]],
     });
     try {
-      const { launch, egress } = run;
+      const { launch } = run;
       const ninerr = await launch();
       const { page } = ninerr;
       check("it runs as a packaged app", ninerr.packaged(), ninerr.output().slice(-300));
@@ -115,9 +118,18 @@ async function main() {
         const answer = await page.evaluate((target) => fetch(target).then((response) => `answered ${response.status}`, (failure) => `refused: ${failure.message}`), url);
         check(`the page is refused ${new URL(url).hostname}`, answer.startsWith("refused"), answer);
       }
+      // Left idle a while, for anything that waits before it reaches out.
+      await sleep(IDLE_MS);
+
+      // The app's control over Chromium itself: a context the app did not harden goes to the
+      // reserved address, so the network process really tries. The trace must see that.
+      const unhardened = await ninerr.browser.newContext();
+      const tab = await unhardened.newPage();
+      await tab.goto(`http://${RESERVED}:${CHROMIUM_CONTROL_PORT}/`, { timeout: 5000 }).catch(() => {});
+      await unhardened.close();
+
       const quit = await ninerr.quit();
       check("closing Ninerr quits it cleanly", quit === 0, { exit: quit, output: ninerr.output().slice(-300) });
-      check("no proxy was offered, so nothing could have been recorded by one", egress.length === 0, egress);
     } finally {
       await run.close();
     }
@@ -130,8 +142,11 @@ async function main() {
     const untraced = appProcesses.filter(({ id }) => !threads.has(id));
     check("every process Chromium reports was traced", untraced.length === 0, { untraced, threads: threads.size });
     check("the trace saw the app's loopback traffic to its host", attempts.some(({ address }) => address === "127.0.0.1"), attempts.slice(0, 5));
+    const isControl = ({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT;
     const forbidden = forbiddenAttempts(attempts);
-    check("nothing in any process reached off this computer", forbidden.length === 0, forbidden.slice(0, 20));
+    check("the trap saw Chromium's network process reach off this computer, in the control", forbidden.some(isControl), forbidden.slice(0, 20));
+    const others = forbidden.filter((attempt) => !isControl(attempt));
+    check("nothing else in any process reached off this computer", others.length === 0, others.slice(0, 20));
     // Named in the result, so a new one is seen: these leave no packet.
     const queries = routeQueries(attempts).map(({ address, port }) => `${address} port ${port}`);
     process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, threads: threads.size, attempts: attempts.length, udpRouteQueries: [...new Set(queries)], checks })}\n`);

@@ -100,6 +100,8 @@ export async function preparePackage(archive, { home: homeName = "home", project
       HTTP_PROXY: "",
       https_proxy: "",
       http_proxy: "",
+      ALL_PROXY: "",
+      all_proxy: "",
     };
     const { chromium } = await import("playwright-core");
 

@@ -83,10 +83,34 @@ test("where the trace names only an inode, a send answers to what that socket co
 307 write(9<TCP:[781]>, "x", 1) = 1
 308 write(9<TCP:[900]>, "x", 1) = 1`);
   // Another thread's send, before its connect in the trace, is held against that peer.
-  assert.deepEqual(forbiddenAttempts(attempts).map(({ pid, port }) => [pid, port]), [[300, 11], [304, 443], [305, 443]]);
-  // The route query alone stays a route query, a socket never connected names nothing, and
-  // loopback traffic stays allowed.
+  assert.deepEqual(forbiddenAttempts(attempts).map(({ pid, port }) => [pid, port]), [[300, 11], [303, null], [304, 443], [305, 443]]);
+  // The route query alone stays a route query, and a TCP socket never connected is one this
+  // computer accepted. Loopback traffic stays allowed.
   assert.deepEqual(routeQueries(attempts).map(({ pid }) => pid), [301, 302]);
-  assert.equal(attempts.some(({ pid }) => pid === 303 || pid === 308), false);
+  assert.equal(attempts.some(({ pid }) => pid === 308), false);
   assert.deepEqual(attempts.filter(({ pid }) => pid === 307).map(({ address }) => address), ["127.0.0.1"]);
+});
+
+test("every address in one call counts, and an unsure reading fails closed", () => {
+  const forbidden = (trace) => forbiddenAttempts(networkAttempts(trace)).map(({ call, address, port }) => [call, address, port]);
+  // A sendmmsg to loopback, then off this computer.
+  assert.deepEqual(forbidden(`1 sendmmsg(5<UDP:[1]>, [{msg_hdr={msg_name={sa_family=AF_INET, sin_port=htons(9), sin_addr=inet_addr("127.0.0.1")}}}, {msg_hdr={msg_name={sa_family=AF_INET, sin_port=htons(9), sin_addr=inet_addr("8.8.8.8")}}}], 2, 0) = 2`), [["sendmmsg", "8.8.8.8", 9]]);
+  // Connected under one name, sent under another: no peer known, so forbidden.
+  assert.deepEqual(forbidden(`1 connect(5<UDP:[777]>, {sa_family=AF_INET, sin_port=htons(9), sin_addr=inet_addr("8.8.8.8")}, 16) = 0
+1 sendmsg(5<UDP:[0.0.0.0:4000]>, {msg_name=NULL}, 0) = 1`), [["sendmsg", null, null]]);
+  // A loopback connect, a reconnect off this computer, and a send under the old name.
+  assert.deepEqual(forbidden(`1 connect(5<UDP:[0.0.0.0:4000]>, {sa_family=AF_INET, sin_port=htons(9), sin_addr=inet_addr("127.0.0.1")}, 16) = 0
+1 connect(5<UDP:[127.0.0.1:4000->127.0.0.1:9]>, {sa_family=AF_INET, sin_port=htons(9), sin_addr=inet_addr("8.8.8.8")}, 16) = 0
+1 write(5<UDP:[127.0.0.1:4000->127.0.0.1:9]>, "x", 1) = 1`), [["write", "8.8.8.8", 9]]);
+  // By other calls: writev and sendfile on a connected socket, and splice into one.
+  const connect = `1 connect(5<UDP:[0.0.0.0:4000]>, {sa_family=AF_INET, sin_port=htons(9), sin_addr=inet_addr("8.8.8.8")}, 16) = 0\n`;
+  for (const [call, line] of [["writev", `1 writev(5<UDP:[0.0.0.0:4000]>, [{iov_base="x", iov_len=1}], 1) = 1`], ["sendfile", `1 sendfile(5<UDP:[0.0.0.0:4000]>, 7</tmp/f>, NULL, 1) = 1`], ["splice", `1 splice(7<pipe:[9]>, NULL, 5<UDP:[0.0.0.0:4000]>, NULL, 1, 0) = 1`]]) {
+    assert.deepEqual(forbidden(connect + line), [[call, "8.8.8.8", 9]], call);
+  }
+  // io_uring's calls cannot be read, and a resolver over a Unix socket names no address.
+  assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) = 3`), [["io_uring_setup", null, null]]);
+  assert.deepEqual(forbidden(`1 connect(5<UNIX:[1]>, {sa_family=AF_UNIX, sun_path="/run/systemd/resolve/io.systemd.Resolve"}, 110) = 0`), [["connect", null, 53]]);
+  assert.deepEqual(forbidden(`1 connect(5<UNIX:[1]>, {sa_family=AF_UNIX, sun_path="/run/systemd/resolve/io.systemd.Resolve"}, 110) = -1 ENOENT (No such file or directory)`), []);
+  // A write to a file, a pipe, or a descriptor with no name is no attempt.
+  assert.deepEqual(forbidden(`1 write(20</tmp/file>, "x", 1) = 1\n1 write(1, "x", 1) = 1\n1 writev(4<pipe:[1]>, [], 0) = 0\n1 splice(7<pipe:[9]>, NULL, 8<pipe:[10]>, NULL, 1, 0) = 1`), []);
 });
