@@ -61,6 +61,17 @@ test("a UDP connect sends nothing and is reported; what sends off this computer 
   assert.deepEqual(forbiddenAttempts(probe).map(({ call }) => call), ["write"]);
 });
 
+test("a real trace: a connected UDP socket keeps its local name, and its send answers to its peer", () => {
+  // As strace -yy printed these on the Linux runner, from the trap's own control.
+  const attempts = networkAttempts(`3029 connect(20<UDP:[0.0.0.0:58172]>, {sa_family=AF_INET, sin_port=htons(10), sin_addr=inet_addr("192.0.2.1")}, 16) = 0
+3029 sendmsg(20<UDP:[0.0.0.0:54670]>, {msg_name={sa_family=AF_INET, sin_port=htons(9), sin_addr=inet_addr("192.0.2.1")}, msg_namelen=16, msg_iov=[{iov_base="x", iov_len=1}], msg_iovlen=1, msg_controll
+3029 connect(20<UDP:[0.0.0.0:52905]>, {sa_family=AF_INET, sin_port=htons(11), sin_addr=inet_addr("192.0.2.1")}, 16) = 0
+3029 sendmsg(20<UDP:[0.0.0.0:52905]>, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="x", iov_len=1}], msg_iovlen=1, msg_controllen=0, msg_flags=0}, 0) = 1
+3029 connect(21<TCP:[16218]>, {sa_family=AF_INET, sin_port=htons(12), sin_addr=inet_addr("192.0.2.1")}, 16) = -1 EINPROGRESS (Operation now in progress)`);
+  assert.deepEqual(forbiddenAttempts(attempts).map(({ call, port }) => [call, port]), [["sendmsg", 9], ["sendmsg", 11], ["connect", 12]]);
+  assert.deepEqual(routeQueries(attempts).map(({ port }) => port), [10, 11]);
+});
+
 test("where the trace names only an inode, a send answers to what that socket connected to", () => {
   const attempts = networkAttempts(`300 sendmsg(5<UDP:[777]>, {msg_name=NULL, msg_namelen=0}, 0) = 1
 301 connect(5<UDP:[777]>, {sa_family=AF_INET, sin_port=htons(11), sin_addr=inet_addr("192.0.2.1")}, 16) = 0
