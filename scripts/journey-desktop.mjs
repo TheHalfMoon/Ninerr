@@ -194,7 +194,7 @@ async function main() {
     const cards = await page.evaluate(() => [...document.querySelector("iframe").contentDocument.querySelectorAll("section.card")].map((element) => element.getAttribute("data-ninerr-id")));
     const reExported = await exportOf(cards.find((nodeId) => nodeId !== cardId));
     await page.keyboard.press("Escape");
-    step("5 the component round-trips: the copy exports the same code", cards.length === 2 && reExported === exported && /<section className="card" style="[^"]*padding: 16px/u.test(exported) && /<section className="card" style="[^"]*background: #ffe4e6/u.test(exported) && /<h2>Team<\/h2>/u.test(exported) && /<p>Everything in Free, and more\.<\/p>/u.test(exported), { exported: exported.slice(0, 200), reExported: reExported.slice(0, 200) });
+    step("5 the component round-trips: the copy exports the same code", cards.length === 2 && reExported === exported && /<section className="card" style=\{\{[^}]*padding: "16px"/u.test(exported) && /<section className="card" style=\{\{[^}]*background: "#ffe4e6"/u.test(exported) && /<h2>Team<\/h2>/u.test(exported) && /<p>Everything in Free, and more\.<\/p>/u.test(exported), { exported: exported.slice(0, 200), reExported: reExported.slice(0, 200) });
 
     // 6. Export: the imported page as code, which reads back as code.
     const pageFrame = await page.evaluate(() => [...document.querySelectorAll("#layers > [role=treeitem]")].find((item) => item.querySelector(".label")?.textContent === "Launch page")?.dataset.nodeId);
