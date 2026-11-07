@@ -215,3 +215,35 @@ test("the repository passes the identity gate", () => {
   assert.deepEqual(gated, []);
   assert.equal(record.gatedFindings, 0);
 });
+
+test("dated competitor research is provenance, never a blanket identity exemption", () => {
+  const approved = [
+    "docs/designs/NINERR_EXECUTION_READY_MASTER_PLAN_2026-11-06.md",
+    "docs/designs/egm-review-20261106/07-design-critic-findings.md",
+    "docs/research/rea-2026-11-06/CRAFT_ANYTHING_CAPTURE_LEDGER.md",
+    "docs/research/rea-2026-11-06/PRIMARY_SOURCE_COMPETITOR_FINDINGS.md",
+    "docs/strategy/DEEP_REA_OPENCODE_CRAFT_ANYTHING_2026-11-06.md",
+    "docs/strategy/DESKTOP_FIRST_AGENT_NATIVE_BLUEPRINT_2026-11-06.md",
+    "docs/strategy/FOUNDER_SOURCE_AUTHORIZATION_2026-11-06.md",
+    "docs/strategy/NINERR_SKILIT_FOUNDATION_2026-11-06.md",
+    "docs/strategy/REA_COMPETITORS_AND_CRAFT_ANYTHING_2026-11-06.md",
+  ];
+  for (const file of approved) {
+    assert.equal(classify(policy, file, "paper", "Observed competitor Paper Desktop").id, "dated-nov06-design-research");
+    assert.equal(classify(policy, file, "docling", "Review of Docling dependency").id, "dated-nov06-design-research");
+    assert.equal(classify(policy, file, "lilac", "Legacy active name").id, "default-lilac",
+      "narrow exemption must not authorize the former product identity");
+  }
+  for (const file of [
+    "docs/CURRENT.md",
+    "docs/designs/UNDATED_NOTES.md",
+    "docs/strategy/NON_RESEARCH_2026-11-06.md",
+    "packages/studio-host/src/server.ts",
+    "packages/renderer/src/index.mjs",
+  ]) {
+    assert.equal(classify(policy, file, "paper", "Paper").id, "default-paper",
+      "actual product identity stays forbidden outside the exact dated research paths");
+    assert.equal(classify(policy, file, "docling", "Docling").id, "default-donor",
+      "donor identity stays forbidden outside the exact dated research paths");
+  }
+});

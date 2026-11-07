@@ -1,0 +1,409 @@
+{
+  "schema": "ninerr.execution-board/1",
+  "asOf": "2026-11-07",
+  "repository": "TheHalfMoon/Ninerr",
+  "planDocument": "docs/designs/NINERR_EXECUTION_READY_MASTER_PLAN_2026-11-06.md",
+  "planStage": "ready_for_scoped_implementation",
+  "productRelease": "not_qualified",
+  "releaseAuthorization": "not_given",
+  "cloudInfrastructure": "none_required_or_authorized",
+  "mandatoryExternalInference": false,
+  "agentToolchain": "OpenCode",
+  "deepResearch": "DeepSeek+Craft Anything when free quota available",
+  "researchProviderAvailability": "OpenCode free DeepSeek quota exhausted; stages 08/09 completed on Pulse, whose free quota has since run out",
+  "independentEGM": {
+    "completed": [
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "pending": [],
+    "model08and09": "opencode/pulse-alpha-free",
+    "dispositions": "docs/designs/EGM_08_09_DISPOSITIONS_2026-11-06.md"
+  },
+  "sourceOfTruth": [
+    "docs/MASTER_PLAN.md",
+    "released code schemas",
+    "approved ADRs",
+    "this execution plan"
+  ],
+  "constraints": [
+    "desktop-only product",
+    "local MCP",
+    "no founder inference/hosted compute",
+    "source and object rights separate",
+    "exact-head CI",
+    "no unapproved release"
+  ],
+  "tasks": [
+    {
+      "id": "R01",
+      "title": "Preserve code-bound JSX expressions",
+      "status": "merged",
+      "deps": [],
+      "pr": 362,
+      "owner": "studio-host/code-ir",
+      "tests": [
+        "tests/text-layers.test.mjs",
+        "tests/code-expressions.test.mjs",
+        "tests/code-workflow.test.mjs"
+      ],
+      "gate": "source expression round-trip exact, malformed code fails closed",
+      "mergeCommit": "c3b4a22e9b85aeaacc809b6a534827b79fbff429",
+      "evidence": "npm run check at 5e9875e: 1056 tests, 1047 pass, 0 fail, 9 skipped; exact-head CI on Linux, macOS, Windows; post-merge CI success. Follow-up: #370."
+    },
+    {
+      "id": "R02",
+      "title": "Fix CSS shorthand-longhand precedence",
+      "status": "merged",
+      "deps": [],
+      "issue": 360,
+      "owner": "import-stack/renderer",
+      "tests": [
+        "tests/style-order.test.mjs"
+      ],
+      "gate": "computed styles match before and after reimport",
+      "pr": 354,
+      "mergeCommit": "165787c74852232e54d8fdd15a15cbc51bd1b756",
+      "evidence": "npm run check at 2f54039: 1051 tests, 1042 pass, 0 fail, 9 skipped; exact-head CI at a1f1159. Gate holds for longhand and shorthand pairs. Overlapping pairs are a founder-decided limit, reported on import: #384, d831dbf, closing #369."
+    },
+    {
+      "id": "R03",
+      "title": "Complete P09 UI/UX",
+      "status": "criteria_met_with_limits",
+      "deps": [
+        "R01",
+        "R02"
+      ],
+      "owner": "studio-web/document-model",
+      "tests": [
+        "tests/journeys.test.mjs",
+        "tests/editor-browser.test.mjs",
+        "tests/editor-accessibility.test.mjs",
+        "tests/inspector-classes.test.mjs",
+        "tests/layer-structure.test.mjs"
+      ],
+      "gate": "all P09 journeys pass from exact head",
+      "criteria": "docs/MASTER_PLAN.md, section P09 acceptance criteria",
+      "prs": [
+        374,
+        379,
+        380,
+        381,
+        384,
+        385,
+        386,
+        387,
+        388,
+        389,
+        390,
+        392,
+        393
+      ],
+      "mergeCommits": {
+        "374": "752491c",
+        "379": "708236fac3d7c6e14ed6e9ed294be017e88c2428",
+        "380": "8776e55356f412ec1a94dafca0c852a3912ec364",
+        "381": "b0a18a7f2f524a70c3ce9bad104b957209c506c5",
+        "384": "d831dbf0ea7335f679638fa9487e3f9ba2cfc077",
+        "385": "37db05c86aed32110afbf70d8837594b2063e560",
+        "386": "e85fda9eebad5b256740f433bd5c1806c4924a5e",
+        "387": "870db4bf68dac928a47ee8e43623f3db85a3e8fe",
+        "388": "6162b8c714da5460cdb09c428c9cbbc28a4f8a25",
+        "389": "05a5b4a196bb3b563e5216c38b3980fa04b0943d",
+        "390": "48f132bd475cb19d326e03f56fbdeeaeebbdd6e1",
+        "392": "4c24f1526d3fa253b290c23f7a71f4cab273b4dd",
+        "393": "b08c3855542498eb8ad11c6e297e74c6e66d975d"
+      },
+      "evidence": "docs/evidence/P09_EXIT_2026-11-07.md: each criterion met, with limits. Seven-project dogfooding at 38c9254 with no failed check (docs/evidence/P09_DOGFOODING_2026-11-07.md; D unsupported on three; one Windows machine, from source). #235, #369, #370 and #378 closed. Open: #376 (real screen reader), #377 (intermittent refusal, GET 409s unread), #382, #383. Alibaba Open Code Review ran on #362 only; Goldfish reviews have not run."
+    },
+    {
+      "id": "R04",
+      "title": "Whole-process strict offline mode",
+      "status": "evidence_on_three_systems_with_limits",
+      "deps": [
+        "R03"
+      ],
+      "owner": "network-policy/desktop",
+      "tests": [
+        "tests/offline-guarantee.test.mjs",
+        "tests/main-process-egress.test.mjs (new)",
+        "packaged OS packet sink negative control (new)"
+      ],
+      "gate": "external packets blocked for all processes, loopback works",
+      "prs": [
+        394,
+        396,
+        397
+      ],
+      "mergeCommits": {
+        "394": "8cd49cf7f290a0a43280cfe0a09ca57a72ee1a67",
+        "396": "e2e061480da29c38e9ef036115d3056f2b041106",
+        "397": "3c2fa83211c61674e434cbab07dd8c909f2a9cf7"
+      },
+      "evidence": "scripts/egress-desktop.mjs runs the packaged app in CI on every PR: strace -f on Linux, tcpdump on pktap on macOS, Kernel-Network ETW on Windows, held to the processes Chromium reports. At e2e0614's head: Linux 17/17, macOS 15/15, Windows 15/15; nothing the app's processes sent left the computer; every negative control seen (traced child TCP/UDP, Chromium's own STUN send, refused page requests). mcp.local is in CORE_FEATURES. Limits: name lookups the system makes for an app are unseen on Windows and only partly on macOS; one session, 20 s idle; libuv's epoll_ctl ring excused by signature; two macOS packets of no process not proven foreign. Not built: Strict Offline Mode and a main-process broker (no main-process egress seen). #395 closed by #397: every web contents has WebRTC policy disable_non_proxied_udp; the session proxy is a dead loopback port with Chromium's loopback and link-local bypass taken away (only 127.0.0.1 direct); every name but 127.0.0.1 resolves to not found (DNS prefetch and wpad sent queries). The egress session now tries WebRTC STUN/TURN-TCP/ICE-TCP, link-local TURN and a DNS prefetch and must send nothing: at #397's head Linux 18/18, macOS 16/16, Windows 16/16, post-merge CI runs 42392228443 and 42392228373 green. Locally the probe's WebRTC code reached a LAN listener (4 TCP, 5 UDP) without the hardening, none with it. Limits: a person's own --proxy-server carries WebRTC TCP, and needs their own resolver rules unless it is 127.0.0.1; every loopback address but 127.0.0.1 is unreachable. No zero-egress release claim yet."
+    },
+    {
+      "id": "R05",
+      "title": "P10 cross-platform release qualification",
+      "status": "needs_founder_candidate_and_operator",
+      "deps": [
+        "R04"
+      ],
+      "owner": "desktop packaging/release",
+      "tests": [
+        "npm run check",
+        "npm run smoke",
+        "packaged Windows macOS Linux journeys",
+        "node scripts/identity-census.mjs --verify and --check"
+      ],
+      "gate": "all exact-SHA release gates pass; separate public release authorization required",
+      "evidence": "Not started. P10 needs an exact candidate commit, gate 13 on the reference machine with the operator's power and quiet-machine statement, the seven-project dogfooding on that commit, and the release workflow, which only a tag runs and which needs the founder's release approval."
+    },
+    {
+      "id": "M01",
+      "title": "Qualify immutable reference pack contract",
+      "status": "merged",
+      "deps": [],
+      "pr": 365,
+      "owner": "import-stack",
+      "tests": [
+        "tests/reference-packs.test.mjs",
+        "tests/design-graph-reference-adapter.test.mjs"
+      ],
+      "gate": "20 local targeted cases and all required PR-head CI; rights fail closed",
+      "mergeCommit": "dfb177c566fcc13f68783fa54a80a9ff433dbdb3",
+      "evidence": "Exact-head CI on Linux, macOS, Windows at 02f083d; post-merge CI success. allowed stays false until a grant register exists. Open decisions: #373."
+    },
+    {
+      "id": "M02",
+      "title": "Qualify trusted local JSON file reader",
+      "status": "merged",
+      "deps": [
+        "M01"
+      ],
+      "pr": 367,
+      "owner": "import-stack/filesystem",
+      "tests": [
+        "tests/reference-pack-file.test.mjs",
+        "native symlink, hard-link and junction cases in that file",
+        "node scripts/identity-census.mjs --verify",
+        "node scripts/identity-census.mjs --check"
+      ],
+      "gate": "all supported OS exact-head CI and filesystem negatives pass",
+      "mergeCommit": "2ba8dcb9aecbf2cf8308b51e3250d7df9a69071e",
+      "evidence": "Exact-head CI at 6711a04; post-merge CI success. Symlink and hard-link negatives ran on all three systems at 7c45cbc."
+    },
+    {
+      "id": "M03",
+      "title": "Project-scoped read-only reference catalog",
+      "status": "merged",
+      "deps": [
+        "M02"
+      ],
+      "owner": "studio-host",
+      "tests": [
+        "tests/reference-catalog.test.mjs"
+      ],
+      "gate": "1,000 local references, stable digest, project switch/revoke safe",
+      "pr": 371,
+      "mergeCommit": "e047bdb4ec9b30176cbfd0ef0a95fe3c3f4af9ae",
+      "evidence": "Exact-head CI at 92465e5; post-merge CI success. In memory; non-public objects hidden until a project has an owner identity."
+    },
+    {
+      "id": "M04",
+      "title": "Add read-only MCP search/read reference tools",
+      "status": "merged",
+      "deps": [
+        "M03"
+      ],
+      "owner": "mcp-protocol/studio-host",
+      "tests": [
+        "tests/mcp-references.test.mjs"
+      ],
+      "gate": "GUI/MCP metadata parity, no unauthorized paths",
+      "pr": 372,
+      "mergeCommit": "5623fe71de8051abbca0a9e2386db3ce0269bfe3",
+      "evidence": "Exact-head CI at 9fa4a9e; post-merge CI success. Local endpoint only; packaged stdio helper is W03."
+    },
+    {
+      "id": "M05",
+      "title": "Desktop Research panel",
+      "status": "merged",
+      "deps": [
+        "M03"
+      ],
+      "owner": "studio-web",
+      "tests": [
+        "tests/research-ui.test.mjs (new)",
+        "a11y/320px UI journey (new)"
+      ],
+      "gate": "offline preview, no remote thumbs, correct rights",
+      "pr": 391,
+      "mergeCommit": "8e5d2f96c669dd35eb4cb92dadcca305d57a2824",
+      "evidence": "CI and Desktop post-merge success (runs 42342898020, 42342897988). 98 local tests; three fresh-context review rounds found 16 defects, all fixed; the last two fixes unreviewed. Metadata preview only, folder typed. #366's packaged, disconnected and 1,000-entry UI gates not run, and #366 stays open."
+    },
+    {
+      "id": "M06",
+      "title": "Owner-authorized Skilit source exporter and rights ledger",
+      "status": "ready_for_inventory_not_redistribution",
+      "deps": [
+        "M01"
+      ],
+      "repo": "TheHalfMoon/Skilit",
+      "issue": 189,
+      "owner": "source-system export",
+      "tests": [
+        "cross-tenant and private-record negative export"
+      ],
+      "gate": "source grant and actor filter verified; no source deletion",
+      "crossRepo": "Consumes the merged M01 contract at a pinned Ninerr commit. Only the inventory and rights ledger may start before M01 merges."
+    },
+    {
+      "id": "W01",
+      "title": "Versioned MCP transactions",
+      "status": "ready",
+      "deps": [
+        "R03"
+      ],
+      "owner": "mcp-protocol/studio-host",
+      "tests": [
+        "tests/mcp-agent-contract.test.mjs (new)"
+      ],
+      "gate": "caller revision, request idempotency, stale conflicts",
+      "normativeSource": "docs/design-platform/AGENT_CONTRACT.md v2"
+    },
+    {
+      "id": "W02",
+      "title": "Dry-run proposal and human approval",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W01"
+      ],
+      "owner": "agent-runtime/studio-web",
+      "tests": [
+        "two-agent conflict, no-side-effect dryRun, rejected approval"
+      ],
+      "gate": "one atomic authorized edit, safe revert/reapply"
+    },
+    {
+      "id": "W03",
+      "title": "Packaged local stdio helper",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W01",
+        "R05"
+      ],
+      "issue": 364,
+      "owner": "desktop/relay",
+      "tests": [
+        "clean install without Node, native OS MCP test"
+      ],
+      "gate": "installed transport works without remote relay"
+    },
+    {
+      "id": "W04",
+      "title": "Responsive professional layout",
+      "status": "ready",
+      "deps": [
+        "R03"
+      ],
+      "owner": "document-model/renderer",
+      "tests": [
+        "viewport 320/768/1440, constraints, undo"
+      ],
+      "gate": "deterministic layout and keyboard/pointer parity"
+    },
+    {
+      "id": "W05",
+      "title": "Tokens and design-system bindings",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W04"
+      ],
+      "owner": "document-model/persistence",
+      "tests": [
+        "document schema v2 migration, older-reader refusal"
+      ],
+      "gate": "lazy migration and no write from older reader"
+    },
+    {
+      "id": "W06",
+      "title": "Components, variants and instances",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W05"
+      ],
+      "owner": "design-components/renderer",
+      "tests": [
+        "1,000-instance scale, cycle refusal, undo"
+      ],
+      "gate": "deterministic instance expansion with source fidelity"
+    },
+    {
+      "id": "W07",
+      "title": "Vectors and local PNG SVG PDF export",
+      "status": "ready",
+      "deps": [
+        "R03"
+      ],
+      "owner": "renderer/studio-host",
+      "tests": [
+        "golden vector geometry, pixel/page fidelity, restricted-asset refusal"
+      ],
+      "gate": "owner-scoped file export, no remote fonts"
+    },
+    {
+      "id": "W08",
+      "title": "Reviewable application of Skilit references",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "M05",
+        "M06",
+        "W02",
+        "W05",
+        "W06"
+      ],
+      "owner": "studio-host/studio-web",
+      "tests": [
+        "one transaction, rights, revision, undo/reopen"
+      ],
+      "gate": "provenance preserved, no unauthorized asset redistribution",
+      "depsNote": "Needs M06's rights-filtered exporter output, not only its inventory."
+    },
+    {
+      "id": "W09",
+      "title": "Optional user-owned AI provider",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "W02",
+        "R04"
+      ],
+      "owner": "network-policy/agent-supervisor",
+      "tests": [
+        "local endpoint stub, offline rejection, no founder endpoint"
+      ],
+      "gate": "core offline no key, consented direct egress only"
+    },
+    {
+      "id": "W10",
+      "title": "Rights-qualified Build Kits and open-ended deep REA",
+      "status": "blocked_by_dependencies",
+      "deps": [
+        "M05",
+        "M06",
+        "W05",
+        "W06",
+        "W08"
+      ],
+      "owner": "Research/Build Kits",
+      "tests": [
+        "pack provenance and restricted exclusion",
+        "same-task comparative benchmark"
+      ],
+      "gate": "no cloud and no unverifiable parity claims"
+    }
+  ]
+}
