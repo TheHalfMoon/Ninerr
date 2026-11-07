@@ -80,6 +80,7 @@ async function main() {
     check("the trap forbids a send on a connected UDP socket", seen.some(({ call, port }) => call !== "connect" && port === 11), { controlAttempts, controlLines, childSaid: traced.stderr.slice(-300) });
     check("the trap reports a UDP route query, and does not forbid it", routeQueries(controlAttempts).some(({ port }) => port === 10) && !seen.some(({ port }) => port === 10), controlAttempts);
 
+    let appProcesses = [];
     const run = await preparePackage(archive, {
       proxy: false,
       wrap: (executable, args) => ["strace", [...TRACED, "-o", join(traces, "app"), executable, ...args]],
@@ -104,6 +105,11 @@ async function main() {
       await page.waitForFunction(() => document.getElementById("research-status")?.textContent !== "");
       await page.keyboard.press("Escape");
 
+      // The processes the app really has, from Chromium itself, to hold the trace to below.
+      const cdp = await ninerr.browser.newBrowserCDPSession();
+      const { processInfo } = await cdp.send("SystemInfo.getProcessInfo");
+      appProcesses = processInfo.map(({ id, type }) => ({ id, type }));
+
       // The app's own negative control: the page reaches for font, update and provider hosts.
       for (const url of REFUSED) {
         const answer = await page.evaluate((target) => fetch(target).then((response) => `answered ${response.status}`, (failure) => `refused: ${failure.message}`), url);
@@ -117,14 +123,18 @@ async function main() {
     }
 
     const attempts = networkAttempts(traceOf(traces, "app"));
-    const processes = new Set(readdirSync(traces).filter((name) => name.startsWith("app")));
-    check("the trace followed several processes", processes.size >= 3, { processes: processes.size });
+    // strace writes one file per thread, under its id, and a process's first thread has its pid.
+    const threads = new Set(readdirSync(traces).filter((name) => name.startsWith("app.")).map((name) => Number(name.slice(4))));
+    const types = new Set(appProcesses.map(({ type }) => type));
+    check("Chromium reports a browser, a renderer and more", types.has("browser") && types.has("renderer") && appProcesses.length >= 3, appProcesses);
+    const untraced = appProcesses.filter(({ id }) => !threads.has(id));
+    check("every process Chromium reports was traced", untraced.length === 0, { untraced, threads: threads.size });
     check("the trace saw the app's loopback traffic to its host", attempts.some(({ address }) => address === "127.0.0.1"), attempts.slice(0, 5));
     const forbidden = forbiddenAttempts(attempts);
     check("nothing in any process reached off this computer", forbidden.length === 0, forbidden.slice(0, 20));
     // Named in the result, so a new one is seen: these leave no packet.
     const queries = routeQueries(attempts).map(({ address, port }) => `${address} port ${port}`);
-    process.stdout.write(`${JSON.stringify({ ok: true, processes: processes.size, attempts: attempts.length, udpRouteQueries: [...new Set(queries)], checks })}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, threads: threads.size, attempts: attempts.length, udpRouteQueries: [...new Set(queries)], checks })}\n`);
   } finally {
     rmSync(traces, { recursive: true, force: true, maxRetries: 5 });
   }
