@@ -7,7 +7,7 @@
 import { BrowserWindow, Menu, app, dialog, session } from "electron";
 import { fileURLToPath } from "node:url";
 import { prepareProjectsFolder, resolveProjectsFolder, startStudioHost } from "../../studio-host/src/index.ts";
-import { SINK_PROXY, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "./policy.mjs";
+import { NO_NAME_RESOLUTION, SINK_PROXY, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "./policy.mjs";
 
 const PRELOAD = fileURLToPath(new URL("./preload.cjs", import.meta.url));
 // A development run starts Electron's default app with this folder (process.defaultApp);
@@ -30,6 +30,9 @@ const MAX_RELOADS_PER_MINUTE = 3;
 const reloads = [];
 
 // One Ninerr per user: a second start brings the running window forward.
+// Before Chromium starts: no name is looked up (#395), unless the person gives their own rules.
+if (!app.commandLine.hasSwitch("host-resolver-rules")) app.commandLine.appendSwitch("host-resolver-rules", NO_NAME_RESOLUTION);
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {

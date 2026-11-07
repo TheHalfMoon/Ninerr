@@ -33,15 +33,26 @@ process.env.UV_USE_IO_URING = "0";
 const TRACED = ["-f", "-qq", "-yy", "-s", "8", "-e", `trace=${TRACED_CALLS}`, "-e", "signal=none", "-ff"];
 const RESERVED = "192.0.2.1"; // TEST-NET-1, RFC 5737: no such host, and nothing is ever answered from it.
 const CHROMIUM_CONTROL_PORT = 8931;
+// An address Chromium would not proxy on its own, and a name nothing would answer for.
+const LINK_LOCAL = "169.254.77.77";
+const PROBE_NAME = "ninerr-egress-probe.example";
 const IDLE_MS = 20_000;
 const REFUSED = ["http://192.0.2.1/", "https://fonts.googleapis.com/css2?family=Inter", "https://update.electronjs.org/", "https://api.openai.com/v1/models", "https://example.com/"];
 
 /**
- * WebRTC from the page to the reserved address, which no request rule governs: STUN over UDP, TURN
- * over TCP, and a peer's TCP candidate, so both UDP and TCP are tried (#395).
+ * What a page can reach that no request rule governs (#395): WebRTC to the reserved address by STUN
+ * over UDP, TURN over TCP and a peer's TCP candidate; TURN over TCP to a link-local address, which
+ * Chromium never proxies on its own; and a DNS prefetch of a name. It must send nothing off this
+ * computer. It answers whether it ran, so a probe that did nothing cannot pass for one that sent
+ * nothing. A local run without the app's hardening, with this same WebRTC code, reached a listener
+ * on the LAN address by TCP and UDP.
  */
-const stunRequest = (page) => page.evaluate(async ([address, port]) => {
-  const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }, { urls: `turn:${address}:${port}?transport=tcp`, username: "probe", credential: "probe" }] });
+const stunRequest = (page) => page.evaluate(async ([address, port, linkLocal, name]) => {
+  const prefetch = document.createElement("link");
+  prefetch.rel = "dns-prefetch";
+  prefetch.href = `//${name}`;
+  document.head.append(prefetch);
+  const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }, { urls: `turn:${address}:${port}?transport=tcp`, username: "probe", credential: "probe" }, { urls: `turn:${linkLocal}:${port}?transport=tcp`, username: "probe", credential: "probe" }] });
   peer.createDataChannel("control");
   await peer.setLocalDescription(await peer.createOffer());
   const other = new RTCPeerConnection();
@@ -49,11 +60,14 @@ const stunRequest = (page) => page.evaluate(async ([address, port]) => {
   await other.setRemoteDescription(peer.localDescription);
   await other.setLocalDescription(await other.createAnswer());
   await peer.setRemoteDescription(other.localDescription);
-  await peer.addIceCandidate({ candidate: `candidate:1 1 tcp 2122260223 ${address} ${port} typ host tcptype passive`, sdpMid: "0", sdpMLineIndex: 0 }).catch(() => {});
+  const added = await peer.addIceCandidate({ candidate: `candidate:1 1 tcp 2122260223 ${address} ${port} typ host tcptype passive`, sdpMid: "0", sdpMLineIndex: 0 }).then(() => true, () => false);
   await new Promise((resolve) => setTimeout(resolve, 4000));
+  const ran = { offered: peer.localDescription?.type === "offer", answered: peer.remoteDescription?.type === "answer", added, prefetch: prefetch.isConnected };
   other.close();
   peer.close();
-}, [RESERVED, CHROMIUM_CONTROL_PORT]);
+  prefetch.remove();
+  return ran;
+}, [RESERVED, CHROMIUM_CONTROL_PORT, LINK_LOCAL, PROBE_NAME]);
 // The control over Chromium itself: the app started with its proxy at the reserved address and
 // loopback sent through it too, so the editor's first page load is Chromium's own connection off
 // this computer. Electron documents both switches. (WebRTC cannot serve: the app's policy holds
@@ -187,7 +201,8 @@ async function traced() {
       }
       // Left idle a while, for anything that waits before it reaches out.
       // The app's own STUN request (#395): hardened, it must send nothing, as the check below holds.
-      await stunRequest(page);
+      const probed = await stunRequest(page);
+      check("the page's WebRTC and DNS prefetch ran, and must send nothing", probed.offered && probed.answered && probed.added && probed.prefetch, probed);
       await sleep(IDLE_MS);
 
       const quit = await ninerr.quit();
@@ -315,7 +330,8 @@ async function captured() {
         check(`the page is refused ${new URL(url).hostname}`, answer.startsWith("refused"), answer);
       }
       // The app's own STUN request (#395): hardened, it must send nothing, as the check below holds.
-      await stunRequest(page);
+      const probed = await stunRequest(page);
+      check("the page's WebRTC and DNS prefetch ran, and must send nothing", probed.offered && probed.answered && probed.added && probed.prefetch, probed);
       await sleep(IDLE_MS);
       await processesOf(ninerr, sessionPids);
       const quit = await ninerr.quit();

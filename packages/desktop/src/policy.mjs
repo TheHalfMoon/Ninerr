@@ -49,10 +49,19 @@ export const WEBRTC_IP_POLICY = "disable_non_proxied_udp";
 /**
  * The proxy every request that would use one is sent to: a port on this computer that nothing
  * answers (#395). WebRTC's TCP (TURN, ICE-TCP) is governed by no request rule and would go direct
- * or through the system's proxy; here it goes nowhere. Loopback is never proxied, so the editor
- * still reaches its host. A person who starts the app with --proxy-server has chosen otherwise.
+ * or through the system's proxy; here it goes nowhere. Chromium never proxies loopback or
+ * link-local addresses on its own, so that rule is taken away (<-loopback>), and only 127.0.0.1,
+ * where the host is, is left direct: a link-local peer or 169.254.169.254 goes to the sink too.
+ * A person who starts the app with --proxy-server has chosen otherwise.
  */
-export const SINK_PROXY = Object.freeze({ proxyRules: "http://127.0.0.1:9" });
+export const SINK_PROXY = Object.freeze({ proxyRules: "http://127.0.0.1:9", proxyBypassRules: "<-loopback>;127.0.0.1" });
+
+/**
+ * Every name Chromium would look up is not found, except 127.0.0.1, where the host is (#395). The
+ * editor and host need no name, and a page's <link rel=dns-prefetch>, or Chromium's own proxy
+ * discovery (wpad), would otherwise send DNS queries off the computer, which no request rule sees.
+ */
+export const NO_NAME_RESOLUTION = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1";
 
 /** The web preferences every Ninerr window gets: no Node, isolated and sandboxed. */
 export function windowPreferences(preload, { devTools = false } = {}) {
