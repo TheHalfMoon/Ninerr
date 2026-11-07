@@ -8,8 +8,7 @@ import { PROVIDER_CAPABILITIES, type FeatureRequirement, type ReadinessReport } 
  * provider; that declaration is not self-proving, so every required feature here is
  * exercised one-for-one, with all network primitives trapped, by
  * tests/offline-guarantee.test.mjs. Optional features degrade (or are unavailable) without
- * a provider. Only features that exist in Ninerr today are listed; the local MCP endpoint
- * is not implemented yet (#82).
+ * a provider. Only features that exist in Ninerr today are listed.
  */
 export const CORE_FEATURES: readonly FeatureRequirement[] = Object.freeze([
   { feature: "document.edit", required: true, needs: [] },
@@ -19,6 +18,7 @@ export const CORE_FEATURES: readonly FeatureRequirement[] = Object.freeze([
   { feature: "design.method-review", required: true, needs: [] },
   { feature: "decision.assurance", required: true, needs: [] },
   { feature: "import.offline-html", required: true, needs: [] },
+  { feature: "mcp.local", required: true, needs: [] },
   { feature: "decision.model-ranking", required: false, needs: ["inference.text"] },
 ]);
 

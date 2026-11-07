@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire, syncBuiltinESMExports } from "node:module";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -178,6 +178,27 @@ test("the core workflow completes with all network access disabled and makes zer
     assert.ok(Object.values(afterImport.document.nodes).some((node) => node.props?.semantics?.role === "main"));
     afterImport.close();
     exercised.add("import.offline-html");
+
+    // mcp.local: an agent's messages, answered and applied with no network. The loopback socket
+    // is the host's; everything behind it is here.
+    const { StudioSession } = await import("../packages/studio-host/src/session.ts");
+    const { ConfirmationBroker, handleMcpMessage } = await import("../packages/studio-host/src/mcp.ts");
+    const { ReferenceCatalog } = await import("../packages/studio-host/src/reference-catalog.ts");
+    const person = { actorId: "offline-user", kind: "user", accessClass: "member", displayName: "Owner" };
+    mkdirSync(join(root, "mcp"));
+    const session = StudioSession.open({ projectsRoot: join(root, "mcp"), name: "site", owner: person, create: { title: "Site" }, now: () => AT });
+    session.setAgentGrants([{ principalKind: "actor", principalId: "agent-mcp", capabilities: ["read", "document-write", "comments"] }]);
+    const context = { session: () => session, selection: () => [], references: new ReferenceCatalog(), confirmations: new ConfirmationBroker(), now: () => AT, lastRead: new Map() };
+    const reader = { actorId: "agent-mcp", kind: "agent", accessClass: "service", displayName: "Offline agent", ownerActorId: person.actorId };
+    const ask = (id, method, params) => handleMcpMessage(context, reader, { jsonrpc: "2.0", id, method, params });
+    assert.ok((await ask(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "offline", version: "1" } })).result.serverInfo);
+    assert.ok((await ask(2, "tools/list")).result.tools.length > 0);
+    const made = await ask(3, "tools/call", { name: "create_frame", arguments: { name: "Offline", width: 100, height: 100 } });
+    assert.equal(made.result.isError, undefined, JSON.stringify(made));
+    assert.ok(Object.values(session.document.nodes).some((node) => node.props?.name === "Offline"));
+    assert.deepEqual((await ask(4, "tools/call", { name: "search_design_references", arguments: {} })).result.structuredContent.status, "not-loaded", "and no online fallback");
+    session.close();
+    exercised.add("mcp.local");
 
     // Every required core feature was exercised here, and nothing touched the network.
     assert.deepEqual([...exercised].sort(), CORE_FEATURES.filter((feature) => feature.required).map((feature) => feature.feature).sort());
