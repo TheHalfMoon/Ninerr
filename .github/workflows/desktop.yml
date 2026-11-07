@@ -98,6 +98,18 @@ jobs:
           done
           node scripts/resilience-desktop.mjs "$archive" 2>resilience.err | tee resilience.json
           exit "${PIPESTATUS[0]}"
+      - name: Whole-process egress trace of the packaged app
+        id: egress
+        # R04. Linux only for now: macOS and Windows need other tools.
+        if: ${{ !cancelled() && steps.package.outcome == 'success' && runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          sudo apt-get install -y strace >/dev/null
+          node scripts/egress-desktop.mjs dist/desktop/Ninerr-${{ matrix.target }}.tar.gz 2>egress.err | tee egress.json
+          status="${PIPESTATUS[0]}"
+          echo "::notice title=Whole-process egress::$(cut -c1-900 egress.json)"
+          exit "$status"
       - name: Annotate the evidence
         if: always()
         shell: bash

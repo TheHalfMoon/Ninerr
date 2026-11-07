@@ -49,8 +49,10 @@ function freePort() {
  * it uses, the proxy's record, `launch()` and `close()` (which stops everything and
  * removes the temporary folder). `home` and `projects` name the person's home and
  * projects folders inside the temporary folder, for runs from unusual paths (P08-G8).
+ * `wrap(executable, args)` gives the command to run instead, and `proxy: false` offers no proxy,
+ * so a connection the app tries really leaves (R04, under a whole-process trace).
  */
-export async function preparePackage(archive, { home: homeName = "home", projects: projectsName = "projects" } = {}) {
+export async function preparePackage(archive, { home: homeName = "home", projects: projectsName = "projects", wrap = (executable, args) => [executable, args], proxy: useProxy = true } = {}) {
   const work = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-desktop-run-")));
   const screen = await display();
   const egress = [];
@@ -63,7 +65,7 @@ export async function preparePackage(archive, { home: homeName = "home", project
     socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
   });
   await new Promise((resolveListen) => proxy.listen(0, "127.0.0.1", resolveListen));
-  const proxyArg = `--proxy-server=http://127.0.0.1:${proxy.address().port}`;
+  const proxyArgs = useProxy ? [`--proxy-server=http://127.0.0.1:${proxy.address().port}`] : [];
   const running = new Set();
   const close = async () => {
     // Each launch is ended and waited for: on Windows, files a process still holds cannot
@@ -105,7 +107,8 @@ export async function preparePackage(archive, { home: homeName = "home", project
     const launch = async () => {
       const port = await freePort();
       // Chromium's own log goes to stderr, so a failure to start says why.
-      const child = spawn(executable, [`--remote-debugging-port=${port}`, proxyArg, "--enable-logging=stderr"], { env, stdio: ["ignore", "pipe", "pipe"] });
+      const [command, commandArgs] = wrap(executable, [`--remote-debugging-port=${port}`, ...proxyArgs, "--enable-logging=stderr"]);
+      const child = spawn(command, commandArgs, { env, stdio: ["ignore", "pipe", "pipe"] });
       running.add(child);
       let output = "";
       // Noted as it arrives, so Chromium's own logging cannot push it out of the buffer.
@@ -182,7 +185,7 @@ export async function preparePackage(archive, { home: homeName = "home", project
 
     /** Start the binary itself with `args` and `extraEnv`, for checks that are not a session. */
     const spawnRaw = (args, extraEnv = {}) => {
-      const child = spawn(executable, [...args, proxyArg], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(executable, [...args, ...proxyArgs], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
       running.add(child);
       child.once("exit", () => running.delete(child));
       return child;
