@@ -26,6 +26,9 @@ if (process.platform !== "linux") {
   process.stderr.write("the whole-process trace is on Linux only, for now\n");
   process.exit(2);
 }
+// io_uring's submissions cannot be read in a trace, so it is off: libuv then makes ordinary calls.
+// A run in which anything still sets one up fails. The app may run differently with it on.
+process.env.UV_USE_IO_URING = "0";
 const TRACED = ["-f", "-qq", "-yy", "-s", "8", "-e", `trace=${TRACED_CALLS}`, "-e", "signal=none", "-ff"];
 const RESERVED = "192.0.2.1"; // TEST-NET-1, RFC 5737: no such host, and nothing is ever answered from it.
 const CHROMIUM_CONTROL_PORT = 8931;
@@ -83,9 +86,12 @@ async function main() {
     check("the trap reports a UDP route query, and does not forbid it", routeQueries(controlAttempts).some(({ port }) => port === 10) && !seen.some(({ port }) => port === 10), controlAttempts);
 
     let appProcesses = [];
+    // The person's session and the Chromium control are traced apart: WebRTC sends more than the
+    // control asks for, and none of it may be excused in the session's own trace.
+    let tracing = "app";
     const run = await preparePackage(archive, {
       proxy: false,
-      wrap: (executable, args) => ["strace", [...TRACED, "-o", join(traces, "app"), executable, ...args]],
+      wrap: (executable, args) => ["strace", [...TRACED, "-o", join(traces, tracing), executable, ...args]],
     });
     try {
       const { launch } = run;
@@ -120,18 +126,21 @@ async function main() {
       // Left idle a while, for anything that waits before it reaches out.
       await sleep(IDLE_MS);
 
-      // The control over Chromium itself: a STUN request, which neither the app's request rules
-      // nor a page's content policy govern, so Chromium really sends it. The trace must see that.
-      await page.evaluate(async ([address, port]) => {
+      const quit = await ninerr.quit();
+      check("closing Ninerr quits it cleanly", quit === 0, { exit: quit, output: ninerr.output().slice(-300) });
+
+      // The control over Chromium itself, in a run of its own: a STUN request, which neither the
+      // app's request rules nor a page's content policy govern, so Chromium really sends it.
+      tracing = "stun";
+      const stun = await launch();
+      await stun.page.evaluate(async ([address, port]) => {
         const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }] });
         peer.createDataChannel("control");
         await peer.setLocalDescription(await peer.createOffer());
         await new Promise((resolve) => setTimeout(resolve, 3000));
         peer.close();
       }, [RESERVED, CHROMIUM_CONTROL_PORT]);
-
-      const quit = await ninerr.quit();
-      check("closing Ninerr quits it cleanly", quit === 0, { exit: quit, output: ninerr.output().slice(-300) });
+      await stun.quit();
     } finally {
       await run.close();
     }
@@ -144,11 +153,10 @@ async function main() {
     const untraced = appProcesses.filter(({ id }) => !threads.has(id));
     check("every process Chromium reports was traced", untraced.length === 0, { untraced, threads: threads.size });
     check("the trace saw the app's loopback traffic to its host", attempts.some(({ address }) => address === "127.0.0.1"), attempts.slice(0, 5));
-    const isControl = ({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT;
+    const controlSends = forbiddenAttempts(networkAttempts(traceOf(traces, "stun")));
+    check("the trap saw Chromium's own send off this computer, in the control", controlSends.some(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT), controlSends.slice(0, 20));
     const forbidden = forbiddenAttempts(attempts);
-    check("the trap saw Chromium's own send off this computer, in the control", forbidden.some(isControl), forbidden.slice(0, 20));
-    const others = forbidden.filter((attempt) => !isControl(attempt));
-    check("nothing else in any process reached off this computer", others.length === 0, others.slice(0, 20));
+    check("nothing in any process reached off this computer", forbidden.length === 0, forbidden.slice(0, 20));
     // Named in the result, so a new one is seen: these leave no packet.
     const queries = routeQueries(attempts).map(({ address, port }) => `${address} port ${port}`);
     process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, threads: threads.size, attempts: attempts.length, udpRouteQueries: [...new Set(queries)], checks })}\n`);
