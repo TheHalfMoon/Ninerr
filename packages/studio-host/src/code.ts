@@ -11,7 +11,7 @@ import { importedStyle, styleOutOfWrittenOrder, styleProperties } from "./import
 // first reduced by the renderer's own sanitizer (planElement), so the code says exactly
 // what the canvas shows: the same tags, attributes and style. A text layer folds into its
 // parent's text when it is the parent's only content. `class` becomes `className`; style
-// is a CSS string prop (as Preact, Solid and Qwik accept it). A {…} part of imported code
+// is a React style object (#398), which import reads back. A {…} part of imported code
 // is written as its exact source, never as text (#361): it is code the sanitizer does not
 // reach, which the result counts (codeParts) so the person is told.
 //
@@ -28,7 +28,6 @@ const pascal = (value: string, fallback: string) => {
   const name = value.replace(/[^A-Za-z0-9]+/gu, " ").trim().split(" ").filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join("");
   return /^[A-Z][A-Za-z0-9]*$/u.test(name) ? name.slice(0, 64) : fallback;
 };
-
 
 /** No tag, attributes or style of its own. */
 function plainLayer(props: any): boolean {

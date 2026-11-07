@@ -161,3 +161,26 @@ test("a design node's style object is validated before it is written", async () 
     [{ tag: "p", props: {}, style: { color: 3 } }, /bounded one-line string/u],
   ]) assert.throws(() => designToCode(doc(root)), pattern);
 });
+
+test("every style name exports as a key that parses and reads back as the same name", async () => {
+  const { buildCodeIr, readStyleObject } = await import("../packages/code-ir/src/index.ts");
+  for (const name of ["color", "background-color", "-webkit-line-clamp", "-moz-box-flex", "-o-transition", "-ms-transition", "--brand", "--Brand_1", "a-", "a--b", "-webkit-", "-x-", "x-1y", "grid-row-start"]) {
+    const { document, rootId } = imported(`export function A() { return <main>x</main>; }`);
+    document.nodes[rootId].props.style = { [name]: "1" };
+    const code = exportJsx(document, rootId).code;
+    if (name === "x-1y") {
+      assert.doesNotMatch(code, /style=/u, "the renderer drops a name it does not accept, before export");
+      continue;
+    }
+    const ir = buildCodeIr([{ path: "A.tsx", content: code }]);
+    const prop = Object.values(ir.symbols).find((symbol) => symbol.name === "main").codeProps.find((entry) => entry.name === "style");
+    assert.deepEqual(readStyleObject(code.slice(prop.range.startOffset, prop.range.endOffset)), [[name, "1"]], `${name}: ${code}`);
+  }
+});
+
+test("a stray bracket or a comment keeps an object style as code, counted, never cut", () => {
+  for (const value of [`"red)"`, `"a]"`, `"a) (b"`, `"a /* b"`]) {
+    assert.equal(objectStyleText(`style={{ color: ${value} }}`), null, value);
+    assert.equal(imported(`export function A() { return <main style={{ color: ${value} }}>x</main>; }`).layersWithStyleLeftOut, 1, value);
+  }
+});

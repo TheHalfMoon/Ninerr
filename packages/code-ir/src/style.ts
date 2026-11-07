@@ -1,7 +1,7 @@
 // React's unitless properties: a number given to any other one is in pixels.
 const UNITLESS = new Set(["animationIterationCount", "aspectRatio", "borderImageOutset", "borderImageSlice", "borderImageWidth", "boxFlex", "boxFlexGroup", "boxOrdinalGroup", "columnCount", "columns", "flex", "flexGrow", "flexPositive", "flexShrink", "flexNegative", "flexOrder", "gridArea", "gridRow", "gridRowEnd", "gridRowSpan", "gridRowStart", "gridColumn", "gridColumnEnd", "gridColumnSpan", "gridColumnStart", "fontWeight", "lineClamp", "lineHeight", "opacity", "order", "orphans", "scale", "tabSize", "widows", "zIndex", "zoom", "fillOpacity", "floodOpacity", "stopOpacity", "strokeDasharray", "strokeDashoffset", "strokeMiterlimit", "strokeOpacity", "strokeWidth"]);
 
-/** Whether a CSS value is one declaration's value: no ; outside quotes or brackets. */
+/** Whether a CSS value is one declaration's value: no ; outside quotes or brackets, no stray bracket, no comment. */
 function oneValue(value: string): boolean {
   let quote: string | null = null;
   let depth = 0;
@@ -10,10 +10,22 @@ function oneValue(value: string): boolean {
       if (char === quote) quote = null;
     } else if (char === "\"" || char === "'") quote = char;
     else if (char === "(" || char === "[") depth += 1;
-    else if (char === ")" || char === "]") depth = Math.max(0, depth - 1);
-    else if (char === ";" && depth === 0) return false;
+    else if (char === ")" || char === "]") {
+      if (depth === 0) return false;
+      depth -= 1;
+    } else if (char === ";" && depth === 0) return false;
   }
-  return quote === null && depth === 0;
+  // A comment would hide what follows it from the CSS reader.
+  return quote === null && depth === 0 && !value.includes("/*");
+}
+
+/**
+ * The CSS name for a key of a React style object: backgroundColor is background-color, and
+ * WebkitTransform and msTransition keep their prefix. A key with a hyphen is a CSS name already.
+ */
+function cssName(key: string): string {
+  if (key.startsWith("--") || key.includes("-")) return key;
+  return key.replace(/^ms(?=[A-Z])/u, "-ms").replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
 }
 
 /**
@@ -64,9 +76,7 @@ export function readStyleObject(attribute: string): Array<[string, string]> | nu
       const unprefixed = key.replace(/^(?:Webkit|Moz|ms|O)([A-Z])/u, (_, letter: string) => letter.toLowerCase());
       value = numeric === 0 || UNITLESS.has(unprefixed) || key.startsWith("--") ? String(numeric) : `${numeric}px`;
     } else if (!oneValue(value)) return null;
-    // backgroundColor is background-color; WebkitTransform and msTransition keep their prefix.
-    const property = key.startsWith("--") || key.includes("-") ? key : key.replace(/^ms(?=[A-Z])/u, "-ms").replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
-    declarations.push([property, value]);
+    declarations.push([cssName(key), value]);
     space();
     if (body[at] === ",") at += 1;
     else if (at < body.length) return null;
@@ -80,12 +90,10 @@ export function readStyleObject(attribute: string): Array<[string, string]> | nu
  * its name, quoted.
  */
 export function reactStyleKey(name: string): string {
-  if (name.startsWith("--")) return JSON.stringify(name);
-  const camel = (text: string) => text.replace(/-([a-z0-9])/gu, (_, letter: string) => letter.toUpperCase());
-  if (name.startsWith("-ms-")) return camel(name.slice(1));
-  if (name.startsWith("-")) {
-    const key = camel(name.slice(1));
-    return key[0].toUpperCase() + key.slice(1);
-  }
-  return camel(name);
+  const camel = (text: string) => text.replace(/-([a-z])/gu, (_, letter: string) => letter.toUpperCase());
+  let key = camel(name.startsWith("-ms-") ? name.slice(1) : name.replace(/^-/u, ""));
+  if (name.startsWith("-") && !name.startsWith("-ms-")) key = key.charAt(0).toUpperCase() + key.slice(1);
+  // A name that does not map to a plain key and back (a custom property, a-, a--b, x-1y) is
+  // written quoted, as itself, which a style object reads back as written.
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key) && cssName(key) === name ? key : JSON.stringify(name);
 }
