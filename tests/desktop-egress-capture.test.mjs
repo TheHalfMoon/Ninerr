@@ -90,5 +90,9 @@ test("a packet the system sends for the app is the app's, and lost packets are r
   assert.equal(lostEvents(header(7, 0)), 7);
   assert.equal(lostEvents(header(0, 2)), 2);
   assert.equal(lostEvents("<Events></Events>"), null);
+  // As tracerpt wrote it on the Windows runner.
+  assert.equal(lostEvents(`<Data Name="BuffersWritten">       5</Data>\r\n\t\t<Data Name="EventsLost">       0</Data>`), 0);
+  assert.equal(lostEvents(`<Data Name="EventsLost">       3</Data>`), 3);
+  assert.deepEqual(windowsEvents(`<Event><System><EventID>12</EventID></System><EventData><Data Name="PID">    2100</Data><Data Name="daddr"> 192.0.2.1</Data><Data Name="dport">   12</Data></EventData></Event>`).map(({ pid, address, port }) => [pid, address, port]), [[2100, "192.0.2.1", 12]]);
 });
 

@@ -64,9 +64,9 @@ export function windowsEvents(xml) {
   for (const [event] of xml.matchAll(EVENT)) {
     const id = Number(EVENT_ID.exec(event)?.groups.id);
     if (!WINDOWS_OUTBOUND.has(id)) continue;
-    const pid = DATA("PID").exec(event)?.groups.value;
-    const address = DATA("daddr").exec(event)?.groups.value ?? null;
-    const port = DATA("dport").exec(event)?.groups.value;
+    const pid = DATA("PID").exec(event)?.groups.value.trim();
+    const address = DATA("daddr").exec(event)?.groups.value.trim() ?? null;
+    const port = DATA("dport").exec(event)?.groups.value.trim();
     events.push({ id, pid: pid === undefined ? null : Number(pid), address, port: port === undefined ? null : Number(port) });
   }
   return events;
@@ -103,8 +103,9 @@ export function droppedPackets(said) {
  * null when no header says.
  */
 export function lostEvents(xml) {
-  const events = [...xml.matchAll(/<Data Name="EventsLost">(?<count>\d+)<\/Data>/gu)];
-  const buffers = [...xml.matchAll(/<Data Name="BuffersLost">(?<count>\d+)<\/Data>/gu)];
+  // tracerpt pads its numbers: <Data Name="EventsLost">       0</Data>.
+  const events = [...xml.matchAll(/<Data Name="EventsLost">\s*(?<count>\d+)\s*<\/Data>/gu)];
+  const buffers = [...xml.matchAll(/<Data Name="BuffersLost">\s*(?<count>\d+)\s*<\/Data>/gu)];
   if (events.length === 0) return null;
   return [...events, ...buffers].reduce((sum, found) => sum + Number(found.groups.count), 0);
 }
