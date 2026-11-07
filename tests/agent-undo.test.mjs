@@ -124,9 +124,9 @@ test("an agent's change is undone next to Undo, by pointer and keyboard, newest 
     await page.keyboard.press("Enter");
     await waitRevision(page, 8);
     assert.equal(await background(page, frameId), before);
-    // The button is gone with nothing left to undo; focus stays in the toolbar.
+    // The button is gone with nothing left to undo; focus goes to the layers, not to a command.
     await offered(page, null);
-    assert.match(await page.evaluate(() => document.activeElement.id), /^action-(?:undo|redo|projects)$/u);
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute("role")), "treeitem");
 
     assert.deepEqual(editor.foreign, []);
     assert.deepEqual(editor.errors, []);

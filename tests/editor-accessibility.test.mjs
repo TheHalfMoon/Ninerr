@@ -577,3 +577,201 @@ test("with every P09 control showing, the editor reflows at 320 px and each targ
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** What has the focus, and whether a ring shows on it: a tree row draws the ring for its item. */
+const focusNow = (page) => page.evaluate(() => {
+  const element = document.activeElement;
+  const painted = element.getAttribute("role") === "treeitem" ? element.querySelector(":scope > .row") : element;
+  const style = getComputedStyle(painted);
+  const rect = painted.getBoundingClientRect();
+  return {
+    id: element.id,
+    tag: element.tagName,
+    role: element.getAttribute("role"),
+    visible: element.matches(":focus-visible") && style.outlineStyle !== "none" && style.outlineWidth !== "0px" && !/^rgba\([^)]*,\s*0\)$/u.test(style.outlineColor),
+    inView: rect.right > 0 && rect.left < innerWidth && rect.bottom > 0 && rect.top < innerHeight,
+  };
+});
+
+test("at 320 px every Tab stop shows a ring, in view", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-rings-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    const [a] = await threeBoxes(page, host);
+    await agentChange(host);
+    await page.waitForFunction(() => !document.getElementById("action-undo-agent").hidden);
+    await row(page, a).click();
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.evaluate(() => document.activeElement.blur());
+    const seen = new Set();
+    let wrapped = false;
+    for (let index = 0; index < 120; index += 1) {
+      await page.keyboard.press("Tab");
+      const now = await focusNow(page);
+      // Out of the end of the page once, and round to its start.
+      if (now.tag === "BODY") {
+        if (wrapped) break;
+        wrapped = true;
+        continue;
+      }
+      const name = now.id || now.role || `${now.tag} at stop ${index}`;
+      if (seen.has(name)) break;
+      seen.add(name);
+      if (now.role === "application") {
+        // The canvas paints its ring over the design, so it is read from the pixels.
+        const box = await page.locator("[role=application]").boundingBox();
+        const { PNG } = await import("./support/png.mjs");
+        const shot = await page.screenshot({ clip: { x: box.x, y: box.y + box.height / 2, width: 2, height: 1 } });
+        assert.deepEqual(PNG.firstPixel(shot), [26, 95, 208], "the canvas shows focus at 320 px");
+      } else assert.ok(now.visible, `${name} shows focus at 320 px`);
+      assert.ok(now.inView, `${name} is in view at 320 px`);
+    }
+    for (const id of ["action-undo-agent", "action-group", "inspect-classes", `layer-${a}`, "application"]) assert.ok(seen.has(id), `${id} was reached: ${[...seen].join(" ")}`);
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("focus stays usable after Classes commits and after Group", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-after-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    const [a, b] = await threeBoxes(page, host);
+    let revision = 3;
+    await row(page, a).click();
+
+    // Enter commits and stays in the field; Tab commits and goes on to the next one.
+    await page.locator("#inspect-classes").focus();
+    await page.keyboard.type("loud");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, ++revision);
+    assert.equal((await focusNow(page)).id, "inspect-classes", "after Enter");
+    await page.keyboard.type(" big");
+    await page.keyboard.press("Tab");
+    await waitRevision(page, ++revision);
+    assert.equal(host.session.document.nodes[a].props.attributes.class, "loud big");
+    const next = await focusNow(page);
+    assert.notEqual(next.tag, "BODY", "after Tab, not lost");
+    assert.notEqual(next.id, "inspect-classes", "after Tab, moved on");
+    assert.ok(next.visible, `${next.id} shows focus after Tab`);
+
+    // Group from its button: the focus is not lost, and a keyboard user goes on from there.
+    await row(page, b).click({ modifiers: ["ControlOrMeta"] });
+    await tabTo(page, "action-group");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, ++revision);
+    const group = host.session.document.nodes[a].parentId;
+    const fromButton = await focusNow(page);
+    assert.notEqual(fromButton.tag, "BODY", "after the Group button");
+    assert.equal(fromButton.id, "action-group", "the button stays, enabled, with the group selected");
+    assert.equal(await page.locator("#action-group").isDisabled(), false);
+    // Undone, nothing is selected and Group is disabled: the focus goes to the layers.
+    await page.keyboard.press("ControlOrMeta+z");
+    await waitRevision(page, ++revision);
+    await page.waitForFunction(() => document.getElementById("action-group").disabled);
+    const afterUndo = await focusNow(page);
+    assert.equal(afterUndo.role, "treeitem", `undoing it keeps the focus: ${afterUndo.id || afterUndo.tag}`);
+    assert.ok(afterUndo.visible, "with its ring");
+
+    // Delete from its button, the same way.
+    await row(page, b).click();
+    await tabTo(page, "action-delete");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, ++revision);
+    await page.waitForFunction(() => document.getElementById("action-delete").disabled);
+    assert.equal((await focusNow(page)).role, "treeitem", "after Delete");
+    // A held or further Enter runs no command: the layer stays deleted.
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    assert.equal(host.session.revision, revision, "Enter did not undo the delete");
+    assert.equal(Object.hasOwn(host.session.document.nodes, b), false);
+    await page.keyboard.press("ControlOrMeta+z");
+    await waitRevision(page, ++revision);
+
+    // Ctrl+G from the tree: on the new group's row.
+    await row(page, a).click();
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ControlOrMeta+g");
+    await waitRevision(page, ++revision);
+    const nodes = host.session.document.nodes;
+    const grouped = Object.values(nodes).find((node) => node.type === "group")?.id;
+    assert.notEqual(grouped, group);
+    assert.deepEqual(nodes[grouped].children, [a], "the layer Enter selected, alone");
+    const fromTree = await focusNow(page);
+    assert.equal(fromTree.id, `layer-${grouped}`, "on the new group");
+    assert.ok(fromTree.visible, "with its ring");
+
+    // A dialog's opener disabled while it was open: on closing, focus goes to the layers.
+    await page.locator("#action-code").click();
+    await page.locator("#dialog[open]").waitFor();
+    await page.evaluate(() => { document.getElementById("action-code").disabled = true; });
+    await page.keyboard.press("Escape");
+    // The dialog's close event comes a task after it closes.
+    await page.waitForFunction(() => !document.getElementById("dialog").open && document.activeElement.getAttribute("role") === "treeitem", null, { timeout: 5000 });
+    await page.evaluate(() => { document.getElementById("action-code").disabled = false; });
+
+    // Undo pressed until nothing is left: not to Redo, which a further Enter would run.
+    await tabTo(page, "action-undo");
+    const undoAll = async () => {
+      // The button follows /api/session, which answers after the revision moves.
+      const session = page.waitForResponse("**/api/session");
+      await page.keyboard.press("Enter");
+      await waitRevision(page, ++revision);
+      await session;
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+    };
+    while (!(await page.locator("#action-undo").isDisabled())) await undoAll();
+    assert.equal(await page.locator("#layers [role=treeitem]").count(), 0, "the page is undone too");
+    assert.equal((await focusNow(page)).id, "action-projects", "with no layers left, the focus goes to Projects");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the inspector's Text field is reached, edited and sized by the keyboard, at 320 px too", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-text-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await threeBoxes(page, host);
+    let revision = 3;
+    await row(page, host.session.document.rootIds[0]).click();
+    await page.locator("#action-insert-text").click();
+    await waitRevision(page, ++revision);
+    const text = host.session.document.nodes[host.session.document.rootIds[0]].children.at(-1);
+    await page.waitForFunction((id) => document.getElementById(`layer-${id}`)?.getAttribute("aria-selected") === "true", text);
+    for (const width of [1280, 320]) {
+      await page.setViewportSize({ width, height: 640 });
+      await page.evaluate(() => document.activeElement.blur());
+      await tabTo(page, "inspect-text");
+      const words = `Words at ${width}`;
+      await page.keyboard.press("ControlOrMeta+a");
+      await page.keyboard.type(words);
+      await page.keyboard.press("Tab");
+      await waitRevision(page, ++revision);
+      assert.equal(host.session.document.nodes[text].props.text, words);
+      assert.notEqual((await focusNow(page)).tag, "BODY", `focus is kept at ${width}`);
+      const box = await page.locator("#inspect-text").boundingBox();
+      assert.ok(box.width >= 24 && box.height >= 24, `its size at ${width}: ${JSON.stringify(box)}`);
+      assert.ok(box.x + box.width <= width + 1, `it fits at ${width}: ${JSON.stringify(box)}`);
+    }
+    await audit(page, "the Text field at 320 px");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

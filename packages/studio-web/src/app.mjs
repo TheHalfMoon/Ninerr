@@ -82,7 +82,8 @@ function showDialog(title, build, { dismissable = true, onReplaced = null } = {}
     if (!dismissable) event.preventDefault();
   };
   dialog.onclose = () => {
-    if (returnFocus instanceof HTMLElement && returnFocus.isConnected) returnFocus.focus();
+    if (returnFocus instanceof HTMLButtonElement && returnFocus.disabled) focusLayers();
+    else if (returnFocus instanceof HTMLElement && returnFocus.isConnected) returnFocus.focus();
   };
   if (!dialog.open) dialog.showModal();
   const first = dialog.querySelector("[autofocus], input, button");
@@ -1847,6 +1848,7 @@ function renderHistory() {
 }
 
 function renderToolbar() {
+  const focused = document.activeElement;
   const open = state.document !== null;
   $("project-name").textContent = state.project ?? "No project open";
   $("action-undo").disabled = !open || !state.canUndo;
@@ -1855,8 +1857,6 @@ function renderToolbar() {
   const agentChange = open ? latestAgentChange() : null;
   const undoAgent = $("action-undo-agent");
   const named = agentChange === null ? null : `${agentChange.intent ?? "Change"} by ${actorLabel(agentChange)}`;
-  // Hidden while it has focus (pressed with nothing left to undo): focus stays in the toolbar.
-  if (named === null && document.activeElement === undoAgent) ([$("action-undo"), $("action-redo")].find((button) => !button.disabled) ?? $("action-projects")).focus();
   undoAgent.hidden = named === null;
   undoAgent.setAttribute("aria-label", named === null ? "Undo agent change" : `Undo agent change: ${named}`);
   undoAgent.title = named ?? "";
@@ -1870,6 +1870,14 @@ function renderToolbar() {
   $("zoom-level").textContent = `${Math.round(canvas.viewport.zoom * 100)}%`;
   $("revision").textContent = open ? `Revision ${state.revision}` : "";
   document.title = state.project ? `${state.project} — Ninerr` : "Ninerr";
+  // A button disabled or hidden while it has focus (Group or Delete with nothing left selected,
+  // Undo with nothing left to undo) would drop focus to the page.
+  if (focused instanceof HTMLButtonElement && focused.closest("header") !== null && (focused.disabled || focused.hidden)) focusLayers();
+}
+
+/** Where focus goes when the control holding it goes away: never a command, which a held or further Enter would run. */
+function focusLayers() {
+  (document.querySelector("#layers [role=treeitem][tabindex='0']") ?? $("action-projects")).focus();
 }
 
 function renderChrome() {
