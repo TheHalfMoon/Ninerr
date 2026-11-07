@@ -46,6 +46,14 @@ export function mayRequest(origin, target, { devtools = false } = {}) {
  */
 export const WEBRTC_IP_POLICY = "disable_non_proxied_udp";
 
+/**
+ * The proxy every request that would use one is sent to: a port on this computer that nothing
+ * answers (#395). WebRTC's TCP (TURN, ICE-TCP) is governed by no request rule and would go direct
+ * or through the system's proxy; here it goes nowhere. Loopback is never proxied, so the editor
+ * still reaches its host. A person who starts the app with --proxy-server has chosen otherwise.
+ */
+export const SINK_PROXY = Object.freeze({ proxyRules: "http://127.0.0.1:9" });
+
 /** The web preferences every Ninerr window gets: no Node, isolated and sandboxed. */
 export function windowPreferences(preload, { devTools = false } = {}) {
   return {

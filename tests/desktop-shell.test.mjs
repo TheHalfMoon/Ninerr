@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "../packages/desktop/src/policy.mjs";
+import { SINK_PROXY, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "../packages/desktop/src/policy.mjs";
 import { findElectron } from "../scripts/desktop/electron.mjs";
 import { closeServerAfterTest } from "./support/cleanup.mjs";
 import { desktopTestOptions, display, launchDesktop } from "./support/desktop.mjs";
@@ -254,4 +254,13 @@ test("every web contents may send no WebRTC traffic that is not proxied (#395)",
   // The handler for each web contents as it is created, up to the next function.
   const created = main.slice(main.indexOf('app.on("web-contents-created"'), main.indexOf("function menu()"));
   assert.match(created, /contents\.setWebRTCIPHandlingPolicy\(WEBRTC_IP_POLICY\)/u, "set on every web contents as it is created");
+});
+
+test("anything that would use a proxy goes to one that nothing answers, before a page loads (#395)", () => {
+  assert.deepEqual(SINK_PROXY, { proxyRules: "http://127.0.0.1:9" });
+  const main = readFileSync(new URL("../packages/desktop/src/main.mjs", import.meta.url), "utf8");
+  const harden = main.slice(main.indexOf("async function harden("), main.indexOf("function menu()"));
+  assert.match(harden, /if \(!app\.commandLine\.hasSwitch\("proxy-server"\)\) await defaults\.setProxy\(SINK_PROXY\);/u);
+  // Hardening is awaited before the window opens.
+  assert.ok(main.indexOf("await harden(") > 0 && main.indexOf("await harden(") < main.indexOf("openWindow();"));
 });

@@ -36,12 +36,22 @@ const CHROMIUM_CONTROL_PORT = 8931;
 const IDLE_MS = 20_000;
 const REFUSED = ["http://192.0.2.1/", "https://fonts.googleapis.com/css2?family=Inter", "https://update.electronjs.org/", "https://api.openai.com/v1/models", "https://example.com/"];
 
-/** A STUN request from the page to the reserved address, which no request rule governs. */
+/**
+ * WebRTC from the page to the reserved address, which no request rule governs: STUN over UDP, TURN
+ * over TCP, and a peer's TCP candidate, so both UDP and TCP are tried (#395).
+ */
 const stunRequest = (page) => page.evaluate(async ([address, port]) => {
-  const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }] });
+  const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }, { urls: `turn:${address}:${port}?transport=tcp`, username: "probe", credential: "probe" }] });
   peer.createDataChannel("control");
   await peer.setLocalDescription(await peer.createOffer());
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  const other = new RTCPeerConnection();
+  other.createDataChannel("control");
+  await other.setRemoteDescription(peer.localDescription);
+  await other.setLocalDescription(await other.createAnswer());
+  await peer.setRemoteDescription(other.localDescription);
+  await peer.addIceCandidate({ candidate: `candidate:1 1 tcp 2122260223 ${address} ${port} typ host tcptype passive`, sdpMid: "0", sdpMLineIndex: 0 }).catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 4000));
+  other.close();
   peer.close();
 }, [RESERVED, CHROMIUM_CONTROL_PORT]);
 // The control over Chromium itself: the app started with its proxy at the reserved address and

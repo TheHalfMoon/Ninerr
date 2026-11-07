@@ -7,7 +7,7 @@
 import { BrowserWindow, Menu, app, dialog, session } from "electron";
 import { fileURLToPath } from "node:url";
 import { prepareProjectsFolder, resolveProjectsFolder, startStudioHost } from "../../studio-host/src/index.ts";
-import { WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "./policy.mjs";
+import { SINK_PROXY, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "./policy.mjs";
 
 const PRELOAD = fileURLToPath(new URL("./preload.cjs", import.meta.url));
 // A development run starts Electron's default app with this folder (process.defaultApp);
@@ -41,8 +41,10 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-function harden(origin) {
+async function harden(origin) {
   const defaults = session.defaultSession;
+  // Before any page loads: WebRTC's TCP, and anything else that would use a proxy, goes nowhere.
+  if (!app.commandLine.hasSwitch("proxy-server")) await defaults.setProxy(SINK_PROXY);
   // Chromium's browser process fetches spell-check dictionaries from Google, outside any
   // page (so webRequest never sees it): spell checking is off, and the dictionary source
   // is an address that is never contacted.
@@ -156,7 +158,7 @@ async function start() {
     app.exit(1);
     return;
   }
-  harden(editorOrigin(host.url));
+  await harden(editorOrigin(host.url));
   menu();
   openWindow();
 }
