@@ -283,10 +283,21 @@ async function captured() {
     check("the capture saw Chromium's own send off this computer, in the control", stunSends.some(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT), { stunSends: stunSends.slice(0, 10), stunPids: [...stunPids] });
     const types = new Set(appProcesses.map(({ type }) => type));
     check("Chromium reports a browser, a renderer and more", types.has("browser") && types.has("renderer") && appProcesses.length >= 3, appProcesses);
-    // The capture charges the app's own traffic to its processes: if this does not hold, a clean
-    // result below would mean nothing.
-    check("the capture charged the app's loopback traffic to its processes", events.some(({ pid, address }) => sessionPids.has(pid) && address === "127.0.0.1"), { events: events.length, sample });
-    const forbidden = forbiddenOutbound(events, sessionPids);
+    let forbidden;
+    if (process.platform === "darwin") {
+      // The runner's capture leaves loopback out, so the session's traffic is also held to the
+      // app's name, which pktap gives each packet: the control shows that name on Chromium's send.
+      const named = (name) => typeof name === "string" && /^Ninerr\b/u.test(name);
+      const controlNamed = stunSends.filter(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT);
+      check("the capture names the app on Chromium's own send, in the control", controlNamed.length > 0 && controlNamed.every(({ name }) => named(name)), controlNamed.slice(0, 5));
+      const appSessionPids = new Set([...sessionPids, ...events.filter(({ pid, name }) => named(name) && !stunPids.has(pid)).map(({ pid }) => pid)]);
+      forbidden = forbiddenOutbound(events, appSessionPids);
+    } else {
+      // The capture charges the app's own traffic to its processes: if this does not hold, a clean
+      // result below would mean nothing.
+      check("the capture charged the app's loopback traffic to its processes", events.some(({ pid, address }) => sessionPids.has(pid) && address === "127.0.0.1"), { events: events.length, sample });
+      forbidden = forbiddenOutbound(events, sessionPids);
+    }
     check("nothing the app's processes sent left this computer", forbidden.length === 0, forbidden.slice(0, 20));
     const unattributed = unattributedOutbound(events);
     process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, events: events.length, unattributed: [...new Set(unattributed.map(({ address, port }) => `${address} port ${port}`))].slice(0, 20), checks })}\n`);
