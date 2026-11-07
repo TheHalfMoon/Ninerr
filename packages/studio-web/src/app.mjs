@@ -419,7 +419,10 @@ function openResearchDialog() {
       return false;
     };
     const failed = (failure) => {
-      if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
+      if (handleSessionEnded(failure)) return;
+      // Another project is open by now: nothing here is its.
+      if (failure instanceof HostError && failure.code === "project-changed") close();
+      else error.textContent = describeError(failure);
     };
     const show = async (id) => {
       if (!stillOpen()) return;
@@ -431,7 +434,10 @@ function openResearchDialog() {
         detail.replaceChildren(...referenceDetail(answer));
         detail.focus({ focusVisible: true });
       } catch (failure) {
-        if (thisOne === shownAsked && stillOpen()) failed(failure);
+        if (thisOne !== shownAsked || !stillOpen()) return;
+        // The pack this row came from is gone: the same project opened again starts with none.
+        if (failure instanceof HostError && failure.code === "reference-not-found") search();
+        else failed(failure);
       }
     };
     const search = async () => {
@@ -455,7 +461,10 @@ function openResearchDialog() {
         return;
       }
       if (thisOne !== searchAsked || !stillOpen(answer)) return;
+      // A row chosen while this search ran belongs to the list it replaces.
+      shownAsked += 1;
       detail.replaceChildren();
+      const hadFocus = results.contains(document.activeElement);
       results.replaceChildren(...answer.results.map((reference) => el("li", {}, el("button", {
         type: "button",
         "data-id": reference.id,
@@ -468,6 +477,7 @@ function openResearchDialog() {
           : count === 100 ? "100 references shown, the most one search gives."
             : `${count} reference${count === 1 ? "" : "s"}.`);
       readNote = "";
+      if (hadFocus) (results.querySelector("button") ?? query).focus();
     };
     // Not by disabling the button, which would drop the keyboard's focus to the page.
     const once = (task) => {
@@ -499,7 +509,15 @@ function openResearchDialog() {
       el("label", { for: "research-folder" }, "Folder holding a reference pack (its full path)", folder),
       el("label", { for: "research-file" }, "Pack file in that folder", file),
       el("div", { class: "actions" }, read)),
-      el("form", { novalidate: true, role: "search", onsubmit: once(search) },
+      el("form", {
+        novalidate: true,
+        role: "search",
+        // Every search runs, and the last one asked for is the one that shows.
+        onsubmit: (event) => {
+          event.preventDefault();
+          search();
+        },
+      },
         el("label", { for: "research-query" }, "Search references", query),
         el("label", { for: "research-kind" }, "Kind", kind),
         el("div", { class: "actions" }, find)),

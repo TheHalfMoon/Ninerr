@@ -200,6 +200,81 @@ test("a search that fails leaves no list, a read still says so, and focus stays 
   await page.unroute("**/api/references?*");
 });
 
+test("while a search runs, a row chosen stays out of the new list, and another search is not swallowed", browserTestOptions(), async (t) => {
+  const { page, rows, status, readPack } = await research(t);
+  await page.locator("#action-research").click();
+  await readPack();
+  const heldRoute = async (pattern) => {
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route(pattern, async (route) => {
+      await held;
+      await route.continue();
+    });
+    return release;
+  };
+  // A row chosen while a search runs, whose answer comes after the search's: it is dropped.
+  const releaseFirst = await heldRoute("**/api/references?*");
+  const releaseDetail = await heldRoute("**/api/references/**");
+  await page.locator("#research-query").fill("Colour");
+  await page.locator("#research-query").press("Enter");
+  const asked = page.waitForRequest((request) => request.url().includes("/api/references/"));
+  await page.locator('#research-results button[data-id="urn:ninerr:object:a"]').click();
+  await asked;
+  releaseFirst();
+  await page.waitForFunction(() => document.getElementById("research-status").textContent === "1 reference.");
+  assert.deepEqual(await rows(), ["urn:ninerr:object:c"]);
+  const answered = page.waitForResponse((response) => response.url().includes("/api/references/"));
+  releaseDetail();
+  await answered;
+  await page.waitForTimeout(200);
+  assert.equal(await page.locator("#research-detail dl").count(), 0, "the old row's detail does not land");
+  await page.unroute("**/api/references/**");
+  await page.unroute("**/api/references?*");
+
+  // A second search while the first runs is sent, and is the one that shows.
+  const releaseSearch = await heldRoute("**/api/references?*");
+  await page.locator("#research-query").fill("dashboard");
+  await page.locator("#research-query").press("Enter");
+  const second = page.waitForRequest((request) => request.url().includes("query=no+such"));
+  await page.locator("#research-query").fill("no such");
+  await page.locator("#research-query").press("Enter");
+  await second;
+  releaseSearch();
+  await page.waitForFunction(() => document.getElementById("research-status").textContent === "No reference in this pack matches.");
+  await page.unroute("**/api/references?*");
+  assert.deepEqual(await rows(), []);
+
+  // A search that lands while a row has the focus keeps it in the list, or in the field.
+  await page.locator("#research-query").fill("");
+  await page.locator("#research-query").press("Enter");
+  await page.waitForFunction(() => document.getElementById("research-status").textContent === "4 references.");
+  const releaseLast = await heldRoute("**/api/references?*");
+  await page.locator("#research-query").fill("Colour");
+  await page.locator("#research-query").press("Enter");
+  await page.locator("#research-results button").first().focus();
+  releaseLast();
+  await page.waitForFunction(() => document.getElementById("research-status").textContent === "1 reference.");
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.id), "urn:ninerr:object:c");
+  assert.match(await status(), /1 reference/u);
+});
+
+test("the same project opened again starts with no pack, and an old row says so", browserTestOptions(), async (t) => {
+  const { running, page, status, rows, readPack } = await research(t);
+  await page.locator("#action-research").click();
+  await readPack();
+  // Revoked by the host, as closing and reopening does, with the dialog still showing its rows.
+  await ok(running.call("POST", "/api/projects/create", { name: "other" }), "other");
+  await ok(running.call("POST", "/api/projects/open", { name: "site" }), "back");
+  await page.waitForFunction(() => document.getElementById("project-name").textContent === "site");
+  await page.locator("#research-results button").first().click();
+  await page.waitForFunction(() => /No reference pack is read/u.test(document.getElementById("research-status").textContent) || !document.getElementById("dialog").open);
+  if (await page.evaluate(() => document.getElementById("dialog").open)) {
+    assert.match(await status(), /No reference pack is read/u);
+    assert.deepEqual(await rows(), []);
+  }
+});
+
 test("the dialog closes when its project is no longer the open one", browserTestOptions(), async (t) => {
   const { running, page, readPack } = await research(t);
   await page.locator("#action-research").click();
@@ -210,6 +285,18 @@ test("the dialog closes when its project is no longer the open one", browserTest
   await page.locator("#research-results button").first().click();
   await page.waitForFunction(() => !document.getElementById("dialog").open, null, { timeout: 5000 });
   assert.equal(await page.locator("#research-detail dl").count(), 0);
+});
+
+test("Read pack after the project changed closes the dialog", browserTestOptions(), async (t) => {
+  const { running, page, readPack } = await research(t);
+  await page.locator("#action-research").click();
+  await readPack();
+  await ok(running.call("POST", "/api/projects/create", { name: "other" }), "another project");
+  await page.waitForFunction(() => document.getElementById("project-name").textContent === "other", null, { timeout: 5000 });
+  await page.locator("#research-file").press("Enter");
+  await page.waitForFunction(() => !document.getElementById("dialog").open, null, { timeout: 5000 });
+  const answer = await ok(running.call("GET", "/api/references"), "search");
+  assert.equal(answer.status, "not-loaded", "and nothing was read for the other project");
 });
 
 test("the dialog fits at 1440, 768 and 320 px, with its targets, and is used by the keyboard", browserTestOptions(), async (t) => {

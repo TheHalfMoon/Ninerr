@@ -260,7 +260,9 @@ export function referenceReuseDecisions(value) {
     if (object.assetSha256 !== null && sameWork.get(object.assetSha256) === null) sameWork.set(object.assetSha256, refusal(object));
   }
   return new Map(manifest.objects.map((object) => {
-    const reason = object.assetSha256 === null ? refusal(object) : sameWork.get(object.assetSha256);
+    const own = refusal(object);
+    // Refused for another object's rights over the same bytes, it says so: its own may look fine.
+    const reason = object.assetSha256 === null || sameWork.get(object.assetSha256) === null ? own : own ?? "another object with the same bytes does not permit redistribution";
     return [object.id, reason === null ? decide(true, "the pack's metadata permits reuse; no grant register has confirmed it") : decide(false, reason)];
   }));
 }
