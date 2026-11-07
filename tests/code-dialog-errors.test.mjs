@@ -94,9 +94,68 @@ test("a conflict's choice that fails half-way leaves nothing to act on wrongly",
   await conflict("title").locator("button.take-file").click();
   await waitRevision(page, revision + 2);
   await page.locator("#codebase-preview", { hasText: "Took the file's title. Review the write-back again" }).waitFor();
+  assert.equal(await page.locator("#codebase-take-note").count(), 0, "a title has nothing further to say");
   assert.equal(await page.locator("#codebase-preview button").count(), 0, "nothing left to act on");
   const after = await ok(call("GET", "/api/document"), "document");
   assert.equal(after.document.nodes[heading].props.attributes.title, "Plans");
+  assert.deepEqual(editor.foreign, []);
+});
+
+// #370: taking the file's style says what the layer does not hold as written, in the dialog.
+test("taking the file's style says what was left out, and keeps saying so", browserTestOptions(), async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-code-dialog-")));
+  const pool = hostPool(now);
+  t.after(async () => {
+    await pool.closeAll();
+    rmSync(root, { recursive: true, force: true });
+  });
+  mkdirSync(join(root, "projects"));
+  mkdirSync(join(root, "app"));
+  const file = join(root, "app", "Badge.jsx");
+  const source = (first, second, third) => `export function Badge() {\n  return <div><p style="${first}">a</p><p style="${second}">b</p><p style="${third}">c</p></div>;\n}\n`;
+  writeFileSync(file, source("color: green", "color: green", "color: green"));
+  const running = await pool.open(join(root, "projects"));
+  const { call } = running;
+  await ok(call("POST", "/api/projects/create", { name: "site" }), "create");
+  await ok(call("POST", "/api/codebase/connect", { folder: join(root, "app") }), "connect");
+  const brought = await ok(call("POST", "/api/codebase/import", { file: "Badge.jsx", component: "Badge" }), "bring in");
+  const { document, revision } = await ok(call("GET", "/api/document"), "document");
+  const element = document.nodes[brought.frameId].children[0];
+  const operations = document.nodes[element].children.map((nodeId) => ({ type: "set-props", nodeId, set: { style: { color: "blue" } } }));
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations }), "edit");
+  writeFileSync(file, source("margin-left: 4px; margin: 0px", "border-top: 1px solid blue; border-color: red", "color: red"));
+
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, revision + 1);
+  await page.locator(`[role=treeitem][data-node-id="${element}"] > .row`).click();
+  await page.locator("#action-code").click();
+  await page.locator("#codebase-review").click();
+  const conflict = (text) => page.locator("#codebase-preview li", { hasText: text });
+  const note = page.locator("#codebase-take-note");
+  await conflict("margin-left").locator("button.take-file").click();
+  await waitRevision(page, revision + 2);
+  await note.waitFor();
+  assert.match(await note.textContent(), /Took the file's style\. 1 layer has style properties left out/u);
+
+  // Another choice shows the plan again, and the note stays.
+  await conflict("“color: red”").locator("button.keep-here").click();
+  await page.waitForFunction(() => !document.getElementById("codebase-preview").textContent.includes("“color: red”"));
+  assert.equal(await note.count(), 1, "kept beside a Keep");
+
+  // A Take whose review fails takes the plan down, and says both.
+  await page.route("**/api/codebase/preview", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: { code: "test-failure", message: "the review failed (test)" } }) }));
+  await conflict("border-top").locator("button.take-file").click();
+  await waitRevision(page, revision + 3);
+  await page.locator("#codebase-preview", { hasText: "Review the write-back again" }).waitFor();
+  const both = await note.textContent();
+  assert.match(both, /left out/u);
+  assert.match(both, /1 layer has overlapping style properties/u);
+  await page.unroute("**/api/codebase/preview");
+  await page.locator("#codebase-review").click();
+  await page.waitForFunction(() => !document.getElementById("codebase-preview").textContent.includes("Review the write-back again"));
+  assert.equal(await note.textContent(), both, "and a later review still says both");
   assert.deepEqual(editor.foreign, []);
 });
 

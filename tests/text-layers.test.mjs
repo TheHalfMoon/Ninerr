@@ -160,6 +160,14 @@ test("set_text refuses an element holding a code part beside other content, and 
   const holders = [...new Set(Object.values(nodes()).filter(isCodePart).map((part) => part.parentId))];
   assert.equal(holders.length, 2);
   for (const nodeId of holders) refusedAsCode(await agent.tool("set_text", { nodeId, text: "Replaced" }));
+  // A wrapper holds it too, however deep: the words would sit beside the code.
+  const wrapper = nodes()[holders[0]].parentId;
+  refusedAsCode(await agent.tool("set_text", { nodeId: wrapper, text: "Replaced" }));
+  refusedAsCode(await agent.tool("set_text", { nodeId: nodes()[wrapper].parentId, text: "Replaced" }));
+  assert.equal(nodes()[wrapper].props.text, undefined);
+  // A wrapper with no code in it is as it was.
+  const plain = await ok(running.call("POST", "/api/code/import", { code: "export function B() { return <section><h1>Hi</h1></section>; }" }), "import");
+  assert.equal((await agent.tool("set_text", { nodeId: plain.frameId, text: "Set" })).isError, undefined);
   const code = (await ok(running.call("POST", "/api/code/export", { nodeId: nodes()[holders[0]].parentId }), "export")).code;
   assert.ok(!code.includes("Replaced"));
   assert.match(code, /\{a\}/u);
@@ -182,6 +190,24 @@ test("set_text refuses a code part, and an element holding only one, and export 
   assert.equal(nodes()[words.id].props.text, "Still words");
   const main = nodes()[part.parentId].parentId;
   assert.match((await ok(running.call("POST", "/api/code/export", { nodeId: main }), "export")).code, /<p>\{title\}<\/p>/u);
+});
+
+test("the inspector's note for code beside other content does not call the rest words", browserTestOptions(), async (t) => {
+  const { running } = await withCode(t, "ninerr-code-part-mixed-note-");
+  await ok(running.call("POST", "/api/code/import", { code: "export function B() { return <figure><img src=\"a.png\" alt=\"\" />{b}</figure>; }" }), "import");
+  const nodes = running.host.session.document.nodes;
+  const holder = Object.values(nodes).find((each) => each.props?.text === "{b}").parentId;
+  const editor = await openEditor(running.host);
+  t.after(() => editor.close());
+  const { page } = editor;
+  await waitRevision(page, running.host.session.revision);
+  await page.locator(`[id="layer-${holder}"] > .row`).click();
+  await page.waitForFunction((nodeId) => document.getElementById(`layer-${nodeId}`)?.getAttribute("aria-selected") === "true", holder);
+  const note = await page.locator("#inspect-code-note").textContent();
+  assert.match(note, /holds code from its source/u);
+  assert.doesNotMatch(note, /words/u, "beside an image, there are none");
+  assert.equal(await page.locator("#inspect-text").count(), 0);
+  assert.deepEqual(editor.errors, []);
 });
 
 test("the inspector has no Text field for a code part or an element holding only one", browserTestOptions(), async (t) => {

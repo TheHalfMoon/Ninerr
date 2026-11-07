@@ -7,7 +7,7 @@ import { StudioError } from "./errors.ts";
 import { LEGACY_CODEBASE_LINKS_FILE, registrySource } from "./legacy.ts";
 import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
 import { type CodeSource, importJsx, layerName, sourceShape } from "./code.ts";
-import { importedStyle, overlap, styleProperties } from "./imports.ts";
+import { importedStyle, overlap, styleOutOfWrittenOrder, styleProperties } from "./imports.ts";
 
 // A connected codebase (PC11, #182): one local folder linked to a project, whose JSX and
 // TSX components the person can bring into the design with their source, and write
@@ -849,9 +849,10 @@ function propUnwritable(prop: string, mine: string, fileValue: string, base: str
 
 /**
  * Take the file's value for one field changed both here and in the file (#236): the operation
- * that sets the layer's field to it and moves the field's base there, so the two agree.
+ * that sets the layer's field to it and moves the field's base there, so the two agree. A style
+ * taken says, as an import does, what the layer does not hold as written.
  */
-export function resolveWithFile(document: any, nodeId: unknown, field: unknown, shown: unknown, folder: string): { operations: unknown[]; file: string; field: string } {
+export function resolveWithFile(document: any, nodeId: unknown, field: unknown, shown: unknown, folder: string): { operations: unknown[]; file: string; field: string; layersWithStyleLeftOut: number; layersWithStyleOutOfOrder: number } {
   if (typeof nodeId !== "string" || typeof field !== "string" || typeof shown !== "string") throw new StudioError(400, "invalid-resolve", "name the layer, the field and the file's value as it was shown");
   const plan = planWriteBack(document, nodeId, folder);
   const conflict = plan.conflicts.find((entry) => entry.nodeId === nodeId && entry.field === field && entry.overridable);
@@ -863,14 +864,19 @@ export function resolveWithFile(document: any, nodeId: unknown, field: unknown, 
   const source = node.props.codeSource as CodeSource;
   const value = conflict.file;
   let set: Record<string, unknown>;
+  let layersWithStyleLeftOut = 0;
+  let layersWithStyleOutOfOrder = 0;
   if (field === "text") set = { text: value, codeSource: { ...source, base: { ...source.base, text: value } } };
   else {
     const base = { ...source.base, props: { ...source.base.props, [prop]: value } };
-    set = prop === "style"
-      ? { style: importedStyle({ cssText: value }), codeSource: { ...source, base } }
-      : { attributes: { ...(node.props.attributes ?? {}), [layerName(prop)]: value }, codeSource: { ...source, base } };
+    if (prop === "style") {
+      const style = importedStyle({ cssText: value });
+      if (Object.keys(style).length < Object.keys(styleProperties({ cssText: value })).length) layersWithStyleLeftOut = 1;
+      if (styleOutOfWrittenOrder({ cssText: value })) layersWithStyleOutOfOrder = 1;
+      set = { style, codeSource: { ...source, base } };
+    } else set = { attributes: { ...(node.props.attributes ?? {}), [layerName(prop)]: value }, codeSource: { ...source, base } };
   }
-  return { operations: [{ type: "set-props", nodeId, set }], file: plan.file, field };
+  return { operations: [{ type: "set-props", nodeId, set }], file: plan.file, field, layersWithStyleLeftOut, layersWithStyleOutOfOrder };
 }
 
 /** How a write-back names a part of the source. */

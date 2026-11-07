@@ -267,9 +267,16 @@ const TOOLS: Tool[] = [
       const node = nodeOf(session, args.nodeId);
       if (typeof args.text !== "string") throw new ToolError("text must be a string");
       // A {…} part is code: its text is only what the canvas shows of it (#370). Text set on an
-      // element holding one would sit beside the code, and never reach the source.
+      // element holding one, at any depth, would sit beside the code, and never reach the source.
       const nodes = (session.document as any).nodes;
-      if (isCodePart(node) || node.children.some((id: string) => isCodePart(nodes[id]))) {
+      const below: any[] = [node];
+      let holdsCode = false;
+      while (!holdsCode && below.length > 0) {
+        const each = below.pop();
+        holdsCode = isCodePart(each);
+        for (const id of each.children) below.push(nodes[id]);
+      }
+      if (holdsCode) {
         throw new ToolError("this layer shows {…} code from its source, so its text cannot be set here; change it in the code. Its style, name and position can still change.");
       }
       // The words a person sees: an element's own text, or its only text layer's (#235).
