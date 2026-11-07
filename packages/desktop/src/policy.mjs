@@ -40,6 +40,12 @@ export function mayRequest(origin, target, { devtools = false } = {}) {
   return url.origin === origin;
 }
 
+/**
+ * WebRTC may use no UDP that is not proxied (#395). A page's STUN or peer traffic is governed by
+ * no request rule or content policy, so without this the editor could send UDP off the computer.
+ */
+export const WEBRTC_IP_POLICY = "disable_non_proxied_udp";
+
 /** The web preferences every Ninerr window gets: no Node, isolated and sandboxed. */
 export function windowPreferences(preload, { devTools = false } = {}) {
   return {

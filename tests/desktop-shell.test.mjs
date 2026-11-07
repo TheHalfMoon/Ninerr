@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { editorOrigin, mayNavigate, mayRequest, windowPreferences } from "../packages/desktop/src/policy.mjs";
+import { WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "../packages/desktop/src/policy.mjs";
 import { findElectron } from "../scripts/desktop/electron.mjs";
 import { closeServerAfterTest } from "./support/cleanup.mjs";
 import { desktopTestOptions, display, launchDesktop } from "./support/desktop.mjs";
@@ -246,4 +246,12 @@ test("the desktop app runs the editor in an isolated, sandboxed window that reac
     await screen.stop();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("every web contents may send no WebRTC traffic that is not proxied (#395)", () => {
+  assert.equal(WEBRTC_IP_POLICY, "disable_non_proxied_udp");
+  const main = readFileSync(new URL("../packages/desktop/src/main.mjs", import.meta.url), "utf8");
+  // The handler for each web contents as it is created, up to the next function.
+  const created = main.slice(main.indexOf('app.on("web-contents-created"'), main.indexOf("function menu()"));
+  assert.match(created, /contents\.setWebRTCIPHandlingPolicy\(WEBRTC_IP_POLICY\)/u, "set on every web contents as it is created");
 });

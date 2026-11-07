@@ -36,6 +36,17 @@ const CHROMIUM_CONTROL_PORT = 8931;
 const IDLE_MS = 20_000;
 const REFUSED = ["http://192.0.2.1/", "https://fonts.googleapis.com/css2?family=Inter", "https://update.electronjs.org/", "https://api.openai.com/v1/models", "https://example.com/"];
 
+/** A STUN request from the page to the reserved address, which no request rule governs. */
+const stunRequest = (page) => page.evaluate(async ([address, port]) => {
+  const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }] });
+  peer.createDataChannel("control");
+  await peer.setLocalDescription(await peer.createOffer());
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+  peer.close();
+}, [RESERVED, CHROMIUM_CONTROL_PORT]);
+// The control run puts WebRTC back as Chromium has it, so its send shows the trap can see one.
+const UNHARDENED = ["--force-webrtc-ip-handling-policy=default"];
+
 const checks = [];
 const check = (name, ok, detail) => {
   checks.push({ name, ok: Boolean(ok), ...(detail === undefined ? {} : { detail }) });
@@ -125,22 +136,18 @@ async function traced() {
         check(`the page is refused ${new URL(url).hostname}`, answer.startsWith("refused"), answer);
       }
       // Left idle a while, for anything that waits before it reaches out.
+      // The app's own STUN request (#395): hardened, it must send nothing, as the check below holds.
+      await stunRequest(page);
       await sleep(IDLE_MS);
 
       const quit = await ninerr.quit();
       check("closing Ninerr quits it cleanly", quit === 0, { exit: quit, output: ninerr.output().slice(-300) });
 
-      // The control over Chromium itself, in a run of its own: a STUN request, which neither the
-      // app's request rules nor a page's content policy govern, so Chromium really sends it.
+      // The control over Chromium itself, in a run of its own with WebRTC as Chromium has it: a STUN
+      // request, which no request rule governs, so Chromium really sends it.
       tracing = "stun";
-      const stun = await launch();
-      await stun.page.evaluate(async ([address, port]) => {
-        const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }] });
-        peer.createDataChannel("control");
-        await peer.setLocalDescription(await peer.createOffer());
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        peer.close();
-      }, [RESERVED, CHROMIUM_CONTROL_PORT]);
+      const stun = await launch(UNHARDENED);
+      await stunRequest(stun.page);
       await stun.quit();
     } finally {
       await run.close();
@@ -258,21 +265,17 @@ async function captured() {
         const answer = await page.evaluate((target) => fetch(target).then((response) => `answered ${response.status}`, (failure) => `refused: ${failure.message}`), url);
         check(`the page is refused ${new URL(url).hostname}`, answer.startsWith("refused"), answer);
       }
+      // The app's own STUN request (#395): hardened, it must send nothing, as the check below holds.
+      await stunRequest(page);
       await sleep(IDLE_MS);
       await processesOf(ninerr, sessionPids);
       const quit = await ninerr.quit();
       check("closing Ninerr quits it cleanly", quit === 0, { exit: quit, output: ninerr.output().slice(-300) });
 
       // The control over Chromium itself, in a run of its own: a STUN request.
-      const stun = await run.launch();
+      const stun = await run.launch(UNHARDENED);
       await processesOf(stun, stunPids);
-      await stun.page.evaluate(async ([address, port]) => {
-        const peer = new RTCPeerConnection({ iceServers: [{ urls: `stun:${address}:${port}` }] });
-        peer.createDataChannel("control");
-        await peer.setLocalDescription(await peer.createOffer());
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        peer.close();
-      }, [RESERVED, CHROMIUM_CONTROL_PORT]);
+      await stunRequest(stun.page);
       await processesOf(stun, stunPids);
       await stun.quit();
     } finally {

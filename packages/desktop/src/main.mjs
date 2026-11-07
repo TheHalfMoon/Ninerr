@@ -3,11 +3,11 @@
 // the window shows the editor it serves, through the same single-use launch link a browser
 // would use. The window is context-isolated and sandboxed with no Node, its preload is
 // minimal, and it may not navigate away, open windows, attach webviews, request anything
-// but the host, or be granted any permission.
+// but the host, send WebRTC traffic that is not proxied, or be granted any permission.
 import { BrowserWindow, Menu, app, dialog, session } from "electron";
 import { fileURLToPath } from "node:url";
 import { prepareProjectsFolder, resolveProjectsFolder, startStudioHost } from "../../studio-host/src/index.ts";
-import { editorOrigin, mayNavigate, mayRequest, windowPreferences } from "./policy.mjs";
+import { WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "./policy.mjs";
 
 const PRELOAD = fileURLToPath(new URL("./preload.cjs", import.meta.url));
 // A development run starts Electron's default app with this folder (process.defaultApp);
@@ -63,6 +63,7 @@ function harden(origin) {
   app.on("web-contents-created", (_event, contents) => {
     contents.on("will-attach-webview", (event) => event.preventDefault());
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
+    contents.setWebRTCIPHandlingPolicy(WEBRTC_IP_POLICY);
     contents.on("will-navigate", (event) => {
       if (!mayNavigate(origin, event.url)) event.preventDefault();
     });

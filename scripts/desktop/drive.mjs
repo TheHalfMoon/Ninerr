@@ -106,10 +106,11 @@ export async function preparePackage(archive, { home: homeName = "home", project
     const { chromium } = await import("playwright-core");
 
     /** Start the packaged app and wait for its editor to be ready. */
-    const launch = async () => {
+    /** `extraArgs` are given to the app too, for a control run. */
+    const launch = async (extraArgs = []) => {
       const port = await freePort();
       // Chromium's own log goes to stderr, so a failure to start says why.
-      const [command, commandArgs] = wrap(executable, [`--remote-debugging-port=${port}`, ...proxyArgs, "--enable-logging=stderr"]);
+      const [command, commandArgs] = wrap(executable, [`--remote-debugging-port=${port}`, ...proxyArgs, "--enable-logging=stderr", ...extraArgs]);
       const child = spawn(command, commandArgs, { env, stdio: ["ignore", "pipe", "pipe"] });
       running.add(child);
       let output = "";
