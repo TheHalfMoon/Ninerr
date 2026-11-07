@@ -187,6 +187,7 @@ test("the core workflow completes with all network access disabled and makes zer
     const person = { actorId: "offline-user", kind: "user", accessClass: "member", displayName: "Owner" };
     mkdirSync(join(root, "mcp"));
     const session = StudioSession.open({ projectsRoot: join(root, "mcp"), name: "site", owner: person, create: { title: "Site" }, now: () => AT });
+    session.setAgentGrants([{ principalKind: "actor", principalId: "agent-mcp", capabilities: ["read", "document-write", "comments"] }]);
     const context = { session: () => session, selection: () => [], references: new ReferenceCatalog(), confirmations: new ConfirmationBroker(), now: () => AT, lastRead: new Map() };
     const reader = { actorId: "agent-mcp", kind: "agent", accessClass: "service", displayName: "Offline agent", ownerActorId: person.actorId };
     const ask = (id, method, params) => handleMcpMessage(context, reader, { jsonrpc: "2.0", id, method, params });
