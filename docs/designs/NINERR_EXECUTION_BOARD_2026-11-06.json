@@ -72,7 +72,7 @@
     {
       "id": "R03",
       "title": "Complete P09 UI/UX",
-      "status": "in_progress",
+      "status": "criteria_met_with_limits",
       "deps": [
         "R01",
         "R02"
@@ -95,7 +95,11 @@
         384,
         385,
         386,
-        387
+        387,
+        388,
+        389,
+        390,
+        392
       ],
       "mergeCommits": {
         "374": "752491c",
@@ -105,14 +109,18 @@
         "384": "d831dbf0ea7335f679638fa9487e3f9ba2cfc077",
         "385": "37db05c86aed32110afbf70d8837594b2063e560",
         "386": "e85fda9eebad5b256740f433bd5c1806c4924a5e",
-        "387": "870db4bf68dac928a47ee8e43623f3db85a3e8fe"
+        "387": "870db4bf68dac928a47ee8e43623f3db85a3e8fe",
+        "388": "6162b8c714da5460cdb09c428c9cbbc28a4f8a25",
+        "389": "05a5b4a196bb3b563e5216c38b3980fa04b0943d",
+        "390": "48f132bd475cb19d326e03f56fbdeeaeebbdd6e1",
+        "392": "4c24f1526d3fa253b290c23f7a71f4cab273b4dd"
       },
-      "evidence": "Each PR above passed exact-head CI and post-merge CI. Gate not met: dogfooding rerun (#379, docs/evidence/P09_DOGFOODING_2026-11-06.md) passes journeys B and E on all seven projects, but journey F fails intermittently on sb-admin-2 (#377). A browser test has since captured project-changed on POST /api/selection, 3 of 3 runs; no body has been seen on sb-admin-2 itself, and how to handle it is undecided. Criterion 4: tests merged in #374, #386 and #387 prove rings at 320 px and focus after Classes, Group and Delete; screen-reader announcements stay unproven (#376 open). Criterion 5: style order is decided, with overlapping pairs recorded as a limit in #384 (#369 closed; #383 stays open); #235 stays open. #370 closed by #385. #378 remains open. No installed-app test yet. Only CI's delegate-review spec ran on these PRs, not an Open Code Review, and Goldfish reviews wait on free Pulse quota."
+      "evidence": "docs/evidence/P09_EXIT_2026-11-07.md: each criterion met, with limits. Seven-project dogfooding at 38c9254 with no failed check (docs/evidence/P09_DOGFOODING_2026-11-07.md; D unsupported on three; one Windows machine, from source). #235, #369, #370 and #378 closed. Open: #376 (real screen reader), #377 (intermittent refusal, GET 409s unread), #382, #383. Alibaba Open Code Review ran on #362 only; Goldfish reviews have not run."
     },
     {
       "id": "R04",
       "title": "Whole-process strict offline mode",
-      "status": "blocked_by_dependencies",
+      "status": "ready",
       "deps": [
         "R03"
       ],
@@ -209,7 +217,7 @@
     {
       "id": "M05",
       "title": "Desktop Research panel",
-      "status": "ready",
+      "status": "merged",
       "deps": [
         "M03"
       ],
@@ -218,7 +226,10 @@
         "tests/research-ui.test.mjs (new)",
         "a11y/320px UI journey (new)"
       ],
-      "gate": "offline preview, no remote thumbs, correct rights"
+      "gate": "offline preview, no remote thumbs, correct rights",
+      "pr": 391,
+      "mergeCommit": "8e5d2f96c669dd35eb4cb92dadcca305d57a2824",
+      "evidence": "CI and Desktop post-merge success (runs 42342898020, 42342897988). 98 local tests; three fresh-context review rounds found 16 defects, all fixed; the last two fixes unreviewed. Metadata preview only, folder typed. #366's packaged, disconnected and 1,000-entry UI gates not run, and #366 stays open."
     },
     {
       "id": "M06",
@@ -239,7 +250,7 @@
     {
       "id": "W01",
       "title": "Versioned MCP transactions",
-      "status": "blocked_by_dependencies",
+      "status": "ready",
       "deps": [
         "R03"
       ],
@@ -281,7 +292,7 @@
     {
       "id": "W04",
       "title": "Responsive professional layout",
-      "status": "blocked_by_dependencies",
+      "status": "ready",
       "deps": [
         "R03"
       ],
@@ -320,7 +331,7 @@
     {
       "id": "W07",
       "title": "Vectors and local PNG SVG PDF export",
-      "status": "blocked_by_dependencies",
+      "status": "ready",
       "deps": [
         "R03"
       ],
