@@ -672,12 +672,12 @@ test("focus stays usable after Classes commits and after Group", browserTestOpti
     assert.notEqual(fromButton.tag, "BODY", "after the Group button");
     assert.equal(fromButton.id, "action-group", "the button stays, enabled, with the group selected");
     assert.equal(await page.locator("#action-group").isDisabled(), false);
-    // Undone, nothing is selected and Group is disabled: the focus moves along the toolbar.
+    // Undone, nothing is selected and Group is disabled: the focus goes to the layers.
     await page.keyboard.press("ControlOrMeta+z");
     await waitRevision(page, ++revision);
     await page.waitForFunction(() => document.getElementById("action-group").disabled);
     const afterUndo = await focusNow(page);
-    assert.ok(["action-undo", "action-redo"].includes(afterUndo.id), `undoing it keeps the focus in the toolbar: ${afterUndo.id || afterUndo.tag}`);
+    assert.equal(afterUndo.role, "treeitem", `undoing it keeps the focus: ${afterUndo.id || afterUndo.tag}`);
     assert.ok(afterUndo.visible, "with its ring");
 
     // Delete from its button, the same way.
@@ -686,7 +686,12 @@ test("focus stays usable after Classes commits and after Group", browserTestOpti
     await page.keyboard.press("Enter");
     await waitRevision(page, ++revision);
     await page.waitForFunction(() => document.getElementById("action-delete").disabled);
-    assert.ok(["action-undo", "action-redo"].includes((await focusNow(page)).id), "after Delete");
+    assert.equal((await focusNow(page)).role, "treeitem", "after Delete");
+    // A held or further Enter runs no command: the layer stays deleted.
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    assert.equal(host.session.revision, revision, "Enter did not undo the delete");
+    assert.equal(Object.hasOwn(host.session.document.nodes, b), false);
     await page.keyboard.press("ControlOrMeta+z");
     await waitRevision(page, ++revision);
 
@@ -704,18 +709,28 @@ test("focus stays usable after Classes commits and after Group", browserTestOpti
     assert.equal(fromTree.id, `layer-${grouped}`, "on the new group");
     assert.ok(fromTree.visible, "with its ring");
 
-    // Undo pressed until nothing is left: on to Redo.
+    // A dialog's opener disabled while it was open: on closing, focus goes to the layers.
+    await page.locator("#action-code").click();
+    await page.locator("#dialog[open]").waitFor();
+    await page.evaluate(() => { document.getElementById("action-code").disabled = true; });
+    await page.keyboard.press("Escape");
+    // The dialog's close event comes a task after it closes.
+    await page.waitForFunction(() => !document.getElementById("dialog").open && document.activeElement.getAttribute("role") === "treeitem", null, { timeout: 5000 });
+    await page.evaluate(() => { document.getElementById("action-code").disabled = false; });
+
+    // Undo pressed until nothing is left: not to Redo, which a further Enter would run.
     await tabTo(page, "action-undo");
-    while (revision > 0 && !(await page.locator("#action-undo").isDisabled())) {
+    const undoAll = async () => {
+      // The button follows /api/session, which answers after the revision moves.
+      const session = page.waitForResponse("**/api/session");
       await page.keyboard.press("Enter");
       await waitRevision(page, ++revision);
-    }
-    assert.equal((await focusNow(page)).id, "action-redo", "after the last Undo");
-    while (!(await page.locator("#action-redo").isDisabled())) {
-      await page.keyboard.press("Enter");
-      await waitRevision(page, ++revision);
-    }
-    assert.equal((await focusNow(page)).id, "action-undo", "and after the last Redo");
+      await session;
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+    };
+    while (!(await page.locator("#action-undo").isDisabled())) await undoAll();
+    assert.equal(await page.locator("#layers [role=treeitem]").count(), 0, "the page is undone too");
+    assert.equal((await focusNow(page)).id, "action-projects", "with no layers left, the focus goes to Projects");
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();
