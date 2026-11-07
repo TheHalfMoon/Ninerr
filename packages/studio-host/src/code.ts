@@ -82,8 +82,27 @@ function appliedStylesheet(document: any, nodeId: string): string | null {
   return null;
 }
 
+/**
+ * Whether a layer is the page imported code was placed in, as import made it: a top-level
+ * frame holding one layer, with the page style and nothing else of its own.
+ */
+function isCodePage(document: any, node: any): boolean {
+  if (node?.type !== "frame" || node.parentId !== null || node.children?.length !== 1 || !Object.hasOwn(document.nodes, node.children[0])) return false;
+  const props = node.props ?? {};
+  if (Object.keys(props).some((key) => !["tag", "name", "style", "attributes"].includes(key))) return false;
+  if (props.tag !== "div" || Object.keys(props.attributes ?? {}).length > 0) return false;
+  const style = props.style ?? {};
+  const keys = Object.keys(style);
+  return keys.length === Object.keys(CODE_PAGE_STYLE).length && keys.every((key) => style[key] === CODE_PAGE_STYLE[key]);
+}
+
 export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; stylesheet: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
+  // The page imported code was placed in, as import made it, exports as the component inside
+  // it, under the page's name. Wrapping it instead would nest one more element each time the
+  // export is brought in again (#398). A page the person has styled exports as itself.
+  const named = document.nodes[nodeId];
+  if (isCodePage(document, named)) nodeId = named.children[0] as string;
   let layers = 0;
   let codeParts = 0;
   let codePartBytes = 0;
@@ -203,8 +222,7 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
     }
     return out;
   };
-  const root = document.nodes[nodeId];
-  const componentName = pascal(typeof root.props?.name === "string" ? root.props.name : "", "Layer");
+  const componentName = pascal(typeof named.props?.name === "string" ? named.props.name : "", "Layer");
   const design: DesignDoc = { componentName, root: convert(nodeId, 1) };
   try {
     return { componentName, code: designToCode(design), layers, codeParts, stylesheet: appliedStylesheet(document, nodeId) };
@@ -245,6 +263,78 @@ export interface CodeSource {
    * file next to it that becomes the file (#185). See codebase.ts, pendingState.
    */
   pending?: { base: { text?: string; props: Record<string, string> }; sha256: string; temp?: string };
+}
+
+/** The frame a piece of imported code is placed in: a page, not part of the component (#398). */
+const CODE_PAGE_STYLE: Readonly<Record<string, string>> = Object.freeze({ position: "relative", width: "800px", "min-height": "400px", background: "#ffffff" });
+
+// React's unitless properties: a number given to any other one is in pixels.
+const UNITLESS = new Set(["animationIterationCount", "aspectRatio", "borderImageOutset", "borderImageSlice", "borderImageWidth", "boxFlex", "boxFlexGroup", "boxOrdinalGroup", "columnCount", "columns", "flex", "flexGrow", "flexPositive", "flexShrink", "flexNegative", "flexOrder", "gridArea", "gridRow", "gridRowEnd", "gridRowSpan", "gridRowStart", "gridColumn", "gridColumnEnd", "gridColumnSpan", "gridColumnStart", "fontWeight", "lineClamp", "lineHeight", "opacity", "order", "orphans", "scale", "tabSize", "widows", "zIndex", "zoom", "fillOpacity", "floodOpacity", "stopOpacity", "strokeDasharray", "strokeDashoffset", "strokeMiterlimit", "strokeOpacity", "strokeWidth"]);
+
+/**
+ * The CSS an object style says, when it is only literal values: style={{ padding: "40px",
+ * zIndex: 2 }} is "padding: 40px; z-index: 2". Null for anything else (a spread, a name or
+ * call, a computed key, a template, a value with ; or a line break), which stays code (#398).
+ * `attribute` is the whole attribute as written, style={…}.
+ */
+export function objectStyleText(attribute: string): string | null {
+  const match = /^style\s*=\s*\{\s*\{([\s\S]*)\}\s*\}$/u.exec(attribute.trim());
+  if (match === null) return null;
+  const body = match[1];
+  const declarations: string[] = [];
+  let at = 0;
+  const space = () => { while (at < body.length && /\s/u.test(body[at])) at += 1; };
+  const quoted = (): string | null => {
+    const quote = body[at];
+    if (quote !== '"' && quote !== "'") return null;
+    const end = body.indexOf(quote, at + 1);
+    if (end < 0) return null;
+    const text = body.slice(at + 1, end);
+    // Escapes, and what would end a declaration or a line, are not read: the style stays code.
+    if (/[\\;\r\n{}]/u.test(text)) return null;
+    at = end + 1;
+    return text;
+  };
+  for (space(); at < body.length; space()) {
+    let key = quoted();
+    if (key === null) {
+      const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(body.slice(at));
+      if (name === null) return null;
+      key = name[0];
+      at += key.length;
+    }
+    space();
+    if (body[at] !== ":") return null;
+    at += 1;
+    space();
+    let value = quoted();
+    if (value === null) {
+      const number = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?![\w.$])/u.exec(body.slice(at));
+      if (number === null) return null;
+      at += number[0].length;
+      const numeric = Number(number[0]);
+      if (!Number.isFinite(numeric)) return null;
+      // A vendor prefix does not change whether a property takes a unit: WebkitLineClamp is lineClamp.
+      const unprefixed = key.replace(/^(?:Webkit|Moz|ms|O)([A-Z])/u, (_, letter: string) => letter.toLowerCase());
+      value = numeric === 0 || UNITLESS.has(unprefixed) || key.startsWith("--") ? String(numeric) : `${numeric}px`;
+    }
+    // backgroundColor is background-color; WebkitTransform and msTransition keep their prefix.
+    const property = key.startsWith("--") || key.includes("-") ? key : key.replace(/^ms(?=[A-Z])/u, "-ms").replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
+    declarations.push(`${property}: ${value}`);
+    space();
+    if (body[at] === ",") at += 1;
+    else if (at < body.length) return null;
+  }
+  return declarations.join("; ");
+}
+
+/**
+ * The CSS an element's object style (style={{ … }}) says, read from the source it was parsed
+ * from: undefined when it has none, null when it is not only literal values.
+ */
+export function objectStyleOf(symbol: any, content: string): string | null | undefined {
+  const prop = (symbol.codeProps ?? []).find((candidate: any) => candidate.name === "style");
+  return prop === undefined ? undefined : objectStyleText(content.slice(prop.range.startOffset, prop.range.endOffset));
 }
 
 /** An element tag the canvas draws as itself (svg's linearGradient too); others are named boxes. */
@@ -349,6 +439,17 @@ export function importJsx(source: unknown, options: ImportJsxOptions = {}): { op
       }
       else attributes[prop.name] = text;
     }
+    // An object style (style={{ … }}) is code in the source: the layer shows what its literal
+    // values say, and one that cannot be read is counted as left out, never dropped silently.
+    const cssText = objectStyleOf(symbol, source);
+    if (cssText !== undefined) {
+      if (cssText === null) layersWithStyleLeftOut += 1;
+      else {
+        style = importedStyle({ cssText });
+        if (Object.keys(style).length < Object.keys(styleProperties({ cssText })).length) layersWithStyleLeftOut += 1;
+        if (styleOutOfWrittenOrder({ cssText })) layersWithStyleOutOfOrder += 1;
+      }
+    }
     // A component (Button, Item.Skeleton) or a name that is not a plain tag is kept as a named
     // layer the canvas draws as a box; a fragment is a box that takes no part in layout.
     const fragment = symbol.kind === "fragment";
@@ -400,7 +501,7 @@ export function importJsx(source: unknown, options: ImportJsxOptions = {}): { op
     }
     return id;
   };
-  const frame = { id: frameId, type: "frame", parentId: null, children: [] as string[], props: { tag: "div", name: componentName, style: { position: "relative", width: "800px", "min-height": "400px", background: "#ffffff" } }, metadata: {} };
+  const frame = { id: frameId, type: "frame", parentId: null, children: [] as string[], props: { tag: "div", name: componentName, style: { ...CODE_PAGE_STYLE } }, metadata: {} };
   frame.children = [convert(rootId, frameId, componentName)];
   return { operations: [{ type: "restore-subtree", rootId: frameId, parentId: null, nodes: [frame, ...nodes] }], frameId, componentName, layers: count, layersWithStyleLeftOut, layersWithStyleOutOfOrder };
 }
