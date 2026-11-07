@@ -6,7 +6,7 @@ import { shorthandsFirst } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 import { LEGACY_CODEBASE_LINKS_FILE, registrySource } from "./legacy.ts";
 import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
-import { type CodeSource, importJsx, layerName, objectStyleText, sourceShape } from "./code.ts";
+import { type CodeSource, importJsx, layerName, objectStyleOf, sourceShape } from "./code.ts";
 import { importedStyle, overlap, styleOutOfWrittenOrder, styleProperties } from "./imports.ts";
 
 // A connected codebase (PC11, #182): one local folder linked to a project, whose JSX and
@@ -457,23 +457,19 @@ function equalProp(prop: string, a: string | undefined, b: string | undefined): 
 }
 
 /**
- * The layer's style as source text, in the source's own order (the layer keeps its style
- * keys sorted), with any new properties after: a write-back changes only what changed.
+ * Whether a layer's style is what its source's object style (style={{ … }}) says, read as
+ * import reads it. An object that is not only literal values was brought in as no style.
  */
-/**
- * Whether a layer's style is still what its source's object style (style={{ … }}) says: that
- * style is code, never written back, so only a change to it is reported (#398).
- */
-function showsObjectStyle(node: any, symbol: any, content: string): boolean {
-  const prop = (symbol.codeProps ?? []).find((candidate: any) => candidate.name === "style");
-  if (prop === undefined) return false;
-  const cssText = objectStyleText(content.slice(prop.range.startOffset, prop.range.endOffset));
-  if (cssText === null) return false;
-  const shown = importedStyle({ cssText });
+function showsObjectStyle(node: any, cssText: string | null): boolean {
+  const shown = cssText === null ? {} : importedStyle({ cssText });
   const style = node.props?.style ?? {};
   return Object.keys(style).length === Object.keys(shown).length && Object.entries(shown).every(([name, value]) => style[name] === value);
 }
 
+/**
+ * The layer's style as source text, in the source's own order (the layer keeps its style
+ * keys sorted), with any new properties after: a write-back changes only what changed.
+ */
 function styleInSourceOrder(sourceText: string, style: Record<string, string>): string {
   const order = Object.keys(styleProperties({ cssText: sourceText }));
   const names = [...order.filter((name) => Object.hasOwn(style, name)), ...Object.keys(style).filter((name) => !order.includes(name))];
@@ -786,7 +782,11 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
         if (code.has(name) && !sourceNames.has(name)) notWritten.push({ nodeId: node.id, reason: `${name} is code in the source and is not written back` });
         else if (!sourceNames.has(name)) notWritten.push({ nodeId: node.id, reason: `the new attribute ${name} is not written back` });
       }
-      if (Object.keys(node.props?.style ?? {}).length > 0 && !symbol.props.some((prop: any) => prop.name === "style") && !showsObjectStyle(node, symbol, read.content)) {
+      // An object style is code: any change to it, clearing it too, is reported (#398).
+      const objectStyle = objectStyleOf(symbol, read.content);
+      if (objectStyle !== undefined) {
+        if (!showsObjectStyle(node, objectStyle)) notWritten.push({ nodeId: node.id, reason: "the style is code in the source and is not written back" });
+      } else if (Object.keys(node.props?.style ?? {}).length > 0 && !symbol.props.some((prop: any) => prop.name === "style")) {
         notWritten.push({ nodeId: node.id, reason: code.has("style") ? "the style is code in the source and is not written back" : "a style the source does not have is not written back" });
       }
     }

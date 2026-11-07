@@ -314,7 +314,9 @@ export function objectStyleText(attribute: string): string | null {
       at += number[0].length;
       const numeric = Number(number[0]);
       if (!Number.isFinite(numeric)) return null;
-      value = numeric === 0 || UNITLESS.has(key) || key.startsWith("--") ? String(numeric) : `${numeric}px`;
+      // A vendor prefix does not change whether a property takes a unit: WebkitLineClamp is lineClamp.
+      const unprefixed = key.replace(/^(?:Webkit|Moz|ms|O)([A-Z])/u, (_, letter: string) => letter.toLowerCase());
+      value = numeric === 0 || UNITLESS.has(unprefixed) || key.startsWith("--") ? String(numeric) : `${numeric}px`;
     }
     // backgroundColor is background-color; WebkitTransform and msTransition keep their prefix.
     const property = key.startsWith("--") || key.includes("-") ? key : key.replace(/^ms(?=[A-Z])/u, "-ms").replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
@@ -324,6 +326,15 @@ export function objectStyleText(attribute: string): string | null {
     else if (at < body.length) return null;
   }
   return declarations.join("; ");
+}
+
+/**
+ * The CSS an element's object style (style={{ … }}) says, read from the source it was parsed
+ * from: undefined when it has none, null when it is not only literal values.
+ */
+export function objectStyleOf(symbol: any, content: string): string | null | undefined {
+  const prop = (symbol.codeProps ?? []).find((candidate: any) => candidate.name === "style");
+  return prop === undefined ? undefined : objectStyleText(content.slice(prop.range.startOffset, prop.range.endOffset));
 }
 
 /** An element tag the canvas draws as itself (svg's linearGradient too); others are named boxes. */
@@ -430,9 +441,8 @@ export function importJsx(source: unknown, options: ImportJsxOptions = {}): { op
     }
     // An object style (style={{ … }}) is code in the source: the layer shows what its literal
     // values say, and one that cannot be read is counted as left out, never dropped silently.
-    const objectStyle = (symbol.codeProps ?? []).find((prop: any) => prop.name === "style");
-    if (objectStyle !== undefined) {
-      const cssText = objectStyleText(source.slice(objectStyle.range.startOffset, objectStyle.range.endOffset));
+    const cssText = objectStyleOf(symbol, source);
+    if (cssText !== undefined) {
       if (cssText === null) layersWithStyleLeftOut += 1;
       else {
         style = importedStyle({ cssText });

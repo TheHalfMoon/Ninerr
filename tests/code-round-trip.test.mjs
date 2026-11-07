@@ -1,8 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { exportJsx, importJsx } from "../packages/studio-host/src/code.ts";
-import { objectStyleText } from "../packages/studio-host/src/code.ts";
+import { exportJsx, importJsx, objectStyleText } from "../packages/studio-host/src/code.ts";
 
 // #398: an object style is brought in as the style it says, and exporting imported code then
 // bringing it in again settles, instead of nesting one more element each round.
@@ -20,8 +19,8 @@ const exportedPage = (source) => {
 };
 
 test("an object style of literal values is brought in as the style it says", () => {
-  const { document, rootId, layersWithStyleLeftOut } = imported(`export function A() { return <main style={{ padding: "40px", backgroundColor: '#fafafa', zIndex: 2, marginTop: 8, opacity: 0.5, WebkitLineClamp: "3", "--brand": "red", gap: 0 }}><p style="color: red">x</p></main>; }`);
-  assert.deepEqual(document.nodes[rootId].props.style, { padding: "40px", "background-color": "#fafafa", "z-index": "2", "margin-top": "8px", opacity: "0.5", "-webkit-line-clamp": "3", "--brand": "red", gap: "0" });
+  const { document, rootId, layersWithStyleLeftOut } = imported(`export function A() { return <main style={{ padding: "40px", backgroundColor: '#fafafa', zIndex: 2, marginTop: 8, opacity: 0.5, WebkitLineClamp: 3, MozBoxFlex: 1, "--brand": "red", gap: 0 }}><p style="color: red">x</p></main>; }`);
+  assert.deepEqual(document.nodes[rootId].props.style, { padding: "40px", "background-color": "#fafafa", "z-index": "2", "margin-top": "8px", opacity: "0.5", "-webkit-line-clamp": "3", "-moz-box-flex": "1", "--brand": "red", gap: "0" });
   assert.deepEqual(document.nodes[document.nodes[rootId].children[0]].props.style, { color: "red" });
   assert.equal(layersWithStyleLeftOut, 0);
 });
@@ -108,6 +107,10 @@ test("a connected file's object style shows on the canvas, and only a change to 
   // A change to the object style is code, so it is reported and never written.
   ({ revision } = await ok(call("GET", "/api/document"), "document"));
   await edit({ style: { padding: "24px", "background-color": "#fafafa" } });
+  plan = await ok(call("POST", "/api/codebase/preview", { nodeId: section }), "preview");
+  assert.deepEqual(plan.notWritten.map((entry) => entry.reason), ["the style is code in the source and is not written back"]);
+  // Clearing it is a change too.
+  await edit({ style: {} });
   plan = await ok(call("POST", "/api/codebase/preview", { nodeId: section }), "preview");
   assert.deepEqual(plan.notWritten.map((entry) => entry.reason), ["the style is code in the source and is not written back"]);
 });
