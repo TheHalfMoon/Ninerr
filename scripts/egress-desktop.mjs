@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { forbiddenAttempts, networkAttempts } from "./desktop/egress.mjs";
+import { forbiddenAttempts, networkAttempts, routeQueries } from "./desktop/egress.mjs";
 import { preparePackage, waitForRevision } from "./desktop/drive.mjs";
 
 const archive = process.argv[2] ? resolve(process.argv[2]) : null;
@@ -26,7 +26,7 @@ if (process.platform !== "linux") {
   process.stderr.write("the whole-process trace is on Linux only, for now\n");
   process.exit(2);
 }
-const TRACED = ["-f", "-qq", "-s", "8", "-e", "trace=connect,sendto,sendmsg,sendmmsg", "-e", "signal=none", "-ff"];
+const TRACED = ["-f", "-qq", "-yy", "-s", "8", "-e", "trace=connect,sendto,sendmsg,sendmmsg,write", "-e", "signal=none", "-ff"];
 const RESERVED = "192.0.2.1"; // TEST-NET-1, RFC 5737: no such host, and nothing is ever answered from it.
 const REFUSED = ["http://192.0.2.1/", "https://fonts.googleapis.com/css2?family=Inter", "https://update.electronjs.org/", "https://api.openai.com/v1/models", "https://example.com/"];
 
@@ -48,19 +48,34 @@ async function main() {
   const traces = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-egress-trace-")));
   try {
     // The negative control of the trap itself: the same trace of a child that reaches off this
-    // computer by TCP and by UDP. If this is not seen, a clean run below would mean nothing.
+    // computer by TCP, by UDP to an address, and by UDP on a connected socket, as well as one UDP
+    // route query alone. If these are not told apart, a clean run below would mean nothing.
     const control = `
       const net = require("node:net"), dgram = require("node:dgram");
-      const socket = dgram.createSocket("udp4");
-      socket.send("x", 9, ${JSON.stringify(RESERVED)}, () => {
-        socket.close();
-        net.connect({ port: 9, host: ${JSON.stringify(RESERVED)}, timeout: 200 }).on("error", () => process.exit(0)).on("timeout", () => process.exit(0));
+      const address = ${JSON.stringify(RESERVED)};
+      const asked = dgram.createSocket("udp4");
+      asked.connect(10, address, () => {
+        asked.close();
+        const sent = dgram.createSocket("udp4");
+        sent.send("x", 9, address, () => {
+          sent.close();
+          const joined = dgram.createSocket("udp4");
+          joined.connect(11, address, () => {
+            joined.send("x", () => {
+              joined.close();
+              net.connect({ port: 12, host: address, timeout: 200 }).on("error", () => process.exit(0)).on("timeout", () => process.exit(0));
+            });
+          });
+        });
       });`;
     const traced = spawnSync("strace", [...TRACED, "-o", join(traces, "control"), process.execPath, "-e", control], { encoding: "utf8", timeout: 30_000 });
     check("strace runs here", traced.error === undefined, traced.error?.message);
-    const seen = forbiddenAttempts(networkAttempts(traceOf(traces, "control")));
-    check("the trap sees a traced child's TCP off this computer", seen.some(({ call, address }) => call === "connect" && address === RESERVED), seen);
-    check("the trap sees a traced child's UDP off this computer", seen.some(({ call, address }) => call !== "connect" && address === RESERVED) || seen.filter(({ address }) => address === RESERVED).length >= 2, seen);
+    const controlAttempts = networkAttempts(traceOf(traces, "control"));
+    const seen = forbiddenAttempts(controlAttempts);
+    check("the trap forbids a traced child's TCP off this computer", seen.some(({ call, transport, port }) => call === "connect" && transport === "TCP" && port === 12), controlAttempts);
+    check("the trap forbids a traced child's UDP to an address", seen.some(({ call, port }) => call !== "connect" && port === 9), controlAttempts);
+    check("the trap forbids a send on a connected UDP socket", seen.some(({ call, port }) => call !== "connect" && port === 11), controlAttempts);
+    check("the trap reports a UDP route query, and does not forbid it", routeQueries(controlAttempts).some(({ port }) => port === 10) && !seen.some(({ port }) => port === 10), controlAttempts);
 
     const run = await preparePackage(archive, {
       proxy: false,
@@ -104,7 +119,9 @@ async function main() {
     check("the trace saw the app's loopback traffic to its host", attempts.some(({ address }) => address === "127.0.0.1"), attempts.slice(0, 5));
     const forbidden = forbiddenAttempts(attempts);
     check("nothing in any process reached off this computer", forbidden.length === 0, forbidden.slice(0, 20));
-    process.stdout.write(`${JSON.stringify({ ok: true, processes: processes.size, attempts: attempts.length, checks })}\n`);
+    // Named in the result, so a new one is seen: these leave no packet.
+    const queries = routeQueries(attempts).map(({ address, port }) => `${address} port ${port}`);
+    process.stdout.write(`${JSON.stringify({ ok: true, processes: processes.size, attempts: attempts.length, udpRouteQueries: [...new Set(queries)], checks })}\n`);
   } finally {
     rmSync(traces, { recursive: true, force: true, maxRetries: 5 });
   }
