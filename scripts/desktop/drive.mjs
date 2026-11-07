@@ -188,7 +188,8 @@ export async function preparePackage(archive, { home: homeName = "home", project
 
     /** Start the binary itself with `args` and `extraEnv`, for checks that are not a session. */
     const spawnRaw = (args, extraEnv = {}) => {
-      const child = spawn(executable, [...args, ...proxyArgs], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
+      const [command, commandArgs] = wrap(executable, [...args, ...proxyArgs]);
+      const child = spawn(command, commandArgs, { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
       running.add(child);
       child.once("exit", () => running.delete(child));
       return child;

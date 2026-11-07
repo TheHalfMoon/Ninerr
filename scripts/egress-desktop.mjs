@@ -44,8 +44,48 @@ const stunRequest = (page) => page.evaluate(async ([address, port]) => {
   await new Promise((resolve) => setTimeout(resolve, 3000));
   peer.close();
 }, [RESERVED, CHROMIUM_CONTROL_PORT]);
-// The control run puts WebRTC back as Chromium has it, so its send shows the trap can see one.
-const UNHARDENED = ["--force-webrtc-ip-handling-policy=default"];
+// The control over Chromium itself: the app started with its proxy at the reserved address and
+// loopback sent through it too, so the editor's first page load is Chromium's own connection off
+// this computer. Electron documents both switches. (WebRTC cannot serve: the app's policy holds
+// even against Chromium's --force-webrtc-ip-handling-policy, as the runs showed.)
+const PROXIED = [`--proxy-server=http://${RESERVED}:${CHROMIUM_CONTROL_PORT}`, "--proxy-bypass-list=<-loopback>"];
+const CONTROL_MS = 12_000;
+
+/** Run the proxied control, and give back the processes it had while it ran. */
+async function proxiedControl(run) {
+  const child = run.spawnRaw(PROXIED);
+  const seen = new Set([child.pid]);
+  for (let at = 0; at < CONTROL_MS; at += 3000) {
+    await sleep(3000);
+    for (const pid of descendantsOf(child.pid)) seen.add(pid);
+  }
+  child.kill();
+  await Promise.race([new Promise((resolve) => child.once("exit", resolve)), sleep(10_000)]);
+  return seen;
+}
+
+/** The processes below `root` now, on macOS and Windows; on Linux the trace follows them itself. */
+function descendantsOf(root) {
+  let pairs = [];
+  try {
+    if (process.platform === "win32") {
+      const listed = JSON.parse(execFileSync("powershell", ["-NoProfile", "-Command", "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress"], { encoding: "utf8" }));
+      pairs = listed.map(({ ProcessId, ParentProcessId }) => [ProcessId, ParentProcessId]);
+    } else if (process.platform === "darwin") {
+      pairs = execFileSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" }).trim().split("\n").map((line) => line.trim().split(/\s+/u).map(Number));
+    }
+  } catch {
+    return [];
+  }
+  const found = [];
+  let frontier = [root];
+  while (frontier.length > 0) {
+    const next = pairs.filter(([, parent]) => frontier.includes(parent)).map(([pid]) => pid).filter((pid) => !found.includes(pid));
+    found.push(...next);
+    frontier = next;
+  }
+  return found;
+}
 
 const checks = [];
 const check = (name, ok, detail) => {
@@ -146,9 +186,7 @@ async function traced() {
       // The control over Chromium itself, in a run of its own with WebRTC as Chromium has it: a STUN
       // request, which no request rule governs, so Chromium really sends it.
       tracing = "stun";
-      const stun = await launch(UNHARDENED);
-      await stunRequest(stun.page);
-      await stun.quit();
+      await proxiedControl(run);
     } finally {
       await run.close();
     }
@@ -161,12 +199,13 @@ async function traced() {
     const untraced = appProcesses.filter(({ id }) => !threads.has(id));
     check("every process Chromium reports was traced", untraced.length === 0, { untraced, threads: threads.size });
     check("the trace saw the app's loopback traffic to its host", attempts.some(({ address }) => address === "127.0.0.1"), attempts.slice(0, 5));
-    const controlSends = forbiddenAttempts(networkAttempts(traceOf(traces, "stun")));
-    check("the trap saw Chromium's own send off this computer, in the control", controlSends.some(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT), controlSends.slice(0, 20));
     const forbidden = forbiddenAttempts(attempts);
     const appTrace = traceOf(traces, "app");
     const rings = appTrace.split("\n").filter((line) => line.includes("io_uring_setup")).map((line) => line.slice(0, 160));
     check("nothing in any process reached off this computer", forbidden.length === 0, { forbidden: forbidden.slice(0, 20), rings });
+    // After the session's own check, so a failing control cannot hide the session's result.
+    const controlSends = forbiddenAttempts(networkAttempts(traceOf(traces, "stun")));
+    check("the trap saw Chromium's own connection off this computer, in the control", controlSends.some(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT), controlSends.slice(0, 20));
     // Named in the result, so a new one is seen: these leave no packet.
     const queries = routeQueries(attempts).map(({ address, port }) => `${address} port ${port}`);
     process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, threads: threads.size, attempts: attempts.length, udpRouteQueries: [...new Set(queries)], ringSetups: rings, checks })}\n`);
@@ -272,12 +311,8 @@ async function captured() {
       const quit = await ninerr.quit();
       check("closing Ninerr quits it cleanly", quit === 0, { exit: quit, output: ninerr.output().slice(-300) });
 
-      // The control over Chromium itself, in a run of its own: a STUN request.
-      const stun = await run.launch(UNHARDENED);
-      await processesOf(stun, stunPids);
-      await stunRequest(stun.page);
-      await processesOf(stun, stunPids);
-      await stun.quit();
+      // The control over Chromium itself, in a run of its own.
+      for (const pid of await proxiedControl(run)) stunPids.add(pid);
     } finally {
       await run.close();
     }
@@ -287,7 +322,6 @@ async function captured() {
     check("the capture charges a child's TCP off this computer to it", control.some(({ address, port }) => address === RESERVED && port === 12), { control, sample });
     check("the capture charges a child's UDP off this computer to it", control.some(({ address, port }) => address === RESERVED && port === 9), { control, sample });
     const stunSends = forbiddenOutbound(events, stunPids);
-    check("the capture saw Chromium's own send off this computer, in the control", stunSends.some(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT), { stunSends: stunSends.slice(0, 10), stunPids: [...stunPids] });
     const types = new Set(appProcesses.map(({ type }) => type));
     check("Chromium reports a browser, a renderer and more", types.has("browser") && types.has("renderer") && appProcesses.length >= 3, appProcesses);
     let forbidden;
@@ -297,8 +331,6 @@ async function captured() {
       // The packaged executable and helpers keep Electron's names (scripts/package-desktop.mjs),
       // as the runner showed: "Electron", and "Electron Helper" with its kinds.
       const named = (name) => typeof name === "string" && /^Electron(?: Helper\b|$)/u.test(name);
-      const controlNamed = stunSends.filter(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT);
-      check("the capture names the app on Chromium's own send, in the control", controlNamed.length > 0 && controlNamed.every(({ name }) => named(name)), controlNamed.slice(0, 5));
       const appSessionPids = new Set([...sessionPids, ...events.filter(({ pid, name }) => named(name) && !stunPids.has(pid)).map(({ pid }) => pid), ...events.filter(({ epid, ename }) => named(ename) && !stunPids.has(epid)).map(({ epid }) => epid)]);
       forbidden = forbiddenOutbound(events, appSessionPids);
     } else {
@@ -308,6 +340,13 @@ async function captured() {
       forbidden = forbiddenOutbound(events, sessionPids);
     }
     check("nothing the app's processes sent left this computer", forbidden.length === 0, forbidden.slice(0, 20));
+    // After the session's own check, so a failing control cannot hide the session's result.
+    const controlSends = stunSends.filter(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT);
+    check("the capture saw Chromium's own connection off this computer, in the control", controlSends.length > 0, { stunSends: stunSends.slice(0, 10), stunPids: [...stunPids], sample });
+    if (process.platform === "darwin") {
+      const named = (name) => typeof name === "string" && /^Electron(?: Helper\b|$)/u.test(name);
+      check("the capture names the app on Chromium's own connection, in the control", controlSends.every(({ name }) => named(name)), controlSends.slice(0, 5));
+    }
     const unattributed = unattributedOutbound(events);
     process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, events: events.length, unattributed: [...new Set(unattributed.map(({ address, port }) => `${address} port ${port}`))].slice(0, 20), checks })}\n`);
   } finally {
