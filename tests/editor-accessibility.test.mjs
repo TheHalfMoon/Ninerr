@@ -308,6 +308,41 @@ test("the editor reflows at 320 px and every target is at least 24 by 24 px", br
   }
 });
 
+test("the Research dialog audits clean, empty and with a reference shown", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-research-")));
+  const at = "2026-11-07T00:00:00.000Z";
+  const verified = { status: "verified", license: "Apache-2.0", redistributable: true };
+  writeFileSync(join(root, "pack.json"), JSON.stringify({
+    schemaVersion: 1, packId: "urn:ninerr:pack:a11y", ownerScope: null, createdAt: at,
+    sources: [{ id: "urn:ninerr:source:one", uri: "https://example.com/one", observedAt: at, rights: verified }],
+    assets: [],
+    objects: [{ id: "urn:ninerr:object:a", kind: "pattern", title: "A dashboard", tags: ["dashboard"], sourceId: "urn:ninerr:source:one", assetSha256: null, confidence: "observed", visibility: "public", rights: verified }],
+  }));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("research");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    await page.locator("#action-research").click();
+    await page.waitForFunction(() => document.getElementById("research-status")?.textContent !== "");
+    await audit(page, "the Research dialog with no pack");
+    await page.locator("#research-folder").fill(root);
+    await page.locator("#research-file").fill("pack.json");
+    await page.locator("#research-file").press("Enter");
+    await page.waitForFunction(() => document.getElementById("research-status").textContent.startsWith("Read "));
+    await page.locator("#research-results button").click();
+    await page.locator("#research-detail dl").waitFor();
+    await audit(page, "the Research dialog with a reference shown");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("generated output audits clean: exported code and code brought into the design", () => {
   // A design made accessibly exports to code whose design audits clean.
   const { operations } = importJsx(`export function Signup() {

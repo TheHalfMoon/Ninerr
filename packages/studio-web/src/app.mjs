@@ -362,6 +362,156 @@ function shareSelection() {
   }, 100);
 }
 
+// ---------- research ----------
+
+const REFERENCE_KINDS = ["screen", "flow", "pattern", "asset", "token", "component"];
+
+const rightsText = (rights) => `${rights.status}, ${rights.license ?? "no license stated"}, ${rights.redistributable ? "marked redistributable" : "not redistributable"}`;
+
+const reuseText = ({ allowed }) => (allowed ? "cleared for reuse" : "not cleared for reuse");
+
+/** One reference's metadata and rights. A pack's words are shown as text, and nothing is fetched. */
+function referenceDetail({ reference }) {
+  const row = (term, value) => [el("dt", {}, term), el("dd", {}, value)];
+  return [
+    el("h3", {}, reference.title),
+    el("dl", {},
+      ...row("Kind", reference.kind),
+      ...row("Tags", reference.tags.length > 0 ? reference.tags.join(", ") : "None"),
+      ...row("Confidence", reference.confidence),
+      ...row("Reuse", `${reuseText(reference.reuse)[0].toUpperCase()}${reuseText(reference.reuse).slice(1)}: ${reference.reuse.reason}`),
+      ...row("Rights the pack states", rightsText(reference.rights)),
+      ...row("Source", reference.source.uri),
+      ...row("Source rights the pack states", rightsText(reference.source.rights)),
+      ...row("Observed", reference.source.observedAt),
+      ...row("Preview", reference.assetSha256 === null ? "This reference has no asset: its metadata is all there is." : `Metadata only. Its asset is not shown here (SHA-256 ${reference.assetSha256}).`)),
+  ];
+}
+
+/**
+ * Search the project's local reference pack (M05), through the functions an agent's search_design_references
+ * uses. It works offline: it has no sign-in, follows no link, and shows no image from a pack.
+ */
+function openResearchDialog() {
+  if (state.document === null) return;
+  const project = state.project;
+  showDialog("Research", (close) => {
+    const error = el("p", { class: "error", role: "alert" });
+    const status = el("p", { id: "research-status", "aria-live": "polite" });
+    const results = el("ul", { id: "research-results", class: "project-list" });
+    const detail = el("section", { id: "research-detail", tabindex: "-1", "aria-label": "Reference" });
+    const folder = el("input", { id: "research-folder", name: "folder", autocomplete: "off", spellcheck: "false", placeholder: "/home/you/reference-packs" });
+    const file = el("input", { id: "research-file", name: "file", autocomplete: "off", spellcheck: "false", placeholder: "pack.json" });
+    const read = el("button", { type: "submit" }, "Read pack");
+    // Not type=search: there Escape clears the field, and does not close the dialog.
+    const query = el("input", { id: "research-query", name: "query", autocomplete: "off", maxlength: "200" });
+    const kind = el("select", { id: "research-kind", name: "kind" }, el("option", { value: "" }, "All kinds"), ...REFERENCE_KINDS.map((each) => el("option", { value: each }, each)));
+    const find = el("button", { type: "submit", class: "primary", id: "research-search" }, "Search");
+    // An answer is dropped once a later search, or a later choice of reference, was asked for.
+    let searchAsked = 0;
+    let shownAsked = 0;
+    // What a read said, for the first search to land after it.
+    let readNote = "";
+    /** Whether the dialog's project is still the open one; it closes when it is not. */
+    const stillOpen = (answer = null) => {
+      if (state.project === project && (answer === null || answer.project === project)) return true;
+      close();
+      return false;
+    };
+    const failed = (failure) => {
+      if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
+    };
+    const show = async (id) => {
+      if (!stillOpen()) return;
+      const thisOne = ++shownAsked;
+      error.textContent = "";
+      try {
+        const answer = await state.client.get(`/api/references/${encodeURIComponent(id)}`);
+        if (thisOne !== shownAsked || !stillOpen(answer)) return;
+        detail.replaceChildren(...referenceDetail(answer));
+        detail.focus({ focusVisible: true });
+      } catch (failure) {
+        if (thisOne === shownAsked && stillOpen()) failed(failure);
+      }
+    };
+    const search = async () => {
+      if (!stillOpen()) return;
+      const thisOne = ++searchAsked;
+      shownAsked += 1;
+      error.textContent = "";
+      const params = new URLSearchParams({ query: query.value, limit: "100" });
+      if (kind.value !== "") params.set("kinds", kind.value);
+      let answer;
+      try {
+        answer = await state.client.get(`/api/references?${params}`);
+      } catch (failure) {
+        if (thisOne !== searchAsked || !stillOpen()) return;
+        // No list stands for a search that failed.
+        detail.replaceChildren();
+        results.replaceChildren();
+        status.textContent = readNote.trim();
+        readNote = "";
+        failed(failure);
+        return;
+      }
+      if (thisOne !== searchAsked || !stillOpen(answer)) return;
+      detail.replaceChildren();
+      results.replaceChildren(...answer.results.map((reference) => el("li", {}, el("button", {
+        type: "button",
+        "data-id": reference.id,
+        onclick: () => show(reference.id),
+      }, `${reference.title} (${reference.kind}): ${reuseText(reference.reuse)}`))));
+      const count = answer.results.length;
+      status.textContent = readNote + (answer.status === "not-loaded"
+        ? "No reference pack is read for this project. Read one from a folder on this computer: Ninerr does not look online."
+        : count === 0 ? "No reference in this pack matches."
+          : count === 100 ? "100 references shown, the most one search gives."
+            : `${count} reference${count === 1 ? "" : "s"}.`);
+      readNote = "";
+    };
+    // Not by disabling the button, which would drop the keyboard's focus to the page.
+    const once = (task) => {
+      let running = false;
+      return async (event) => {
+        event.preventDefault();
+        if (running) return;
+        running = true;
+        try {
+          await task();
+        } catch (failure) {
+          failed(failure);
+        } finally {
+          running = false;
+        }
+      };
+    };
+    search();
+    return [
+      el("form", {
+        novalidate: true,
+        onsubmit: once(async () => {
+          error.textContent = "";
+          const loaded = await state.client.post("/api/references/load", { directory: folder.value.trim(), fileName: file.value.trim() }, { project });
+          readNote = `Read ${loaded.fileName}: ${loaded.objects} public reference${loaded.objects === 1 ? "" : "s"}. `;
+          await search();
+        }),
+      },
+      el("label", { for: "research-folder" }, "Folder holding a reference pack (its full path)", folder),
+      el("label", { for: "research-file" }, "Pack file in that folder", file),
+      el("div", { class: "actions" }, read)),
+      el("form", { novalidate: true, role: "search", onsubmit: once(search) },
+        el("label", { for: "research-query" }, "Search references", query),
+        el("label", { for: "research-kind" }, "Kind", kind),
+        el("div", { class: "actions" }, find)),
+      error,
+      status,
+      results,
+      detail,
+      el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close")),
+    ];
+  });
+}
+
 // ---------- importing ----------
 
 // The import stack's offline limit for one HTML page.
@@ -1867,6 +2017,7 @@ function renderToolbar() {
   $("action-save").disabled = !open;
   $("action-import").disabled = !open;
   $("action-code").disabled = !open;
+  $("action-research").disabled = !open;
   $("zoom-level").textContent = `${Math.round(canvas.viewport.zoom * 100)}%`;
   $("revision").textContent = open ? `Revision ${state.revision}` : "";
   document.title = state.project ? `${state.project} — Ninerr` : "Ninerr";
@@ -1968,6 +2119,7 @@ async function main() {
   $("action-save").addEventListener("click", save);
   $("action-import").addEventListener("click", openImportDialog);
   $("action-code").addEventListener("click", openCodeDialog);
+  $("action-research").addEventListener("click", openResearchDialog);
   $("action-agents").addEventListener("click", openAgentsDialog);
   $("layers").addEventListener("keydown", onLayersKey);
   $("layers").addEventListener("click", onLayersClick);
