@@ -147,7 +147,7 @@ test("metadata permits reuse only when source rights, object rights and visibili
   assert.equal(referenceReuseDecision(fixture(), "urn:ninerr:object:absent").metadataPermits, false);
 });
 
-test("a decision's reason: source rights first, and the first refusal among the same bytes", () => {
+test("a decision's reason: its own rights first, source before object, then the same bytes'", () => {
   const SOURCE = "source rights do not permit redistribution";
   const OBJECT = "object visibility or rights do not permit redistribution";
   const rights = { status: "restricted", license: null, redistributable: false };
@@ -163,9 +163,13 @@ test("a decision's reason: source rights first, and the first refusal among the 
   const objectRefused = (id) => object(id, "owned", { kind: "asset", assetSha256: assetHash, rights });
   const sourceRefused = (id) => object(id, "restricted", { kind: "asset", assetSha256: assetHash, visibility: "public", rights: { status: "verified", license: "Apache-2.0", redistributable: true } });
   const early = shared(objectRefused("a"), sourceRefused("b"));
-  assert.equal(referenceReuseDecision(early, "urn:ninerr:object:b").reason, OBJECT, "the first by id holds for both");
+  assert.equal(referenceReuseDecision(early, "urn:ninerr:object:b").reason, SOURCE, "its own refusal, not another's");
   const late = shared(sourceRefused("a"), objectRefused("b"));
-  assert.equal(referenceReuseDecision(late, "urn:ninerr:object:b").reason, SOURCE);
+  assert.equal(referenceReuseDecision(late, "urn:ninerr:object:b").reason, OBJECT);
+  // Its own rights permit it, and another object's over the same bytes do not: it says so.
+  const permitted = object("clean", "owned", { kind: "asset", assetSha256: assetHash, visibility: "public", rights: { status: "verified", license: "Apache-2.0", redistributable: true } });
+  const decision = referenceReuseDecision(shared(objectRefused("a"), permitted), "urn:ninerr:object:clean");
+  assert.deepEqual([decision.allowed, decision.metadataPermits, decision.reason], [false, false, "another object with the same bytes does not permit redistribution"]);
 });
 
 test("objects with the same bytes are one work: the strictest statement holds for all", () => {
