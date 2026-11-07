@@ -33,7 +33,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 
 import { startStudioHost } from "../../packages/studio-host/src/index.ts";
-import { serializeDocument } from "../../packages/document-model/src/index.mjs";
+import { isCodePart, serializeDocument } from "../../packages/document-model/src/index.mjs";
 import { PROJECT_FILES } from "../../packages/persistence/src/index.ts";
 import { findBrowser } from "../../tests/support/browser.mjs";
 import { isSelectionRefusal, withoutSelectionRefusals } from "./refusals.mjs";
@@ -203,6 +203,16 @@ async function openEditor(host) {
   await page.goto(host.launchUrl());
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
   return { page, close: () => context.close() };
+}
+/** Whether a layer is or holds a {…} part of imported code, whose text is refused an edit (#370). */
+function holdsCode(nodes, id) {
+  const below = [id];
+  while (below.length > 0) {
+    const node = nodes[below.pop()];
+    if (isCodePart(node)) return true;
+    below.push(...node.children);
+  }
+  return false;
 }
 const revisionOf = async (page) => Number((await page.locator("#revision").textContent()).replace(/^Revision /u, ""));
 const waitRevision = (page, revision, timeout = 30_000) => page.waitForFunction((r) => document.getElementById("revision").textContent === `Revision ${r}`, revision, { timeout });
@@ -417,11 +427,25 @@ try {
     // The imported content with the most text, so there is text to select and edit.
     const textCount = (frameId) => { const all = doc(); let count = 0; for (const node of Object.values(all.nodes)) { if (typeof node.props?.text !== "string" || node.props.text.trim() === "") continue; let at = node; while (at.parentId !== null) at = all.nodes[at.parentId]; if (at.id === frameId) count += 1; } return count; };
     const target = [...imported].sort((a, b) => textCount(b.frameId) - textCount(a.frameId))[0];
+    // A project whose components hold only {…} parts has no words to edit (shadcn-ui): the text
+    // journeys run on a layer inserted here, and the result says so.
+    const hasWords = () => {
+      const all = doc();
+      const underFrame = (id) => { let at = all.nodes[id]; while (at && at.parentId !== null) at = all.nodes[at.parentId]; return at?.id === target.frameId; };
+      return Object.values(all.nodes).some((node) => underFrame(node.id) && typeof node.props?.text === "string" && /\w{4,}/u.test(node.props.text) && !holdsCode(all.nodes, node.id));
+    };
+    if (!hasWords()) {
+      const before = await revisionOf(page);
+      await page.locator(`[role=treeitem][data-node-id="${target.frameId}"] > .row`).click();
+      await page.locator("#action-insert-text").click();
+      await waitRevision(page, before + 1);
+      check("B", "these layers hold only code, so the text journeys use a text layer inserted here", hasWords());
+    }
     const snapshot = doc();
     const inFrame = (id) => { let at = snapshot.nodes[id]; while (at && at.parentId !== null) at = snapshot.nodes[at.parentId]; return at?.id === target.frameId; };
     const depthOf = (id) => { let depth = 0; let at = snapshot.nodes[id]; while (at.parentId !== null) { depth += 1; at = snapshot.nodes[at.parentId]; } return depth; };
     // The deepest drawn text layer, selected by clicking it on the canvas.
-    const texts = Object.values(snapshot.nodes).filter((node) => inFrame(node.id) && typeof node.props?.text === "string" && node.props.text.trim() !== "").sort((a, b) => depthOf(b.id) - depthOf(a.id));
+    const texts = Object.values(snapshot.nodes).filter((node) => inFrame(node.id) && typeof node.props?.text === "string" && node.props.text.trim() !== "" && !holdsCode(snapshot.nodes, node.id)).sort((a, b) => depthOf(b.id) - depthOf(a.id));
     // Only text the page's own stylesheets draw: a closed menu or a modal is in the layers but
     // takes no space on the canvas (#283).
     const drawn = new Set(await page.evaluate((ids) => {
@@ -890,11 +914,18 @@ try {
     check("E", "the agent sees the open project", info.isError !== true && info.structuredContent?.project === PROJECT, info.structuredContent ?? info);
     const tree = await tool("layer_tree", { nodeId: target.frameId, depth: 3 });
     check("E", "the agent reads the imported layers", tree.isError !== true && tree.content !== undefined, tree.content?.[0]?.text?.slice(0, 200));
-    const searchFor = Object.values(doc().nodes).find((node) => typeof node.props?.text === "string" && /\w{4,}/u.test(node.props.text))?.props.text.match(/\w{4,}/u)?.[0];
+    const searchFor = Object.values(doc().nodes).find((node) => typeof node.props?.text === "string" && /\w{4,}/u.test(node.props.text) && !holdsCode(doc().nodes, node.id))?.props.text.match(/\w{4,}/u)?.[0];
     const found = searchFor ? await tool("find_layers", { query: searchFor }) : null;
     const foundIds = found?.structuredContent?.layers?.map((layer) => layer.id) ?? found?.structuredContent?.nodes?.map((layer) => layer.id) ?? [];
     check("E", `the agent finds layers by text ("${searchFor}")`, foundIds.length > 0, found?.structuredContent ?? found);
-    const agentTarget = foundIds.find((id) => typeof doc().nodes[id]?.props?.text === "string") ?? null;
+    const agentTarget = foundIds.find((id) => typeof doc().nodes[id]?.props?.text === "string" && !holdsCode(doc().nodes, id)) ?? null;
+    // A {…} part is refused an edit, with the reason, and changes nothing (#370).
+    const codePart = foundIds.find((id) => isCodePart(doc().nodes[id])) ?? Object.values(doc().nodes).find(isCodePart)?.id ?? null;
+    if (codePart !== null) {
+      const before = await revisionOf(page);
+      const refused = await tool("set_text", { nodeId: codePart, text: "Written over code" });
+      check("E", "the agent's edit of a {…} code part is refused and changes nothing", refused.isError === true && await revisionOf(page) === before && doc().nodes[codePart].props.text !== "Written over code", refused.content?.[0]?.text?.slice(0, 200));
+    }
     if (agentTarget !== null) {
       const revision = await revisionOf(page);
       const textBeforeAgent = doc().nodes[agentTarget].props.text;
