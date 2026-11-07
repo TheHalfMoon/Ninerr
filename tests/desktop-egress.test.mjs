@@ -111,6 +111,12 @@ test("every address in one call counts, and an unsure reading fails closed", () 
   assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) = 3`), [["io_uring_setup", null, null]]);
   assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) <unfinished ...>`), [["io_uring_setup", null, null]]);
   assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) = -1 EPERM (Operation not permitted)`), [], "no ring to send through");
+  // libuv's epoll_ctl ring, as the trace printed it, and nothing else of that shape.
+  assert.deepEqual(forbidden(`3185 io_uring_setup(256, {flags=IORING_SETUP_NO_SQARRAY, sq_thread_cpu=0, sq_thread_idle=0, sq_entries=256, cq_entries=512}, ...) = 23`), []);
+  assert.deepEqual(forbidden(`3185 io_uring_setup(256, {flags=0, sq_thread_cpu=0, sq_entries=256}, ...) = 23`), []);
+  assert.equal(forbidden(`1 io_uring_setup(64, {flags=IORING_SETUP_SQPOLL|IORING_SETUP_NO_SQARRAY, sq_entries=64}, ...) = 23`).length, 1, "its file ring is off, and would be forbidden");
+  assert.equal(forbidden(`1 io_uring_setup(256, {flags=IORING_SETUP_SQPOLL, sq_entries=256}, ...) = 23`).length, 1);
+  assert.equal(forbidden(`1 io_uring_setup(128, {flags=0, sq_entries=128}, ...) = 23`).length, 1);
   assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) = -1 ENOSYS (Function not implemented)`), []);
   assert.deepEqual(forbidden(`1 connect(5<UNIX:[1]>, {sa_family=AF_UNIX, sun_path="/run/systemd/resolve/io.systemd.Resolve"}, 110) = 0`), [["connect", null, 53]]);
   assert.deepEqual(forbidden(`1 connect(5<UNIX:[1]>, {sa_family=AF_UNIX, sun_path="/run/systemd/resolve/io.systemd.Resolve"}, 110) = -1 ENOENT (No such file or directory)`), []);

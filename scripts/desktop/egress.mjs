@@ -17,7 +17,10 @@ export const TRACED_CALLS = "connect,sendto,sendmsg,sendmmsg,write,writev,sendfi
 const CALL = /^(?<pid>\d+)\s+(?<call>connect|sendto|sendmsg|sendmmsg|write|writev|sendfile)\((?<fd>\d+)(?:<(?<socket>(?:->|[^>])*)>)?/u;
 const SPLICE = /^(?<pid>\d+)\s+splice\(\d+(?:<(?:->|[^>])*>)?,\s*[^,]+,\s*\d+<(?<socket>(?:->|[^>])*)>/u;
 // A setup that failed leaves no ring to send through. One that was cut off in the trace counts.
-const RING = /^(?<pid>\d+)\s+io_uring_setup\((?!.*=\s*-1\s)/u;
+// libuv's own ring is excused by its exact signature: src/unix/linux.c sets it up with 256 entries
+// and no flags but NO_SQARRAY, for epoll_ctl alone, and libuv has no operation that connects or
+// sends. Its contents cannot be read in a trace, so this rests on libuv's source, not on the run.
+const RING = /^(?<pid>\d+)\s+io_uring_setup\((?!.*=\s*-1\s)(?!256, \{flags=(?:0|IORING_SETUP_NO_SQARRAY),)/u;
 // A resolver reached over a Unix socket, which carries a name off this computer and names no address.
 const RESOLVER = /^(?<pid>\d+)\s+connect\(.*sun_path="[^"]*(?:io\.systemd\.Resolve|resolve\/)[^"]*".*= 0/u;
 const PORT = /sin6?_port=htons\((?<port>\d+)\)/u;
@@ -121,7 +124,7 @@ export function isLoopback(address) {
 export const isRouteQuery = ({ call, transport }) => call === "connect" && transport === "UDP";
 
 /**
- * What a run may not do: any attempt off this computer, a working io_uring, and any DNS query the
+ * What a run may not do: any attempt off this computer, a working io_uring but libuv's, and any DNS query the
  * trace can see: to port 53 anywhere, since 127.0.0.53 forwards a name off the computer, or to
  * systemd's resolver socket. Name lookups over other programs are not seen.
  */
