@@ -410,6 +410,7 @@ function openResearchDialog() {
     // An answer is dropped once a later search, or a later choice of reference, was asked for.
     let searchAsked = 0;
     let shownAsked = 0;
+    let readAsked = 0;
     // What a read said, for the first search to land after it.
     let readNote = "";
     /** Whether the dialog's project is still the open one; it closes when it is not. */
@@ -427,12 +428,14 @@ function openResearchDialog() {
     const show = async (id) => {
       if (!stillOpen()) return;
       const thisOne = ++shownAsked;
+      const from = document.activeElement;
       error.textContent = "";
       try {
         const answer = await state.client.get(`/api/references/${encodeURIComponent(id)}`);
         if (thisOne !== shownAsked || !stillOpen(answer)) return;
         detail.replaceChildren(...referenceDetail(answer));
-        detail.focus({ focusVisible: true });
+        // Not from someone who has moved on while it was answered.
+        if (document.activeElement === from || document.activeElement === document.body) detail.focus({ focusVisible: true });
       } catch (failure) {
         if (thisOne !== shownAsked || !stillOpen()) return;
         // The pack this row came from is gone: the same project opened again starts with none.
@@ -479,33 +482,23 @@ function openResearchDialog() {
       readNote = "";
       if (hadFocus) (results.querySelector("button") ?? query).focus();
     };
-    // Not by disabling the button, which would drop the keyboard's focus to the page.
-    const once = (task) => {
-      let running = false;
-      return async (event) => {
-        event.preventDefault();
-        if (running) return;
-        running = true;
-        try {
-          await task();
-        } catch (failure) {
-          failed(failure);
-        } finally {
-          running = false;
-        }
-      };
+    // Every read is sent: the host keeps the one asked for last, and only its answer shows.
+    const readPack = async (event) => {
+      event.preventDefault();
+      const thisRead = ++readAsked;
+      error.textContent = "";
+      try {
+        const loaded = await state.client.post("/api/references/load", { directory: folder.value.trim(), fileName: file.value.trim() }, { project });
+        if (thisRead !== readAsked) return;
+        readNote = `Read ${loaded.fileName}: ${loaded.objects} public reference${loaded.objects === 1 ? "" : "s"}. `;
+        await search();
+      } catch (failure) {
+        if (thisRead === readAsked) failed(failure);
+      }
     };
     search();
     return [
-      el("form", {
-        novalidate: true,
-        onsubmit: once(async () => {
-          error.textContent = "";
-          const loaded = await state.client.post("/api/references/load", { directory: folder.value.trim(), fileName: file.value.trim() }, { project });
-          readNote = `Read ${loaded.fileName}: ${loaded.objects} public reference${loaded.objects === 1 ? "" : "s"}. `;
-          await search();
-        }),
-      },
+      el("form", { novalidate: true, onsubmit: readPack },
       el("label", { for: "research-folder" }, "Folder holding a reference pack (its full path)", folder),
       el("label", { for: "research-file" }, "Pack file in that folder", file),
       el("div", { class: "actions" }, read)),

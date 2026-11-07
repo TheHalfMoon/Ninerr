@@ -287,6 +287,48 @@ test("the dialog closes when its project is no longer the open one", browserTest
   assert.equal(await page.locator("#research-detail dl").count(), 0);
 });
 
+test("a second read while one runs is the one that shows, and a late detail leaves the typing alone", browserTestOptions(), async (t) => {
+  const { page, status, rows, packs } = await research(t);
+  await page.locator("#action-research").click();
+  await page.waitForFunction(() => document.getElementById("research-status")?.textContent !== "");
+  writeFileSync(join(packs, "second.json"), JSON.stringify({ ...PACK, packId: "urn:ninerr:pack:second", objects: [object("second", { title: "Second pack only" })] }));
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let reads = 0;
+  await page.route("**/api/references/load", async (route) => {
+    reads += 1;
+    // The host has it in order; its answer is what is slow.
+    const response = await route.fetch();
+    if (reads === 1) await held;
+    await route.fulfill({ response });
+  });
+  await page.locator("#research-folder").fill(packs);
+  await page.locator("#research-file").fill("pack.json");
+  await page.locator("#research-file").press("Enter");
+  await page.locator("#research-file").fill("second.json");
+  await page.locator("#research-file").press("Enter");
+  await page.waitForFunction(() => document.getElementById("research-status").textContent.startsWith("Read second.json"));
+  release();
+  await page.waitForTimeout(300);
+  assert.equal(reads, 2, "the second was sent");
+  assert.match(await status(), /^Read second\.json: 1 public reference\. 1 reference\.$/u);
+  assert.deepEqual(await rows(), ["urn:ninerr:object:second"]);
+  await page.unroute("**/api/references/load");
+
+  let answer;
+  const late = new Promise((resolve) => { answer = resolve; });
+  await page.route("**/api/references/urn*", async (route) => {
+    await late;
+    await route.continue();
+  });
+  await page.locator("#research-results button").click();
+  await page.locator("#research-query").focus();
+  answer();
+  await page.locator("#research-detail dl").waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement.id), "research-query", "the detail shows, and the field keeps the focus");
+  await page.unroute("**/api/references/urn*");
+});
+
 test("Read pack after the project changed closes the dialog", browserTestOptions(), async (t) => {
   const { running, page, readPack } = await research(t);
   await page.locator("#action-research").click();
