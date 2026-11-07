@@ -135,13 +135,15 @@
       "gate": "external packets blocked for all processes, loopback works",
       "prs": [
         394,
-        396
+        396,
+        397
       ],
       "mergeCommits": {
         "394": "8cd49cf7f290a0a43280cfe0a09ca57a72ee1a67",
-        "396": "e2e061480da29c38e9ef036115d3056f2b041106"
+        "396": "e2e061480da29c38e9ef036115d3056f2b041106",
+        "397": "3c2fa83211c61674e434cbab07dd8c909f2a9cf7"
       },
-      "evidence": "scripts/egress-desktop.mjs runs the packaged app in CI on every PR: strace -f on Linux, tcpdump on pktap on macOS, Kernel-Network ETW on Windows, held to the processes Chromium reports. At e2e0614's head: Linux 17/17, macOS 15/15, Windows 15/15; nothing the app's processes sent left the computer; every negative control seen (traced child TCP/UDP, Chromium's own STUN send, refused page requests). mcp.local is in CORE_FEATURES. Limits: name lookups the system makes for an app are unseen on Windows and only partly on macOS; one session, 20 s idle; libuv's epoll_ctl ring excused by signature; two macOS packets of no process not proven foreign. Not built: Strict Offline Mode and a main-process broker (no main-process egress seen). #395 (WebRTC UDP, no request rule governs it) open. No zero-egress release claim yet."
+      "evidence": "scripts/egress-desktop.mjs runs the packaged app in CI on every PR: strace -f on Linux, tcpdump on pktap on macOS, Kernel-Network ETW on Windows, held to the processes Chromium reports. At e2e0614's head: Linux 17/17, macOS 15/15, Windows 15/15; nothing the app's processes sent left the computer; every negative control seen (traced child TCP/UDP, Chromium's own STUN send, refused page requests). mcp.local is in CORE_FEATURES. Limits: name lookups the system makes for an app are unseen on Windows and only partly on macOS; one session, 20 s idle; libuv's epoll_ctl ring excused by signature; two macOS packets of no process not proven foreign. Not built: Strict Offline Mode and a main-process broker (no main-process egress seen). #395 closed by #397: every web contents has WebRTC policy disable_non_proxied_udp; the session proxy is a dead loopback port with Chromium's loopback and link-local bypass taken away (only 127.0.0.1 direct); every name but 127.0.0.1 resolves to not found (DNS prefetch and wpad sent queries). The egress session now tries WebRTC STUN/TURN-TCP/ICE-TCP, link-local TURN and a DNS prefetch and must send nothing: at #397's head Linux 18/18, macOS 16/16, Windows 16/16, post-merge CI runs 42392228443 and 42392228373 green. Locally the probe's WebRTC code reached a LAN listener (4 TCP, 5 UDP) without the hardening, none with it. Limits: a person's own --proxy-server carries WebRTC TCP, and needs their own resolver rules unless it is 127.0.0.1; every loopback address but 127.0.0.1 is unreachable. No zero-egress release claim yet."
     },
     {
       "id": "R05",
