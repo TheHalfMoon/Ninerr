@@ -175,7 +175,7 @@ async function traced() {
 async function startCapture(folder) {
   if (process.platform === "darwin") {
     const lines = [];
-    const capture = spawn("sudo", ["tcpdump", "-i", "pktap", "-k", "NP", "-nn", "-l"], { stdio: ["ignore", "pipe", "pipe"] });
+    const capture = spawn("sudo", ["tcpdump", "-i", "pktap,all", "-k", "NP", "-nn", "-l"], { stdio: ["ignore", "pipe", "pipe"] });
     let said = "";
     capture.stdout.on("data", (chunk) => lines.push(String(chunk)));
     capture.stderr.on("data", (chunk) => { said += String(chunk); });

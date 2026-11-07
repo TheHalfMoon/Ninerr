@@ -6,7 +6,7 @@
 
 import { isLoopback } from "./egress.mjs";
 
-// macOS: `tcpdump -i pktap -k NP -nn -l`, which names each packet's interface and process.
+// macOS: `tcpdump -i pktap,all -k NP -nn -l` (plain pktap leaves loopback out), which names each packet's interface and process.
 // Its metadata can hold parentheses (Ninerr Helper (Renderer)), and an IPv6 end holds colons.
 const MAC_LINE = /^\S+\s+\((?<meta>.*?)\)\s+IP(?<v6>6)?\s+(?<src>\S+)\s+>\s+(?<dst>\S+?):\s/u;
 const MAC_PROC = /\bproc\s+(?<name>[^:,]*):(?<pid>\d+)/u;
