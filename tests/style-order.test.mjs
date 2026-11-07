@@ -116,7 +116,7 @@ test("a style's shorthands come before their longhands, and nothing else moves",
   const node = { id: "n", type: "element", parentId: null, children: [], props: { tag: "div", style: { "margin-left": "5px", margin: "0px" } }, metadata: {} };
   assert.deepEqual(Object.keys(planElement(node).style), ["margin", "margin-left"]);
   const exported = exportJsx({ id: "d", revision: 0, rootIds: ["n"], nodes: { n: node } }, "n").code;
-  assert.match(exported, /style="margin: 0px; margin-left: 5px"/u);
+  assert.match(exported, /style=\{\{ margin: "0px", marginLeft: "5px" \}\}/u);
 });
 
 test("a code write-back writes a style's longhands after their shorthands, as the canvas draws it", async (t) => {

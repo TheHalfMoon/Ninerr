@@ -37,7 +37,7 @@ test("a layer exports as the JSX the canvas draws: sanitized, deterministic, rou
   assert.equal(exported.code, [
     "export function PriceCard() {",
     "  return (",
-    "    <section className=\"card\" style=\"padding: 8px; color: #123456\">",
+    "    <section className=\"card\" style={{ padding: \"8px\", color: \"#123456\" }}>",
     "      <h2>Pro &amp; Team</h2>",
     "      <a href=\"https://example.com/buy\">Buy</a>",
     "      <div>x</div>",
@@ -49,7 +49,9 @@ test("a layer exports as the JSX the canvas draws: sanitized, deterministic, rou
   assert.equal(exportJsx(card(), "card").code, exported.code, "deterministic");
   // code-ir reads it back to the same design.
   const ir = buildCodeIr([{ path: "PriceCard.jsx", content: exported.code }]);
-  const design = codeToDesign(ir, ir.rootIds[0], "PriceCard");
+  const design = codeToDesign(ir, ir.rootIds[0], "PriceCard", { "PriceCard.jsx": exported.code });
+  assert.deepEqual(design.root.style, { padding: "8px", color: "#123456" }, "the style object reads back as the style");
+  assert.throws(() => codeToDesign(ir, ir.rootIds[0], "PriceCard"), /attributes that are code/u, "without its source, a style object is code");
   assert.equal(design.root.tag, "section");
   assert.deepEqual(design.root.children.map((child) => child.tag), ["h2", "a", "div"]);
   assert.equal(design.root.children[0].text, "Pro & Team", "entities read back as the text");
@@ -163,7 +165,7 @@ test("design and code through the editor: export the selection, bring code in, u
     await page.locator("#dialog[open]").waitFor();
     const code = await page.locator("#code-export").inputValue();
     assert.match(code, /^export function [A-Z][A-Za-z0-9]*\(\) \{/u);
-    assert.match(code, /<header className="hero" style="background: #eeeeff; padding: 24px; width: 600px">/u);
+    assert.match(code, /<header className="hero" style=\{\{ background: "#eeeeff", padding: "24px", width: "600px" \}\}>/u);
     assert.match(code, /<h1>Hello from code<\/h1>/u);
     // The exported code brought back in is the same design again.
     await page.locator("#code-import").fill(code);

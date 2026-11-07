@@ -722,7 +722,7 @@ async function openCodeDialog() {
       },
     },
     el("h3", {}, "Bring code into the design"),
-    el("label", { for: "code-import" }, "A JSX function component (elements, text, literal props, className and a style string)", source),
+    el("label", { for: "code-import" }, "A JSX function component (elements, text, literal props, className, and a style string or style object)", source),
     el("div", { class: "actions" }, el("button", { type: "submit", class: "primary" }, "Add to design")));
     return [el("h3", {}, "Selected layer as code"), exportPart, importForm, codebasePart, error, el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close"))];
   });

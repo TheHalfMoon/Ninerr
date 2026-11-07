@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { buildCodeIr, designToCode, expressionShown, exportedComponents, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
+import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
 import { DRAWN_ID, planElement } from "@ninerr/renderer";
 import { isCodePart } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
@@ -11,7 +11,7 @@ import { importedStyle, styleOutOfWrittenOrder, styleProperties } from "./import
 // first reduced by the renderer's own sanitizer (planElement), so the code says exactly
 // what the canvas shows: the same tags, attributes and style. A text layer folds into its
 // parent's text when it is the parent's only content. `class` becomes `className`; style
-// is a CSS string prop (as Preact, Solid and Qwik accept it). A {…} part of imported code
+// is a React style object (#398), which import reads back. A {…} part of imported code
 // is written as its exact source, never as text (#361): it is code the sanitizer does not
 // reach, which the result counts (codeParts) so the person is told.
 //
@@ -28,8 +28,6 @@ const pascal = (value: string, fallback: string) => {
   const name = value.replace(/[^A-Za-z0-9]+/gu, " ").trim().split(" ").filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join("");
   return /^[A-Z][A-Za-z0-9]*$/u.test(name) ? name.slice(0, 64) : fallback;
 };
-
-const cssText = (style: Record<string, string>) => Object.entries(style).map(([name, value]) => `${name}: ${value}`).join("; ");
 
 /** No tag, attributes or style of its own. */
 function plainLayer(props: any): boolean {
@@ -194,16 +192,17 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
     if (exportedId.has(id)) props.id = exportedId.get(id)!;
     if (labelTarget.has(id)) props.htmlFor = labelTarget.get(id)!;
     else if (props.htmlFor !== undefined) delete props.htmlFor; // names nothing in this export
-    if (Object.keys(plan.style).length > 0) props.style = cssText(plan.style);
+    // Styles are written as React style objects (#398), which import reads back.
+    const style = Object.keys(plan.style).length > 0 ? { ...plan.style as Record<string, string> } : undefined;
     if (isCodePart(node)) {
       codeParts += 1;
       codePartBytes += typeof node.props.codeExpression === "string" ? node.props.codeExpression.length : 0;
       if (codePartBytes > MAX_EXPORT_CODE_PARTS_BYTES) throw new StudioError(422, "export-too-large", "the {…} parts of these layers are too large to export at once");
       const part: DesignDocNode = { tag: "#expression", props: {}, code: expressionSource(node) };
       // Styled, or exported alone, it keeps the element the canvas draws around it.
-      return depth > 1 && plainLayer(node.props) ? part : { tag: plan.tag, props, children: [part] };
+      return depth > 1 && plainLayer(node.props) ? part : { tag: plan.tag, props, ...(style ? { style } : {}), children: [part] };
     }
-    const out: DesignDocNode = { tag: plan.tag, props };
+    const out: DesignDocNode = { tag: plan.tag, props, ...(style ? { style } : {}) };
     const childIds: string[] = node.children;
     const folded = childIds.length > 0 && childIds.every((child) => bareText(document.nodes[child]) !== null);
     let text = typeof plan.text === "string" ? plan.text : "";
@@ -268,64 +267,14 @@ export interface CodeSource {
 /** The frame a piece of imported code is placed in: a page, not part of the component (#398). */
 const CODE_PAGE_STYLE: Readonly<Record<string, string>> = Object.freeze({ position: "relative", width: "800px", "min-height": "400px", background: "#ffffff" });
 
-// React's unitless properties: a number given to any other one is in pixels.
-const UNITLESS = new Set(["animationIterationCount", "aspectRatio", "borderImageOutset", "borderImageSlice", "borderImageWidth", "boxFlex", "boxFlexGroup", "boxOrdinalGroup", "columnCount", "columns", "flex", "flexGrow", "flexPositive", "flexShrink", "flexNegative", "flexOrder", "gridArea", "gridRow", "gridRowEnd", "gridRowSpan", "gridRowStart", "gridColumn", "gridColumnEnd", "gridColumnSpan", "gridColumnStart", "fontWeight", "lineClamp", "lineHeight", "opacity", "order", "orphans", "scale", "tabSize", "widows", "zIndex", "zoom", "fillOpacity", "floodOpacity", "stopOpacity", "strokeDasharray", "strokeDashoffset", "strokeMiterlimit", "strokeOpacity", "strokeWidth"]);
-
 /**
  * The CSS an object style says, when it is only literal values: style={{ padding: "40px",
- * zIndex: 2 }} is "padding: 40px; z-index: 2". Null for anything else (a spread, a name or
- * call, a computed key, a template, a value with ; or a line break), which stays code (#398).
- * `attribute` is the whole attribute as written, style={…}.
+ * zIndex: 2 }} is "padding: 40px; z-index: 2". Null for anything else, which stays code
+ * (code-ir's readStyleObject, #398). `attribute` is the whole attribute as written, style={…}.
  */
 export function objectStyleText(attribute: string): string | null {
-  const match = /^style\s*=\s*\{\s*\{([\s\S]*)\}\s*\}$/u.exec(attribute.trim());
-  if (match === null) return null;
-  const body = match[1];
-  const declarations: string[] = [];
-  let at = 0;
-  const space = () => { while (at < body.length && /\s/u.test(body[at])) at += 1; };
-  const quoted = (): string | null => {
-    const quote = body[at];
-    if (quote !== '"' && quote !== "'") return null;
-    const end = body.indexOf(quote, at + 1);
-    if (end < 0) return null;
-    const text = body.slice(at + 1, end);
-    // Escapes, and what would end a declaration or a line, are not read: the style stays code.
-    if (/[\\;\r\n{}]/u.test(text)) return null;
-    at = end + 1;
-    return text;
-  };
-  for (space(); at < body.length; space()) {
-    let key = quoted();
-    if (key === null) {
-      const name = /^[A-Za-z_$][A-Za-z0-9_$]*/u.exec(body.slice(at));
-      if (name === null) return null;
-      key = name[0];
-      at += key.length;
-    }
-    space();
-    if (body[at] !== ":") return null;
-    at += 1;
-    space();
-    let value = quoted();
-    if (value === null) {
-      const number = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?![\w.$])/u.exec(body.slice(at));
-      if (number === null) return null;
-      at += number[0].length;
-      const numeric = Number(number[0]);
-      if (!Number.isFinite(numeric)) return null;
-      // A vendor prefix does not change whether a property takes a unit: WebkitLineClamp is lineClamp.
-      const unprefixed = key.replace(/^(?:Webkit|Moz|ms|O)([A-Z])/u, (_, letter: string) => letter.toLowerCase());
-      value = numeric === 0 || UNITLESS.has(unprefixed) || key.startsWith("--") ? String(numeric) : `${numeric}px`;
-    }
-    // backgroundColor is background-color; WebkitTransform and msTransition keep their prefix.
-    const property = key.startsWith("--") || key.includes("-") ? key : key.replace(/^ms(?=[A-Z])/u, "-ms").replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`);
-    declarations.push(`${property}: ${value}`);
-    space();
-    if (body[at] === ",") at += 1;
-    else if (at < body.length) return null;
-  }
-  return declarations.join("; ");
+  const declarations = readStyleObject(attribute);
+  return declarations === null ? null : declarations.map(([name, value]) => `${name}: ${value}`).join("; ");
 }
 
 /**

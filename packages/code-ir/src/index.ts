@@ -7,5 +7,6 @@ export * from "./tailwind.ts";
 export * from "./ir.ts";
 export * from "./patch.ts";
 export * from "./merge.ts";
+export * from "./style.ts";
 export * from "./roundtrip.ts";
 export * from "./provenance.ts";

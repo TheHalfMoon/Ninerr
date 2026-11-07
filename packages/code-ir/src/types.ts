@@ -135,6 +135,11 @@ export interface DesignDocNode {
    */
   tag: string;
   props: Record<string, string | number | boolean>;
+  /**
+   * Inline CSS, by CSS property name (padding-top, --brand), written as a React style object:
+   * style={{ paddingTop: "4px" }}. Not with a style prop as well.
+   */
+  style?: Record<string, string>;
   text?: string;
   code?: string;
   children?: DesignDocNode[];

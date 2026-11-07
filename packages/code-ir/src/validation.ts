@@ -312,7 +312,7 @@ function normalizeDesignNode(value: unknown, label: string, depth: number): Desi
   // A child that is no element: a run of bare text, or a {…} part that is code. The emitter
   // checks that a part's source is one JSX child before writing it.
   if (depth > 0 && (value.tag === "#text" || value.tag === "#expression")) return normalizeDesignPart(value, label);
-  assertAllowedKeys(value, ["tag", "props", "text", "children"], label);
+  assertAllowedKeys(value, ["tag", "props", "style", "text", "children"], label);
   assertBoundedString(value.tag, `${label}.tag`, 128);
   if (!/^[A-Za-z][A-Za-z0-9]*$/u.test(value.tag as string)) {
     throw new CodeIrValidationError(`${label}.tag must be a plain element name`);
@@ -329,6 +329,20 @@ function normalizeDesignNode(value: unknown, label: string, depth: number): Desi
     props[key] = typeof entry === "number" && Object.is(entry, -0) ? 0 : entry;
   }
   const node: DesignDocNode = { tag: value.tag as string, props };
+  if (value.style !== undefined) {
+    assertPlainObject(value.style, `${label}.style`);
+    if (Object.hasOwn(props, "style")) throw new CodeIrValidationError(`${label} has both a style prop and a style object`);
+    const style: Record<string, string> = {};
+    for (const [name, entry] of Object.entries(value.style)) {
+      if (!/^-?[a-z][a-z0-9-]{0,63}$/u.test(name) && !/^--[A-Za-z0-9_-]{1,64}$/u.test(name)) throw new CodeIrValidationError(`${label}.style has an unsupported property name`);
+      if (typeof entry !== "string" || entry === "" || entry.length > 2000 || /[\r\n]/u.test(entry) || !entry.isWellFormed()) {
+        throw new CodeIrValidationError(`${label}.style.${name} must be a bounded one-line string`);
+      }
+      style[name] = entry;
+    }
+    // An empty style is the same design as none.
+    if (Object.keys(style).length > 0) node.style = style;
+  }
   if (value.text !== undefined) {
     if (typeof value.text !== "string" || value.text.length > 4096) {
       throw new CodeIrValidationError(`${label}.text must be a bounded string`);
