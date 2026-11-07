@@ -33,7 +33,7 @@ const REFUSED = ["http://192.0.2.1/", "https://fonts.googleapis.com/css2?family=
 const checks = [];
 const check = (name, ok, detail) => {
   checks.push({ name, ok: Boolean(ok), ...(detail === undefined ? {} : { detail }) });
-  if (!ok) throw new Error(`${name}${detail === undefined ? "" : `: ${JSON.stringify(detail).slice(0, 800)}`}`);
+  if (!ok) throw new Error(`${name}${detail === undefined ? "" : `: ${JSON.stringify(detail).slice(0, 4000)}`}`);
 };
 
 /** Everything strace wrote under `prefix`, one file per process. */
@@ -70,11 +70,14 @@ async function main() {
       });`;
     const traced = spawnSync("strace", [...TRACED, "-o", join(traces, "control"), process.execPath, "-e", control], { encoding: "utf8", timeout: 30_000 });
     check("strace runs here", traced.error === undefined, traced.error?.message);
-    const controlAttempts = networkAttempts(traceOf(traces, "control"));
+    const controlTrace = traceOf(traces, "control");
+    const controlAttempts = networkAttempts(controlTrace);
+    // The trace's own lines, so a control that fails says what strace printed here.
+    const controlLines = controlTrace.split("\n").filter((line) => /UDP|TCP|socket:|sa_family=AF_INET/u.test(line)).map((line) => line.slice(0, 200));
     const seen = forbiddenAttempts(controlAttempts);
     check("the trap forbids a traced child's TCP off this computer", seen.some(({ call, transport, port }) => call === "connect" && transport === "TCP" && port === 12), controlAttempts);
     check("the trap forbids a traced child's UDP to an address", seen.some(({ call, port }) => call !== "connect" && port === 9), controlAttempts);
-    check("the trap forbids a send on a connected UDP socket", seen.some(({ call, port }) => call !== "connect" && port === 11), controlAttempts);
+    check("the trap forbids a send on a connected UDP socket", seen.some(({ call, port }) => call !== "connect" && port === 11), { controlAttempts, controlLines, childSaid: traced.stderr.slice(-300) });
     check("the trap reports a UDP route query, and does not forbid it", routeQueries(controlAttempts).some(({ port }) => port === 10) && !seen.some(({ port }) => port === 10), controlAttempts);
 
     const run = await preparePackage(archive, {
