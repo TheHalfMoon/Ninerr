@@ -6,7 +6,7 @@
 
 import { isLoopback } from "./egress.mjs";
 
-// macOS: `tcpdump -i pktap,all -k NP -nn -l` (plain pktap leaves loopback out), which names each packet's interface and process.
+// macOS: `tcpdump -i pktap -k NP -nn -l`, which leaves loopback out, which names each packet's interface and process.
 // Its metadata can hold parentheses (Ninerr Helper (Renderer)), and an IPv6 end holds colons.
 const MAC_LINE = /^\S+\s+\((?<meta>.*?)\)\s+IP(?<v6>6)?\s+(?<src>\S+)\s+>\s+(?<dst>\S+?):\s/u;
 const MAC_PROC = /(?:^|,\s*)proc\s+(?<name>[^:,]*):(?<pid>\d+)/u;
@@ -98,8 +98,13 @@ export function droppedPackets(said) {
   return found === null ? null : Number(found.groups.count);
 }
 
-/** The events a Windows trace session lost, from `logman query`, or null when it does not say. */
-export function lostEvents(query) {
-  const found = /Events Lost:\s*(?<count>\d+)/iu.exec(query);
-  return found === null ? null : Number(found.groups.count);
+/**
+ * The events and buffers a Windows trace lost, from the header tracerpt writes into its XML, or
+ * null when no header says.
+ */
+export function lostEvents(xml) {
+  const events = [...xml.matchAll(/<Data Name="EventsLost">(?<count>\d+)<\/Data>/gu)];
+  const buffers = [...xml.matchAll(/<Data Name="BuffersLost">(?<count>\d+)<\/Data>/gu)];
+  if (events.length === 0) return null;
+  return [...events, ...buffers].reduce((sum, found) => sum + Number(found.groups.count), 0);
 }

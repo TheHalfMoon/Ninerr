@@ -85,8 +85,10 @@ test("a packet the system sends for the app is the app's, and lost packets are r
   assert.equal(droppedPackets("138 packets captured\n140 packets received by filter\n0 packets dropped by kernel\n"), 0);
   assert.equal(droppedPackets("12 packets dropped by kernel"), 12);
   assert.equal(droppedPackets("listening on pktap"), null);
-  assert.equal(lostEvents("Name:                 NinerrNet\nEvents Lost:          0\nBuffers Written:      4"), 0);
-  assert.equal(lostEvents("Events Lost: 7"), 7);
-  assert.equal(lostEvents("Name: NinerrNet"), null);
+  const header = (events, buffers) => `<Event><System><EventID>0</EventID></System><EventData><Data Name="BuffersWritten">4</Data><Data Name="EventsLost">${events}</Data><Data Name="BuffersLost">${buffers}</Data></EventData></Event>`;
+  assert.equal(lostEvents(header(0, 0)), 0);
+  assert.equal(lostEvents(header(7, 0)), 7);
+  assert.equal(lostEvents(header(0, 2)), 2);
+  assert.equal(lostEvents("<Events></Events>"), null);
 });
 

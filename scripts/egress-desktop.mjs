@@ -175,7 +175,7 @@ async function traced() {
 async function startCapture(folder) {
   if (process.platform === "darwin") {
     const lines = [];
-    const capture = spawn("sudo", ["tcpdump", "-i", "pktap,all", "-k", "NP", "-nn", "-l"], { stdio: ["ignore", "pipe", "pipe"] });
+    const capture = spawn("sudo", ["tcpdump", "-i", "pktap", "-B", "65536", "-k", "NP", "-nn", "-l"], { stdio: ["ignore", "pipe", "pipe"] });
     let said = "";
     capture.stdout.on("data", (chunk) => lines.push(String(chunk)));
     capture.stderr.on("data", (chunk) => { said += String(chunk); });
@@ -198,13 +198,12 @@ async function startCapture(folder) {
   execFileSync("logman", ["start", "NinerrNet", "-p", "Microsoft-Windows-Kernel-Network", "0xFFFFFFFFFFFFFFFF", "0xff", "-o", etl, "-bs", "1024", "-nb", "64", "512", "-ets"], { stdio: "pipe" });
   check("the capture starts", true);
   return async () => {
-    // An event the session lost was not seen, so a clean result would not cover it.
-    const query = execFileSync("logman", ["query", "NinerrNet", "-ets"], { encoding: "utf8" });
-    check("the capture lost no event", lostEvents(query) === 0, query.slice(-600));
     execFileSync("logman", ["stop", "NinerrNet", "-ets"], { stdio: "pipe" });
     execFileSync("tracerpt", [etl, "-o", xml, "-of", "XML", "-y"], { stdio: "pipe" });
     const text = readFileSync(xml, "utf16le").replace(/^\uFEFF/u, "");
     const plain = text.includes("<Event") ? text : readFileSync(xml, "utf8");
+    // An event the trace lost was not seen, so a clean result would not cover it.
+    check("the capture lost no event", lostEvents(plain) === 0, { lost: lostEvents(plain), head: plain.slice(0, 1200) });
     return { events: windowsEvents(plain), sample: plain.slice(0, 1500) };
   };
 }
