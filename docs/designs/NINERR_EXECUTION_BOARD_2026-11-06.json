@@ -92,16 +92,22 @@
         379,
         380,
         381,
-        384
+        384,
+        385,
+        386,
+        387
       ],
       "mergeCommits": {
         "374": "752491c",
         "379": "708236fac3d7c6e14ed6e9ed294be017e88c2428",
         "380": "8776e55356f412ec1a94dafca0c852a3912ec364",
         "381": "b0a18a7f2f524a70c3ce9bad104b957209c506c5",
-        "384": "d831dbf0ea7335f679638fa9487e3f9ba2cfc077"
+        "384": "d831dbf0ea7335f679638fa9487e3f9ba2cfc077",
+        "385": "37db05c86aed32110afbf70d8837594b2063e560",
+        "386": "e85fda9eebad5b256740f433bd5c1806c4924a5e",
+        "387": "870db4bf68dac928a47ee8e43623f3db85a3e8fe"
       },
-      "evidence": "Each PR above passed exact-head CI and post-merge CI. Gate not met: dogfooding rerun (#379, docs/evidence/P09_DOGFOODING_2026-11-06.md) passes journeys B and E on all seven projects, but journey F fails intermittently on sb-admin-2 (#377, cause inferred, not observed). Criterion 4: tests merged in #374; #376 remains. Criterion 5: style order is decided, with overlapping pairs recorded as a limit in #384 (#369 closed; #383 stays open); #235 stays open. #370 and #378 remain open. No installed-app test yet. Only CI's delegate-review spec ran on these PRs, not an Open Code Review, and Goldfish reviews wait on free Pulse quota."
+      "evidence": "Each PR above passed exact-head CI and post-merge CI. Gate not met: dogfooding rerun (#379, docs/evidence/P09_DOGFOODING_2026-11-06.md) passes journeys B and E on all seven projects, but journey F fails intermittently on sb-admin-2 (#377). A browser test has since captured project-changed on POST /api/selection, 3 of 3 runs; no body has been seen on sb-admin-2 itself, and how to handle it is undecided. Criterion 4: tests merged in #374, #386 and #387 prove rings at 320 px and focus after Classes, Group and Delete; screen-reader announcements stay unproven (#376 open). Criterion 5: style order is decided, with overlapping pairs recorded as a limit in #384 (#369 closed; #383 stays open); #235 stays open. #370 closed by #385. #378 remains open. No installed-app test yet. Only CI's delegate-review spec ran on these PRs, not an Open Code Review, and Goldfish reviews wait on free Pulse quota."
     },
     {
       "id": "R04",
