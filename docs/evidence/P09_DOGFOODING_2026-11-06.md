@@ -8,6 +8,8 @@ Master plan, P09 preamble: the dogfooding journeys it affects are run again. Met
 - **Machine:** Windows 11, 13th Gen Intel i5-13420H, 8 cores and 12 threads, 16 GiB, Node 24.19.0, Microsoft Edge. One run per project, one after another. No macOS or Linux run.
 - **What it drives:** the editor from source, against a studio host started as `npm start` starts it, not an installed application. That is P10's work.
 
+**Later, on #377 (2026-11-07).** The results below are from `dd01709` and are unchanged. The founder then decided that journey F accepts one refusal only: `project-changed` on `POST /api/selection`, which the driver now reads and still reports as `selectionRefusals`. On sb-admin-2 at `b1d2555`, all four clean runs passed and saw no refusal, so these failures are still not shown to be that refusal. In four further runs with temporary changes to the driver, `GET /api/document` or `GET /api/history` answered 409 in two, with bodies unread. Those are not accepted, so journey F can still fail intermittently.
+
 ## What changed in the journeys
 - **B:** reorder with Alt+Up, move into and out of a layer with Alt+Right and Alt+Left, drag past a sibling in the layers tree, group with Ctrl+G, and set classes in the inspector. After each, one Undo must restore the whole document. Grouping must leave the box where the canvas drew it.
 - **E:** the agent's change is offered as Undo agent change, named, beside Undo. Undoing it must restore the exact text from before the agent's edit, and Undo brings the edit back.

@@ -36,6 +36,7 @@ import { startStudioHost } from "../../packages/studio-host/src/index.ts";
 import { serializeDocument } from "../../packages/document-model/src/index.mjs";
 import { PROJECT_FILES } from "../../packages/persistence/src/index.ts";
 import { findBrowser } from "../../tests/support/browser.mjs";
+import { isSelectionRefusal, withoutSelectionRefusals } from "./refusals.mjs";
 
 const args = process.argv.slice(2);
 const [sources, work, name] = args;
@@ -147,19 +148,35 @@ const pageErrors = [];
 // Every answer of 400 or more the editor received, by path and status: the console only says
 // "Failed to load resource".
 const failedResponses = [];
+// The refusals of POST /api/selection seen (#377), and any answer to it the driver could not read.
+let selectionRefusals = 0;
+const selectionUnread = [];
 let requests = 0;
+
+/** Fetched here, not in the page, so the answer is read even if the page is closing by then. */
+async function shareSelection(route) {
+  try {
+    const response = await route.fetch();
+    if (isSelectionRefusal("POST", "/api/selection", response.status(), await response.text())) selectionRefusals += 1;
+    await route.fulfill({ response });
+  } catch (error) {
+    selectionUnread.push(error instanceof Error ? error.message.split("\n")[0] : String(error));
+    await route.abort().catch(() => {});
+  }
+}
 
 async function openEditor(host) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   await context.route("**/*", (route) => {
     const url = route.request().url();
     requests += 1;
+    if (url === `${host.url}/api/selection` && route.request().method() === "POST") return shareSelection(route);
     if (url.startsWith(`${host.url}/`)) return route.continue();
     foreign.push(url);
     return route.abort();
   });
   const page = await context.newPage();
-  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("pageerror", (error) => pageErrors.push({ text: error.message }));
   page.on("response", (response) => {
     if (response.status() < 400) return;
     // Recorded at once, and the body added if it can still be read: the page may be closing.
@@ -168,7 +185,7 @@ async function openEditor(host) {
     response.text().then((body) => { failedResponses[at] = `${seen} ${body.slice(0, 200)}`; }, () => {});
   });
   page.on("console", (message) => {
-    if (message.type() === "error") pageErrors.push(message.text());
+    if (message.type() === "error") pageErrors.push({ text: message.text(), url: message.location().url });
   });
   await page.goto(host.launchUrl());
   await page.waitForFunction(() => document.documentElement.dataset.ready === "true");
@@ -925,8 +942,11 @@ try {
 
   // ---- F: security and privacy ----
   check("F", `no request from the editor left the host (${requests} requests)`, foreign.length === 0, foreign.slice(0, 5));
-  check("F", "the editor raised no errors", pageErrors.length === 0, { errors: pageErrors.slice(0, 5), failedResponses: failedResponses.slice(0, 10) });
+  const { errors: editorErrors, accepted } = withoutSelectionRefusals(pageErrors, selectionRefusals);
+  check("F", "the editor raised no errors", editorErrors.length === 0, { errors: editorErrors.slice(0, 5).map(({ text }) => text), failedResponses: failedResponses.slice(0, 10) });
   result.failedResponses = failedResponses;
+  // Accepted, and still reported.
+  result.selectionRefusals = { seen: selectionRefusals, accepted: accepted.length, unread: selectionUnread };
   const sandbox = await page.evaluate(() => document.querySelector("iframe")?.getAttribute("sandbox"));
   check("F", "the canvas frame is sandboxed without scripts", typeof sandbox === "string" && !sandbox.includes("allow-scripts"), { sandbox });
   const scripts = await page.evaluate(() => document.querySelector("iframe")?.contentDocument?.querySelectorAll("script").length ?? -1);
