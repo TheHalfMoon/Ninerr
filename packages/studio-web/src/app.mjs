@@ -668,6 +668,9 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
     // Fields changed both here and in the file that the person chose to keep as they are here,
     // each with the file's value it was kept against.
     const keep = new Map();
+    // What each Take left out of a style: said once by the host, so kept while the dialog is open.
+    const tookNotes = [];
+    const tookNote = () => (tookNotes.length === 0 ? [] : [el("p", { class: "hint", id: "codebase-take-note" }, tookNotes.join(" "))]);
     const quoted = (value) => `“${value.length > 120 ? `${value.slice(0, 119)}…` : value}”`;
     const showPlan = async () => {
       error.textContent = "";
@@ -697,12 +700,15 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
         const take = el("button", { type: "button", class: "take-file" }, "Take the file's");
         buttons.push(take);
         choose(take, async () => {
-          applyChange(await state.client.post("/api/codebase/resolve", { nodeId: conflict.nodeId, field: conflict.field, file: conflict.file }, { project }));
+          const taken = await state.client.post("/api/codebase/resolve", { nodeId: conflict.nodeId, field: conflict.field, file: conflict.file }, { project });
+          applyChange(taken);
+          const notes = `${styleLeftOutNote(taken)}${styleOutOfOrderNote(taken)}`;
+          if (notes !== "") tookNotes.push(`Took the file's ${conflict.field}.${notes}`);
           try {
             await showPlan();
           } catch (failure) {
             // Taken: the plan shown is out of date, and is not left up to be acted on.
-            preview.replaceChildren(el("p", {}, `Took the file's ${conflict.field}. Review the write-back again to see what is left.`));
+            preview.replaceChildren(el("p", {}, `Took the file's ${conflict.field}. Review the write-back again to see what is left.`), ...tookNote());
             throw failure;
           }
         });
@@ -728,6 +734,7 @@ function buildCodebasePart({ codebase, codebaseError, boundNode, close, error, p
         ];
       };
       preview.replaceChildren(
+        ...tookNote(),
         el("p", {}, planSummary(plan)),
         ...(plan.diff === "" ? [] : [el("pre", { class: "diff", id: "codebase-diff", tabindex: "0", "aria-label": `Changes to ${plan.file}` }, plan.diff)]),
         ...(plan.conflicts.length === 0 ? [] : [el("p", {}, "Changed both here and in the file, so not written:")]),
@@ -1761,7 +1768,7 @@ function renderInspector() {
   else if (isCodePart(node) || node.children.some((id) => isCodePart(doc.nodes[id]))) {
     // Beside other content, an element's words are on layers of their own, which can be edited.
     const onlyCode = isCodePart(node) || node.children.every((id) => isCodePart(doc.nodes[id]));
-    children.push(el("p", { class: "hint", id: "inspect-code-note" }, onlyCode ? "This layer shows code from its source, so its text is changed in the code." : "This layer holds code from its source, which is changed in the code. Its words are edited on their own layers."));
+    children.push(el("p", { class: "hint", id: "inspect-code-note" }, onlyCode ? "This layer shows code from its source, so its text is changed in the code." : "This layer holds code from its source, which is changed in the code. What is beside it is edited on its own layers."));
   }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));

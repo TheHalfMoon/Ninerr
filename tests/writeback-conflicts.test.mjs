@@ -205,6 +205,23 @@ test("a style kept or taken as shown still counts when the file is only reformat
   assert.deepEqual([refused.status, refused.json?.error?.code], [409, "no-conflict"]);
 });
 
+// #370: taking the file's style says what an import of it would say.
+test("taking the file's style reports a declaration left out, and overlapping properties", async (t) => {
+  const { call, file, element, revision } = await broughtIn(t, BADGE, "Badge");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { color: "blue", padding: "4px" } } }] }), "edit");
+  const take = async (style) => {
+    writeFileSync(file, BADGE.replace("color: green; padding: 4px", style));
+    const event = await ok(call("POST", "/api/codebase/resolve", { nodeId: element, field: "style", file: style }), "take");
+    await ok(call("POST", "/api/undo"), "undo the take");
+    return [event.layersWithStyleLeftOut, event.layersWithStyleOutOfOrder];
+  };
+  assert.deepEqual(await take("color: red; padding: 4px"), [0, 0], "a plain style says nothing");
+  assert.deepEqual(await take("margin-left: 4px; margin: 0px"), [1, 0], "a longhand a later shorthand overrides");
+  assert.deepEqual(await take("border-top: 1px solid blue; border-color: red"), [0, 1], "an overlapping pair");
+  const text = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.equal(text.conflicts.length, 1, "undone, the conflict is back");
+});
+
 const NOTE = `export function Note() {
   return <p text="a">Hello</p>;
 }
