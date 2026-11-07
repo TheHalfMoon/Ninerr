@@ -16,7 +16,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { TRACED_CALLS, forbiddenAttempts, networkAttempts, routeQueries } from "./desktop/egress.mjs";
 import { preparePackage, sleep, waitForRevision } from "./desktop/drive.mjs";
-import { forbiddenOutbound, macPackets, unattributedOutbound, windowsEvents } from "./desktop/egress-capture.mjs";
+import { droppedPackets, forbiddenOutbound, lostEvents, macPackets, unattributedOutbound, windowsEvents } from "./desktop/egress-capture.mjs";
 
 const archive = process.argv[2] ? resolve(process.argv[2]) : null;
 if (archive === null || process.argv.length !== 3 || !existsSync(archive)) {
@@ -184,6 +184,8 @@ async function startCapture(folder) {
     return async () => {
       spawnSync("sudo", ["pkill", "-INT", "-x", "tcpdump"]);
       await Promise.race([new Promise((resolve) => capture.once("exit", resolve)), sleep(10_000)]);
+      // A packet the kernel dropped was not seen, so a clean result would not cover it.
+      check("the capture dropped no packet", droppedPackets(said) === 0, said.slice(-300));
       const text = lines.join("");
       // This computer's own addresses, so a packet to them is read as inbound.
       const local = new Set(Object.values(networkInterfaces()).flat().map(({ address }) => address.replace(/%.*$/u, "")));
@@ -193,9 +195,12 @@ async function startCapture(folder) {
   const etl = join(folder, "net.etl");
   const xml = join(folder, "net.xml");
   spawnSync("logman", ["stop", "NinerrNet", "-ets"]);
-  execFileSync("logman", ["start", "NinerrNet", "-p", "Microsoft-Windows-Kernel-Network", "0xFFFFFFFFFFFFFFFF", "0xff", "-o", etl, "-ets"], { stdio: "pipe" });
+  execFileSync("logman", ["start", "NinerrNet", "-p", "Microsoft-Windows-Kernel-Network", "0xFFFFFFFFFFFFFFFF", "0xff", "-o", etl, "-bs", "1024", "-nb", "64", "512", "-ets"], { stdio: "pipe" });
   check("the capture starts", true);
   return async () => {
+    // An event the session lost was not seen, so a clean result would not cover it.
+    const query = execFileSync("logman", ["query", "NinerrNet", "-ets"], { encoding: "utf8" });
+    check("the capture lost no event", lostEvents(query) === 0, query.slice(-600));
     execFileSync("logman", ["stop", "NinerrNet", "-ets"], { stdio: "pipe" });
     execFileSync("tracerpt", [etl, "-o", xml, "-of", "XML", "-y"], { stdio: "pipe" });
     const text = readFileSync(xml, "utf16le").replace(/^\uFEFF/u, "");
@@ -287,11 +292,12 @@ async function captured() {
     if (process.platform === "darwin") {
       // The runner's capture leaves loopback out, so the session's traffic is also held to the
       // app's name, which pktap gives each packet: the control shows that name on Chromium's send.
-      // The packaged helpers keep Electron's name ("Electron Helper"), as the runner showed.
-      const named = (name) => typeof name === "string" && /^(?:Ninerr|Electron Helper)\b/u.test(name);
+      // The packaged executable and helpers keep Electron's names (scripts/package-desktop.mjs),
+      // as the runner showed: "Electron", and "Electron Helper" with its kinds.
+      const named = (name) => typeof name === "string" && /^Electron(?: Helper\b|$)/u.test(name);
       const controlNamed = stunSends.filter(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT);
       check("the capture names the app on Chromium's own send, in the control", controlNamed.length > 0 && controlNamed.every(({ name }) => named(name)), controlNamed.slice(0, 5));
-      const appSessionPids = new Set([...sessionPids, ...events.filter(({ pid, name }) => named(name) && !stunPids.has(pid)).map(({ pid }) => pid)]);
+      const appSessionPids = new Set([...sessionPids, ...events.filter(({ pid, name }) => named(name) && !stunPids.has(pid)).map(({ pid }) => pid), ...events.filter(({ epid, ename }) => named(ename) && !stunPids.has(epid)).map(({ epid }) => epid)]);
       forbidden = forbiddenOutbound(events, appSessionPids);
     } else {
       // The capture charges the app's own traffic to its processes: if this does not hold, a clean

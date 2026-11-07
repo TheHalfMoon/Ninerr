@@ -9,7 +9,9 @@ import { isLoopback } from "./egress.mjs";
 // macOS: `tcpdump -i pktap,all -k NP -nn -l` (plain pktap leaves loopback out), which names each packet's interface and process.
 // Its metadata can hold parentheses (Ninerr Helper (Renderer)), and an IPv6 end holds colons.
 const MAC_LINE = /^\S+\s+\((?<meta>.*?)\)\s+IP(?<v6>6)?\s+(?<src>\S+)\s+>\s+(?<dst>\S+?):\s/u;
-const MAC_PROC = /\bproc\s+(?<name>[^:,]*):(?<pid>\d+)/u;
+const MAC_PROC = /(?:^|,\s*)proc\s+(?<name>[^:,]*):(?<pid>\d+)/u;
+// The process a packet is sent for, when the system sends it: mDNSResponder or the kernel for an app.
+const MAC_EPROC = /\beproc\s+(?<name>[^:,]*):(?<pid>\d+)/u;
 
 /** An address and port from tcpdump's address.port, for IPv4 and IPv6 alike. */
 function splitEnd(end) {
@@ -37,7 +39,14 @@ export function macPackets(text, local = new Set()) {
     if (direction === "in") continue;
     if (direction === null && local.has(splitEnd(found.groups.dst).address)) continue;
     const proc = MAC_PROC.exec(meta);
-    packets.push({ pid: proc === null ? null : Number(proc.groups.pid), name: proc?.groups.name.trim() ?? null, ...splitEnd(found.groups.dst) });
+    const eproc = MAC_EPROC.exec(meta);
+    packets.push({
+      pid: proc === null ? null : Number(proc.groups.pid),
+      name: proc?.groups.name.trim() ?? null,
+      epid: eproc === null ? null : Number(eproc.groups.pid),
+      ename: eproc?.groups.name.trim() ?? null,
+      ...splitEnd(found.groups.dst),
+    });
   }
   return packets;
 }
@@ -63,19 +72,34 @@ export function windowsEvents(xml) {
   return events;
 }
 
+/** Whether an event is the app's: sent by one of `pids`, or by the system for one of them. */
+const isApps = (pids) => ({ pid, epid }) => (pid !== null && pids.has(pid)) || (epid !== null && epid !== undefined && pids.has(epid));
+
 /**
- * The outbound events off this computer from `pids`. An event with no readable address counts, as
- * does any DNS query the capture charges to the app.
+ * The outbound events off this computer from `pids`, or sent for them. An event with no readable
+ * address counts, as does any DNS query the capture charges to the app.
  */
 export function forbiddenOutbound(events, pids) {
-  return events.filter(({ pid, address, port }) => pid !== null && pids.has(pid) && (!isLoopback(address) || port === 53));
+  return events.filter((event) => isApps(pids)(event) && (!isLoopback(event.address) || event.port === 53));
 }
 
 /**
- * Outbound events off this computer that the system charged to no process, to report: on a shared
- * machine the system's own traffic has none, so they cannot fail a run, and an app's packet that
- * lost its process would be among them.
+ * Outbound events off this computer that the system charged to no process, or to the kernel (pid
+ * 0, or 4 on Windows), to report: on a shared machine the system's own traffic is charged so, so
+ * they cannot fail a run, and an app's packet that lost its process would be among them.
  */
 export function unattributedOutbound(events) {
-  return events.filter(({ pid, address }) => pid === null && !isLoopback(address));
+  return events.filter(({ pid, address }) => (pid === null || pid === 0 || pid === 4) && !isLoopback(address));
+}
+
+/** tcpdump's count of packets the kernel dropped, from what it says on stopping, or null. */
+export function droppedPackets(said) {
+  const found = /(?<count>\d+) packets? dropped by kernel/u.exec(said);
+  return found === null ? null : Number(found.groups.count);
+}
+
+/** The events a Windows trace session lost, from `logman query`, or null when it does not say. */
+export function lostEvents(query) {
+  const found = /Events Lost:\s*(?<count>\d+)/iu.exec(query);
+  return found === null ? null : Number(found.groups.count);
 }

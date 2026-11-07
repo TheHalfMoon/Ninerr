@@ -1,15 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { forbiddenOutbound, macPackets, unattributedOutbound, windowsEvents } from "../scripts/desktop/egress-capture.mjs";
+import { droppedPackets, forbiddenOutbound, lostEvents, macPackets, unattributedOutbound, windowsEvents } from "../scripts/desktop/egress-capture.mjs";
 
 // R04 on macOS and Windows. The sample lines follow each tool's documented shape; the CI run's
 // controls show whether the real output reads the same, and print it when it does not.
 const MAC = `
-12:00:00.000001 (en0, proc Ninerr Helper:812:5D1C, svc BE, out, so) IP 10.0.0.5.52345 > 192.0.2.1.9: UDP, length 1
-12:00:00.000002 (lo0, proc Ninerr:800:1A2B, svc BE, out, so) IP 127.0.0.1.50000 > 127.0.0.1.41234: Flags [S]
-12:00:00.000003 (en0, proc Ninerr Helper:812:5D1C, svc BE, in, so) IP 192.0.2.1.9 > 10.0.0.5.52345: UDP, length 1
-12:00:00.000004 (en0, proc Ninerr Helper (Renderer):813:5D1D, svc BE, out, so) IP6 fe80::1.52345 > 2001:4860:4860::8888.443: Flags [S]
+12:00:00.000001 (en0, proc Electron Helper:812:5D1C, svc BE, out, so) IP 10.0.0.5.52345 > 192.0.2.1.9: UDP, length 1
+12:00:00.000002 (lo0, proc Electron:800:1A2B, svc BE, out, so) IP 127.0.0.1.50000 > 127.0.0.1.41234: Flags [S]
+12:00:00.000003 (en0, proc Electron Helper:812:5D1C, svc BE, in, so) IP 192.0.2.1.9 > 10.0.0.5.52345: UDP, length 1
+12:00:00.000004 (en0, proc Electron Helper (Renderer):813:5D1D, svc BE, out, so) IP6 fe80::1.52345 > 2001:4860:4860::8888.443: Flags [S]
 12:00:00.000005 (en0, svc BE, out, so) IP 10.0.0.5.5353 > 224.0.0.251.5353: UDP, length 40
 12:00:00.000006 (en0, proc mDNSResponder:90:AAAA, svc BE, out, so) IP 10.0.0.5.55000 > 8.8.8.8.53: UDP, length 30
 12:00:00.000007 (en0, proc node:900:BBBB, svc BE, out, so) IP 10.0.0.5.60000 > 192.0.2.1.12: Flags [S]
@@ -17,9 +17,9 @@ const MAC = `
 
 test("a pktap capture gives each outbound packet with its process and destination", () => {
   assert.deepEqual(macPackets(MAC).map(({ pid, name, address, port }) => [pid, name, address, port]), [
-    [812, "Ninerr Helper", "192.0.2.1", 9],
-    [800, "Ninerr", "127.0.0.1", 41234],
-    [813, "Ninerr Helper (Renderer)", "2001:4860:4860::8888", 443],
+    [812, "Electron Helper", "192.0.2.1", 9],
+    [800, "Electron", "127.0.0.1", 41234],
+    [813, "Electron Helper (Renderer)", "2001:4860:4860::8888", 443],
     [null, null, "224.0.0.251", 5353],
     [90, "mDNSResponder", "8.8.8.8", 53],
     [900, "node", "192.0.2.1", 12],
@@ -73,3 +73,20 @@ test("only the app's own can fail a run, and a packet of no process is reported"
   assert.deepEqual(forbiddenOutbound([{ pid: 1, address: "127.0.0.1", port: 53 }], new Set([1])).length, 1, "DNS to loopback");
   assert.deepEqual(forbiddenOutbound([{ pid: 1, address: null, port: null }], new Set([1])).length, 1, "an unreadable address");
 });
+
+test("a packet the system sends for the app is the app's, and lost packets are read", () => {
+  const lines = `09:40:31.0 (proc mDNSResponder:90, eproc Electron Helper:7191) IP 192.168.64.13.5000 > 8.8.8.8.53: UDP, length 30
+09:40:31.1 (proc kernel_task:0, eproc Electron:7187) IP 192.168.64.13.5001 > 1.1.1.1.443: Flags [S]
+09:40:31.2 (proc kernel_task:0, eproc provjobd:974) IP 192.168.64.13.5002 > 20.75.202.224.443: Flags [P.]`;
+  const packets = macPackets(lines, new Set(["192.168.64.13"]));
+  assert.deepEqual(packets.map(({ pid, epid, ename }) => [pid, epid, ename]), [[90, 7191, "Electron Helper"], [0, 7187, "Electron"], [0, 974, "provjobd"]]);
+  assert.deepEqual(forbiddenOutbound(packets, new Set([7187, 7191])).map(({ address }) => address), ["8.8.8.8", "1.1.1.1"]);
+  assert.deepEqual(unattributedOutbound(packets).map(({ address }) => address), ["1.1.1.1", "20.75.202.224"], "the kernel's are reported");
+  assert.equal(droppedPackets("138 packets captured\n140 packets received by filter\n0 packets dropped by kernel\n"), 0);
+  assert.equal(droppedPackets("12 packets dropped by kernel"), 12);
+  assert.equal(droppedPackets("listening on pktap"), null);
+  assert.equal(lostEvents("Name:                 NinerrNet\nEvents Lost:          0\nBuffers Written:      4"), 0);
+  assert.equal(lostEvents("Events Lost: 7"), 7);
+  assert.equal(lostEvents("Name: NinerrNet"), null);
+});
+
