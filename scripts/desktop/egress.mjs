@@ -5,7 +5,7 @@
 //
 // The trace is taken with strace -yy, which names each socket as it is used: UDP:[local->peer].
 
-const CALL = /^(?<pid>\d+)\s+(?:<\.\.\. )?(?<call>connect|sendto|sendmsg|sendmmsg|write)\((?<fd>\d+)(?:<(?<socket>[^>]*)>)?/u;
+const CALL = /^(?<pid>\d+)\s+(?:<\.\.\. )?(?<call>connect|sendto|sendmsg|sendmmsg|write)\((?<fd>\d+)(?:<(?<socket>(?:->|[^>])*)>)?/u;
 const FAMILY = /sa_family=(?<family>AF_INET6?)\b/u;
 const PORT = /sin6?_port=htons\((?<port>\d+)\)/u;
 const V4 = /sin_addr=inet_addr\("(?<address>[0-9.]+)"/u;
