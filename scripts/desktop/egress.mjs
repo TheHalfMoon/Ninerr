@@ -16,7 +16,8 @@ export const TRACED_CALLS = "connect,sendto,sendmsg,sendmmsg,write,writev,sendfi
 
 const CALL = /^(?<pid>\d+)\s+(?<call>connect|sendto|sendmsg|sendmmsg|write|writev|sendfile)\((?<fd>\d+)(?:<(?<socket>(?:->|[^>])*)>)?/u;
 const SPLICE = /^(?<pid>\d+)\s+splice\(\d+(?:<(?:->|[^>])*>)?,\s*[^,]+,\s*\d+<(?<socket>(?:->|[^>])*)>/u;
-const RING = /^(?<pid>\d+)\s+io_uring_setup\(/u;
+// A setup that failed leaves no ring to send through. One that was cut off in the trace counts.
+const RING = /^(?<pid>\d+)\s+io_uring_setup\((?!.*=\s*-1\s)/u;
 // A resolver reached over a Unix socket, which carries a name off this computer and names no address.
 const RESOLVER = /^(?<pid>\d+)\s+connect\(.*sun_path="[^"]*(?:io\.systemd\.Resolve|resolve\/)[^"]*".*= 0/u;
 const PORT = /sin6?_port=htons\((?<port>\d+)\)/u;
@@ -120,7 +121,7 @@ export function isLoopback(address) {
 export const isRouteQuery = ({ call, transport }) => call === "connect" && transport === "UDP";
 
 /**
- * What a run may not do: any attempt off this computer, use of io_uring, and any DNS query the
+ * What a run may not do: any attempt off this computer, a working io_uring, and any DNS query the
  * trace can see: to port 53 anywhere, since 127.0.0.53 forwards a name off the computer, or to
  * systemd's resolver socket. Name lookups over other programs are not seen.
  */

@@ -109,6 +109,9 @@ test("every address in one call counts, and an unsure reading fails closed", () 
   }
   // io_uring's calls cannot be read, and a resolver over a Unix socket names no address.
   assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) = 3`), [["io_uring_setup", null, null]]);
+  assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) <unfinished ...>`), [["io_uring_setup", null, null]]);
+  assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) = -1 EPERM (Operation not permitted)`), [], "no ring to send through");
+  assert.deepEqual(forbidden(`1 io_uring_setup(4, {}) = -1 ENOSYS (Function not implemented)`), []);
   assert.deepEqual(forbidden(`1 connect(5<UNIX:[1]>, {sa_family=AF_UNIX, sun_path="/run/systemd/resolve/io.systemd.Resolve"}, 110) = 0`), [["connect", null, 53]]);
   assert.deepEqual(forbidden(`1 connect(5<UNIX:[1]>, {sa_family=AF_UNIX, sun_path="/run/systemd/resolve/io.systemd.Resolve"}, 110) = -1 ENOENT (No such file or directory)`), []);
   // A write to a file, a pipe, or a descriptor with no name is no attempt.

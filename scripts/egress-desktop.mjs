@@ -156,10 +156,12 @@ async function main() {
     const controlSends = forbiddenAttempts(networkAttempts(traceOf(traces, "stun")));
     check("the trap saw Chromium's own send off this computer, in the control", controlSends.some(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT), controlSends.slice(0, 20));
     const forbidden = forbiddenAttempts(attempts);
-    check("nothing in any process reached off this computer", forbidden.length === 0, forbidden.slice(0, 20));
+    const appTrace = traceOf(traces, "app");
+    const rings = appTrace.split("\n").filter((line) => line.includes("io_uring_setup")).map((line) => line.slice(0, 160));
+    check("nothing in any process reached off this computer", forbidden.length === 0, { forbidden: forbidden.slice(0, 20), rings });
     // Named in the result, so a new one is seen: these leave no packet.
     const queries = routeQueries(attempts).map(({ address, port }) => `${address} port ${port}`);
-    process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, threads: threads.size, attempts: attempts.length, udpRouteQueries: [...new Set(queries)], checks })}\n`);
+    process.stdout.write(`${JSON.stringify({ ok: true, processes: appProcesses, threads: threads.size, attempts: attempts.length, udpRouteQueries: [...new Set(queries)], ringSetups: rings, checks })}\n`);
   } finally {
     rmSync(traces, { recursive: true, force: true, maxRetries: 5 });
   }
