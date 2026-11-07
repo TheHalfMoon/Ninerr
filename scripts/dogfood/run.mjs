@@ -427,6 +427,20 @@ try {
     // The imported content with the most text, so there is text to select and edit.
     const textCount = (frameId) => { const all = doc(); let count = 0; for (const node of Object.values(all.nodes)) { if (typeof node.props?.text !== "string" || node.props.text.trim() === "") continue; let at = node; while (at.parentId !== null) at = all.nodes[at.parentId]; if (at.id === frameId) count += 1; } return count; };
     const target = [...imported].sort((a, b) => textCount(b.frameId) - textCount(a.frameId))[0];
+    // A project whose components hold only {…} parts has no words to edit (shadcn-ui): the text
+    // journeys run on a layer inserted here, and the result says so.
+    const hasWords = () => {
+      const all = doc();
+      const underFrame = (id) => { let at = all.nodes[id]; while (at && at.parentId !== null) at = all.nodes[at.parentId]; return at?.id === target.frameId; };
+      return Object.values(all.nodes).some((node) => underFrame(node.id) && typeof node.props?.text === "string" && /\w{4,}/u.test(node.props.text) && !holdsCode(all.nodes, node.id));
+    };
+    if (!hasWords()) {
+      const before = await revisionOf(page);
+      await page.locator(`[role=treeitem][data-node-id="${target.frameId}"] > .row`).click();
+      await page.locator("#action-insert-text").click();
+      await waitRevision(page, before + 1);
+      check("B", "these layers hold only code, so the text journeys use a text layer inserted here", hasWords());
+    }
     const snapshot = doc();
     const inFrame = (id) => { let at = snapshot.nodes[id]; while (at && at.parentId !== null) at = snapshot.nodes[at.parentId]; return at?.id === target.frameId; };
     const depthOf = (id) => { let depth = 0; let at = snapshot.nodes[id]; while (at.parentId !== null) { depth += 1; at = snapshot.nodes[at.parentId]; } return depth; };
