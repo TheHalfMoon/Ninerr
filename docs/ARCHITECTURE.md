@@ -100,6 +100,11 @@ repository source
 
 A generated patch must preserve unrelated source formatting, comments, imports, and semantics wherever the adapter can prove a safe transformation. Unsafe transformations must produce a conflict/abstention instead of silently rewriting a file.
 
+**Inline styles in code (#398):**
+- **Import.** A `style` written as a string is read as CSS. A `style={{ … }}` object made only of literal values is read as the CSS it says: camelCase names become CSS names, and a number is in pixels except for React's unitless properties. Any other object (a spread, a name, a call, a template) stays code, and the import counts it in `layersWithStyleLeftOut`, never dropping it silently. An object style is code in the source: it is shown on the canvas, and a change to it is reported as not written back.
+- **Export.** Export writes HTML-flavoured JSX: `style` is a CSS string and `class` is written as `className`. A string `style` is not valid on a React DOM element, so exported code needs its styles converted before React renders it. This is the dialect today, not a final decision.
+- **The page imported code is placed in** is not part of the component. Exporting it, while it is still as import made it, exports the component inside it, so export, import, export settles. A page the person has changed, or one holding more than one layer, exports as itself.
+
 ## Agent runtime
 
 Agents never mutate storage directly.
