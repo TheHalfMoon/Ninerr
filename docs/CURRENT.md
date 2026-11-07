@@ -1,8 +1,12 @@
 # Ninerr — Canonical Program State
 
-Last updated: 2026-10-13
+Last updated: 2026-11-07
 
 ## Program
+
+**The frontier: P10, release candidate hardening.** P09's criteria are met, with stated limits (`docs/evidence/P09_EXIT_2026-11-07.md`), and the seven-project dogfooding was rerun at `38c9254` (`docs/evidence/P09_DOGFOODING_2026-11-07.md`). Ninerr is not qualified and nothing is released. The dogfooding drives the editor from source; CI tests each packaged archive, and no installer has been tried on a clean machine. Open from P09: #376 (a real screen reader), #377 (an intermittent refusal in dogfooding), #382 and #383 (style values). The local reference path, M01 to M05, is merged; its packaged and offline gates on #366 have not been run.
+
+What follows is the state as of P08 closeout, kept as written.
 
 **P08 — Deep qualification and dogfooding.** N0, Ninerr independence and migration (umbrella #190), is `CLOSED_CANONICAL`. The founder renamed the product to Ninerr on 2026-10-08 and set the order: N0, P08 deep qualification and dogfooding, P09 Ninerr UI and UX, P10 release candidate hardening, then the release gate (`docs/MASTER_PLAN.md`). The founder authorized the program through the release gate on 2026-10-13; v1.0.0 is created only after the exact candidate passes every P10 criterion.
 
@@ -47,9 +51,9 @@ The seven-project dogfooding was run again on `1987c77` with the same outcomes a
 
 ## Canonical main
 
-`1987c771882fd93cdb682c4b3cb301dbf7cf9bd1`
+`8e5d2f96c669dd35eb4cb92dadcca305d57a2824`
 
-This is the normal merge commit for PR #340 (#306). It is the latest commit whose post-merge run was verified when this page was updated: CI run 38348158607 and Desktop run 38348158627 completed `SUCCESS` on that exact SHA, with the suite on Linux, macOS and Windows and the desktop packages for all three.
+This is the normal merge commit for PR #391 (M05). It is the latest commit whose post-merge run was verified when this page was updated: CI and Desktop completed `SUCCESS` on that exact SHA. Later commits may exist: check the live branch.
 
 ## Before the v1 tag
 1. **License.** Resolved: Ninerr is Apache-2.0 (`LICENSE`), after the A/B source-rights audit (`docs/evidence/N0_G7A_LICENSE_2026-10-09.md`).
