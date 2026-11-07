@@ -48,6 +48,9 @@ test("the macOS runner's own lines: no direction, so a packet to this computer c
     [23066, "node", "192.0.2.1", 9],
     [23066, "node", "192.0.2.1", 12],
   ]);
+  // A packet with no port, as for ICMP, keeps its whole address.
+  assert.deepEqual(macPackets(`09:40:31.0 (proc Electron Helper:7191) IP 127.0.0.1 > 127.0.0.1: ICMP echo request
+09:40:31.1 (proc Electron Helper:7191) IP 192.168.64.13 > 8.8.8.8: ICMP echo request`, local).map(({ address, port }) => [address, port]), [["127.0.0.1", null], ["8.8.8.8", null]]);
   // Without knowing this computer's address, nothing is taken for inbound.
   assert.equal(macPackets(lines).length, 5);
 });

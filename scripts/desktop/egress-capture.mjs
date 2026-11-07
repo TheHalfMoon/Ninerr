@@ -13,6 +13,8 @@ const MAC_PROC = /\bproc\s+(?<name>[^:,]*):(?<pid>\d+)/u;
 
 /** An address and port from tcpdump's address.port, for IPv4 and IPv6 alike. */
 function splitEnd(end) {
+  // An IPv4 address alone, as for ICMP, has four parts and no port.
+  if (/^\d+\.\d+\.\d+\.\d+$/u.test(end)) return { address: end, port: null };
   const dot = end.lastIndexOf(".");
   if (dot < 0) return { address: end, port: null };
   const port = end.slice(dot + 1);
