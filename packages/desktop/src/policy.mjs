@@ -52,7 +52,8 @@ export const WEBRTC_IP_POLICY = "disable_non_proxied_udp";
  * or through the system's proxy; here it goes nowhere. Chromium never proxies loopback or
  * link-local addresses on its own, so that rule is taken away (<-loopback>), and only 127.0.0.1,
  * where the host is, is left direct: a link-local peer or 169.254.169.254 goes to the sink too.
- * A person who starts the app with --proxy-server has chosen otherwise.
+ * A person who starts the app with --proxy-server has chosen otherwise. A proxy given by name, or by
+ * any address but 127.0.0.1, also needs their own --host-resolver-rules (NO_NAME_RESOLUTION).
  */
 export const SINK_PROXY = Object.freeze({ proxyRules: "http://127.0.0.1:9", proxyBypassRules: "<-loopback>;127.0.0.1" });
 
@@ -60,6 +61,8 @@ export const SINK_PROXY = Object.freeze({ proxyRules: "http://127.0.0.1:9", prox
  * Every name Chromium would look up is not found, except 127.0.0.1, where the host is (#395). The
  * editor and host need no name, and a page's <link rel=dns-prefetch>, or Chromium's own proxy
  * discovery (wpad), would otherwise send DNS queries off the computer, which no request rule sees.
+ * Chromium applies the rule to IP literals too, so any other address is unreachable as well,
+ * [::1] among them. A person who gives their own --host-resolver-rules has chosen otherwise.
  */
 export const NO_NAME_RESOLUTION = "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1";
 

@@ -43,9 +43,9 @@ const REFUSED = ["http://192.0.2.1/", "https://fonts.googleapis.com/css2?family=
  * What a page can reach that no request rule governs (#395): WebRTC to the reserved address by STUN
  * over UDP, TURN over TCP and a peer's TCP candidate; TURN over TCP to a link-local address, which
  * Chromium never proxies on its own; and a DNS prefetch of a name. It must send nothing off this
- * computer. It answers whether it ran, so a probe that did nothing cannot pass for one that sent
- * nothing. A local run without the app's hardening, with this same WebRTC code, reached a listener
- * on the LAN address by TCP and UDP.
+ * computer. It answers that it ran to its end, so an error part way is not taken for "sent
+ * nothing"; that it would have sent without the hardening is shown apart: a local run of this
+ * same code without it reached a listener on the LAN address by TCP and UDP, and with it none.
  */
 const stunRequest = (page) => page.evaluate(async ([address, port, linkLocal, name]) => {
   const prefetch = document.createElement("link");
@@ -72,7 +72,9 @@ const stunRequest = (page) => page.evaluate(async ([address, port, linkLocal, na
 // loopback sent through it too, so the editor's first page load is Chromium's own connection off
 // this computer. Electron documents both switches. (WebRTC cannot serve: the app's policy holds
 // even against Chromium's --force-webrtc-ip-handling-policy, as the runs showed.)
-const PROXIED = [`--proxy-server=http://${RESERVED}:${CHROMIUM_CONTROL_PORT}`, "--proxy-bypass-list=<-loopback>"];
+// The app's own resolver rule would make the reserved address unreachable too, as Chromium applies
+// it to IP literals; the control gives its own, which the app keeps, with that address excluded.
+const PROXIED = [`--proxy-server=http://${RESERVED}:${CHROMIUM_CONTROL_PORT}`, "--proxy-bypass-list=<-loopback>", `--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE ${RESERVED}`];
 const CONTROL_MS = 12_000;
 
 /** Run the proxied control, and give back the processes it had while it ran. */
@@ -202,7 +204,7 @@ async function traced() {
       // Left idle a while, for anything that waits before it reaches out.
       // The app's own STUN request (#395): hardened, it must send nothing, as the check below holds.
       const probed = await stunRequest(page);
-      check("the page's WebRTC and DNS prefetch ran, and must send nothing", probed.offered && probed.answered && probed.added && probed.prefetch, probed);
+      check("the page's WebRTC and DNS prefetch ran to their end, and must send nothing", probed.offered && probed.answered && probed.added && probed.prefetch, probed);
       await sleep(IDLE_MS);
 
       const quit = await ninerr.quit();
@@ -331,7 +333,7 @@ async function captured() {
       }
       // The app's own STUN request (#395): hardened, it must send nothing, as the check below holds.
       const probed = await stunRequest(page);
-      check("the page's WebRTC and DNS prefetch ran, and must send nothing", probed.offered && probed.answered && probed.added && probed.prefetch, probed);
+      check("the page's WebRTC and DNS prefetch ran to their end, and must send nothing", probed.offered && probed.answered && probed.added && probed.prefetch, probed);
       await sleep(IDLE_MS);
       await processesOf(ninerr, sessionPids);
       const quit = await ninerr.quit();
