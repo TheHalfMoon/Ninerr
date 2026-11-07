@@ -717,6 +717,13 @@ test("focus stays usable after Classes commits and after Group", browserTestOpti
     // The dialog's close event comes a task after it closes.
     await page.waitForFunction(() => !document.getElementById("dialog").open && document.activeElement.getAttribute("role") === "treeitem", null, { timeout: 5000 });
     await page.evaluate(() => { document.getElementById("action-code").disabled = false; });
+    // And one hidden meanwhile.
+    await page.locator("#action-code").click();
+    await page.locator("#dialog[open]").waitFor();
+    await page.evaluate(() => { document.getElementById("action-code").hidden = true; });
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.getElementById("dialog").open && document.activeElement.getAttribute("role") === "treeitem", null, { timeout: 5000 });
+    await page.evaluate(() => { document.getElementById("action-code").hidden = false; });
 
     // Undo pressed until nothing is left: not to Redo, which a further Enter would run.
     await tabTo(page, "action-undo");
@@ -730,7 +737,47 @@ test("focus stays usable after Classes commits and after Group", browserTestOpti
     };
     while (!(await page.locator("#action-undo").isDisabled())) await undoAll();
     assert.equal(await page.locator("#layers [role=treeitem]").count(), 0, "the page is undone too");
-    assert.equal((await focusNow(page)).id, "action-projects", "with no layers left, the focus goes to Projects");
+    await page.waitForFunction(() => document.activeElement.getAttribute("role") === "application", null, { timeout: 5000 });
+    const before = revision;
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    assert.equal(await page.evaluate(() => document.getElementById("dialog").open), false, "with no layers left, Enter opens nothing");
+    assert.equal(revision, before);
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("deleting the last layer, or a project opened elsewhere, leaves the focus on the canvas", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-p09-last-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await threeBoxes(page, host);
+    const onCanvas = () => page.waitForFunction(() => document.activeElement.getAttribute("role") === "application", null, { timeout: 5000 });
+    await row(page, host.session.document.rootIds[0]).click();
+    await tabTo(page, "action-delete");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 4);
+    await onCanvas();
+    const revision = host.session.revision;
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    assert.equal(host.session.revision, revision, "Enter changes nothing");
+    assert.equal(await page.evaluate(() => document.getElementById("dialog").open), false, "and opens nothing");
+
+    // Another project opened while Save has the focus.
+    await tabTo(page, "action-save");
+    // A selection shared after the host has moved on is refused (#377): let Delete's go first.
+    await page.waitForTimeout(250);
+    const created = await fetch(`${host.url}/api/projects/create`, { method: "POST", headers: { authorization: `Bearer ${host.token}`, "content-type": "application/json" }, body: JSON.stringify({ name: "elsewhere" }) });
+    assert.equal(created.status < 300, true, `created: ${created.status}`);
+    await page.waitForFunction(() => document.getElementById("project-name").textContent === "elsewhere");
+    await page.waitForFunction(() => document.activeElement !== document.body, null, { timeout: 5000 });
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();
