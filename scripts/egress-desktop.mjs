@@ -287,7 +287,8 @@ async function captured() {
     if (process.platform === "darwin") {
       // The runner's capture leaves loopback out, so the session's traffic is also held to the
       // app's name, which pktap gives each packet: the control shows that name on Chromium's send.
-      const named = (name) => typeof name === "string" && /^Ninerr\b/u.test(name);
+      // The packaged helpers keep Electron's name ("Electron Helper"), as the runner showed.
+      const named = (name) => typeof name === "string" && /^(?:Ninerr|Electron Helper)\b/u.test(name);
       const controlNamed = stunSends.filter(({ address, port }) => address === RESERVED && port === CHROMIUM_CONTROL_PORT);
       check("the capture names the app on Chromium's own send, in the control", controlNamed.length > 0 && controlNamed.every(({ name }) => named(name)), controlNamed.slice(0, 5));
       const appSessionPids = new Set([...sessionPids, ...events.filter(({ pid, name }) => named(name) && !stunPids.has(pid)).map(({ pid }) => pid)]);
