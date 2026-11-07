@@ -1,12 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { editorOrigin, mayNavigate, mayRequest, windowPreferences } from "../packages/desktop/src/policy.mjs";
+import { NO_NAME_RESOLUTION, SINK_PROXY, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "../packages/desktop/src/policy.mjs";
 import { findElectron } from "../scripts/desktop/electron.mjs";
 import { closeServerAfterTest } from "./support/cleanup.mjs";
 import { desktopTestOptions, display, launchDesktop } from "./support/desktop.mjs";
@@ -247,3 +247,32 @@ test("the desktop app runs the editor in an isolated, sandboxed window that reac
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("every web contents may send no WebRTC traffic that is not proxied (#395)", () => {
+  assert.equal(WEBRTC_IP_POLICY, "disable_non_proxied_udp");
+  const main = readFileSync(new URL("../packages/desktop/src/main.mjs", import.meta.url), "utf8");
+  // The handler for each web contents as it is created, up to the next function.
+  const created = main.slice(main.indexOf('app.on("web-contents-created"'), main.indexOf("function menu()"));
+  assert.match(created, /contents\.setWebRTCIPHandlingPolicy\(WEBRTC_IP_POLICY\)/u, "set on every web contents as it is created");
+});
+
+test("anything that would use a proxy goes to one that nothing answers, before a page loads (#395)", () => {
+  // Chromium's own bypass of loopback and link-local is taken away; only the host's 127.0.0.1 is left.
+  assert.deepEqual(SINK_PROXY, { proxyRules: "http://127.0.0.1:9", proxyBypassRules: "<-loopback>;127.0.0.1" });
+  const main = readFileSync(new URL("../packages/desktop/src/main.mjs", import.meta.url), "utf8");
+  const harden = main.slice(main.indexOf("async function harden("), main.indexOf("function menu()"));
+  assert.match(harden, /if \(!app\.commandLine\.hasSwitch\("proxy-server"\)\) await defaults\.setProxy\(SINK_PROXY\);/u);
+  // Hardening is awaited before the window opens.
+  assert.ok(main.indexOf("await harden(") > 0 && main.indexOf("await harden(") < main.indexOf("openWindow();"));
+});
+
+test("no name is looked up, except the host's 127.0.0.1, unless the person gives rules (#395)", () => {
+  assert.equal(NO_NAME_RESOLUTION, "MAP * ~NOTFOUND, EXCLUDE 127.0.0.1");
+  const main = readFileSync(new URL("../packages/desktop/src/main.mjs", import.meta.url), "utf8");
+  const appended = main.indexOf('app.commandLine.appendSwitch("host-resolver-rules", NO_NAME_RESOLUTION)');
+  assert.ok(appended > 0, "appended");
+  assert.match(main, /if \(!app\.commandLine\.hasSwitch\("host-resolver-rules"\)\) app\.commandLine\.appendSwitch\("host-resolver-rules", NO_NAME_RESOLUTION\);/u);
+  // Before Chromium is ready, which is when switches still count.
+  assert.ok(appended < main.indexOf("await app.whenReady()"));
+});
+

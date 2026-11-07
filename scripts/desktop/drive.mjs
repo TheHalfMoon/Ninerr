@@ -106,10 +106,11 @@ export async function preparePackage(archive, { home: homeName = "home", project
     const { chromium } = await import("playwright-core");
 
     /** Start the packaged app and wait for its editor to be ready. */
-    const launch = async () => {
+    /** `extraArgs` are given to the app too, for a control run. */
+    const launch = async (extraArgs = []) => {
       const port = await freePort();
       // Chromium's own log goes to stderr, so a failure to start says why.
-      const [command, commandArgs] = wrap(executable, [`--remote-debugging-port=${port}`, ...proxyArgs, "--enable-logging=stderr"]);
+      const [command, commandArgs] = wrap(executable, [`--remote-debugging-port=${port}`, ...proxyArgs, "--enable-logging=stderr", ...extraArgs]);
       const child = spawn(command, commandArgs, { env, stdio: ["ignore", "pipe", "pipe"] });
       running.add(child);
       let output = "";
@@ -187,7 +188,8 @@ export async function preparePackage(archive, { home: homeName = "home", project
 
     /** Start the binary itself with `args` and `extraEnv`, for checks that are not a session. */
     const spawnRaw = (args, extraEnv = {}) => {
-      const child = spawn(executable, [...args, ...proxyArgs], { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
+      const [command, commandArgs] = wrap(executable, [...args, ...proxyArgs]);
+      const child = spawn(command, commandArgs, { env: { ...env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
       running.add(child);
       child.once("exit", () => running.delete(child));
       return child;
