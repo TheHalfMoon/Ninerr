@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { NO_NAME_RESOLUTION, SINK_PROXY, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "../packages/desktop/src/policy.mjs";
+import { NO_NAME_RESOLUTION, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, sinkProxy, windowPreferences } from "../packages/desktop/src/policy.mjs";
 import { findElectron } from "../scripts/desktop/electron.mjs";
 import { closeServerAfterTest } from "./support/cleanup.mjs";
 import { desktopTestOptions, display, launchDesktop } from "./support/desktop.mjs";
@@ -46,6 +46,17 @@ test("the desktop window's rules: only the host's origin, and no Node in the pag
   assert.equal(preferences.nodeIntegrationInSubFrames, false);
   assert.equal(preferences.webviewTag, false);
   assert.equal(preferences.webSecurity, true);
+  assert.equal(preferences.disableBlinkFeatures, "WebBluetooth");
+});
+
+test("no page reaches a device: every chooser and Bluetooth pairing is refused", () => {
+  const main = readFileSync(new URL("../packages/desktop/src/main.mjs", import.meta.url), "utf8");
+  for (const event of ["select-hid-device", "select-serial-port", "select-usb-device", "select-bluetooth-device"]) {
+    const at = main.indexOf(`"${event}"`);
+    assert.ok(at > 0, `${event} is handled`);
+    assert.match(main.slice(at, at + 200), /event\.preventDefault\(\);\s*callback\(("")?\);/u, `${event} is refused`);
+  }
+  assert.match(main, /setBluetoothPairingHandler\(\(_details, callback\) => callback\(\{ confirmed: false \}\)\)/u);
 });
 
 test("the desktop app runs the editor in an isolated, sandboxed window that reaches only its host", { ...desktopTestOptions(), timeout: 120_000 }, async () => {
@@ -257,11 +268,16 @@ test("every web contents may send no WebRTC traffic that is not proxied (#395)",
 });
 
 test("anything that would use a proxy goes to one that nothing answers, before a page loads (#395)", () => {
-  // Chromium's own bypass of loopback and link-local is taken away; only the host's 127.0.0.1 is left.
-  assert.deepEqual(SINK_PROXY, { proxyRules: "http://127.0.0.1:9", proxyBypassRules: "<-loopback>;127.0.0.1" });
+  // Chromium's own bypass of loopback and link-local is taken away; only the host's own port is
+  // left direct, and the sink is a port the app holds, so no other account can answer as a proxy.
+  assert.deepEqual(sinkProxy(50123, 41234), { proxyRules: "http://127.0.0.1:50123", proxyBypassRules: "<-loopback>;127.0.0.1:41234" });
+  for (const bad of [0, 65536, 1.5, "9", undefined]) assert.throws(() => sinkProxy(bad, 41234), /not a port/u);
   const main = readFileSync(new URL("../packages/desktop/src/main.mjs", import.meta.url), "utf8");
   const harden = main.slice(main.indexOf("async function harden("), main.indexOf("function menu()"));
-  assert.match(harden, /if \(!app\.commandLine\.hasSwitch\("proxy-server"\)\) await defaults\.setProxy\(SINK_PROXY\);/u);
+  assert.match(harden, /const sinkPort = await openSink\(\);/u);
+  assert.match(harden, /if \(!app\.commandLine\.hasSwitch\("proxy-server"\)\) await defaults\.setProxy\(sinkProxy\(sinkPort, Number\(new URL\(origin\)\.port\)\)\);/u);
+  assert.match(harden, /setSpellCheckerDictionaryDownloadURL\(`http:\/\/127\.0\.0\.1:\$\{sinkPort\}\/`\)/u);
+  assert.doesNotMatch(main, /127\.0\.0\.1:9\b/u, "no fixed port another account could hold");
   // Hardening is awaited before the window opens.
   assert.ok(main.indexOf("await harden(") > 0 && main.indexOf("await harden(") < main.indexOf("openWindow();"));
 });

@@ -5,9 +5,10 @@
 // minimal, and it may not navigate away, open windows, attach webviews, request anything
 // but the host, send WebRTC traffic that is not proxied, or be granted any permission.
 import { BrowserWindow, Menu, app, dialog, session } from "electron";
+import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { prepareProjectsFolder, resolveProjectsFolder, startStudioHost } from "../../studio-host/src/index.ts";
-import { NO_NAME_RESOLUTION, SINK_PROXY, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, windowPreferences } from "./policy.mjs";
+import { NO_NAME_RESOLUTION, WEBRTC_IP_POLICY, editorOrigin, mayNavigate, mayRequest, sinkProxy, windowPreferences } from "./policy.mjs";
 
 const PRELOAD = fileURLToPath(new URL("./preload.cjs", import.meta.url));
 // A development run starts Electron's default app with this folder (process.defaultApp);
@@ -44,15 +45,42 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
+/** A loopback port of the app's own that closes every connection: where a proxy request goes. */
+async function openSink() {
+  const sink = createServer((socket) => socket.destroy());
+  await new Promise((resolve, reject) => {
+    sink.once("error", reject);
+    sink.listen(0, "127.0.0.1", resolve);
+  });
+  // Held for as long as the app runs; it never keeps the app from quitting.
+  sink.unref();
+  return sink.address().port;
+}
+
 async function harden(origin) {
   const defaults = session.defaultSession;
+  const sinkPort = await openSink();
   // Before any page loads: WebRTC's TCP, and anything else that would use a proxy, goes nowhere.
-  if (!app.commandLine.hasSwitch("proxy-server")) await defaults.setProxy(SINK_PROXY);
+  if (!app.commandLine.hasSwitch("proxy-server")) await defaults.setProxy(sinkProxy(sinkPort, Number(new URL(origin).port)));
   // Chromium's browser process fetches spell-check dictionaries from Google, outside any
   // page (so webRequest never sees it): spell checking is off, and the dictionary source
-  // is an address that is never contacted.
+  // is the sink, which answers nothing.
   defaults.setSpellCheckerEnabled(false);
-  defaults.setSpellCheckerDictionaryDownloadURL("http://127.0.0.1:9/");
+  defaults.setSpellCheckerDictionaryDownloadURL(`http://127.0.0.1:${sinkPort}/`);
+  // Device choosers and Bluetooth pairing are refused: no page may reach a device.
+  defaults.on("select-hid-device", (event, _details, callback) => {
+    event.preventDefault();
+    callback();
+  });
+  defaults.on("select-serial-port", (event, _ports, _contents, callback) => {
+    event.preventDefault();
+    callback("");
+  });
+  defaults.on("select-usb-device", (event, _details, callback) => {
+    event.preventDefault();
+    callback();
+  });
+  defaults.setBluetoothPairingHandler((_details, callback) => callback({ confirmed: false }));
   // No permission is ever granted: camera, microphone, location, notifications, MIDI,
   // clipboard reads, devices, screen capture.
   defaults.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -69,6 +97,11 @@ async function harden(origin) {
     contents.on("will-attach-webview", (event) => event.preventDefault());
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
     contents.setWebRTCIPHandlingPolicy(WEBRTC_IP_POLICY);
+    // Electron would otherwise pick the first Bluetooth device found by itself.
+    contents.on("select-bluetooth-device", (event, _devices, callback) => {
+      event.preventDefault();
+      callback("");
+    });
     contents.on("will-navigate", (event) => {
       if (!mayNavigate(origin, event.url)) event.preventDefault();
     });
