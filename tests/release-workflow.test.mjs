@@ -70,23 +70,26 @@ test("the release is a draft for an existing tag, and every collected file is si
   assert.doesNotMatch(all.collect, /pattern:|merge-multiple/);
 });
 
-test("what is signed is uploaded as built, before any test runs", () => {
-  // The bundle: built, verified and uploaded before the full gate runs any test.
-  const at = (text, needle) => {
-    const index = text.indexOf(needle);
-    assert.ok(index >= 0, `finds "${needle}"`);
-    return index;
-  };
-  const uploaded = at(all.build, "name: ninerr-release-evidence-${{ github.sha }}");
-  assert.ok(at(all.build, "run: npm ci --ignore-scripts") < at(all.build, "name: Build the release bundle"));
-  assert.ok(at(all.build, "name: Verify the bundle against its manifest") < uploaded);
-  assert.ok(uploaded < at(all.build, "npm run check 2>&1 | tee check.log"), "the bundle is uploaded before the checks run");
+test("what is signed is uploaded as built, before any later step runs", () => {
+  /** A job's steps, each as its own block of text, named or not. */
+  const steps = (text) => text.split(/^      - /m).slice(1);
+  // The bundle: the install, then build, verify and upload, before any other step runs.
+  const build = steps(all.build);
+  const install = build.findIndex((step) => step.startsWith("run: npm ci --ignore-scripts"));
+  assert.ok(install >= 0, "the build installs with npm ci --ignore-scripts");
+  const [made, verified, uploaded] = build.slice(install + 1, install + 4);
+  assert.ok(made?.startsWith("name: Build the release bundle\n"), "the bundle is built straight after the install");
+  assert.ok(verified?.startsWith("name: Verify the bundle against its manifest\n"), "then verified");
+  assert.match(uploaded ?? "", /^uses: actions\/upload-artifact@[0-9a-f]{40} # v4\.6\.2\n {8}with:\n {10}name: ninerr-release-evidence-\$\{\{ github\.sha \}\}\n/, "then uploaded");
   // Each archive: uploaded straight after packaging, before the smoke, journey or egress runs.
-  const desktop = read(".github/workflows/desktop.yml");
-  const steps = [...desktop.matchAll(/^      - name: (.+)$/gm)].map((match) => match[1]);
-  const upload = steps.indexOf("Upload the package");
-  assert.equal(steps[upload - 1], "Package", "the archive is uploaded straight after it is packaged");
-  assert.equal(desktop.split("\n      - name: Upload the package\n")[1].split("\n      - ")[0].match(/^        if:/m), null, "the upload has no condition of its own");
+  const desktop = steps(read(".github/workflows/desktop.yml"));
+  const packaged = desktop.findIndex((step) => step.startsWith("name: Package\n"));
+  assert.ok(packaged >= 0, "desktop.yml has its Package step");
+  const upload = desktop[packaged + 1] ?? "";
+  assert.ok(upload.startsWith("name: Upload the package\n"), "the archive is uploaded straight after it is packaged");
+  assert.doesNotMatch(upload, /^ {8}if:/m, "the upload has no condition of its own");
+  // A failed attempt leaves its artifact behind; a re-run must be able to replace it.
+  for (const step of [uploaded, upload]) assert.match(step ?? "", /^ {10}overwrite: true$/m, "a re-run replaces the earlier attempt's upload");
 });
 
 test("a pull request that changes the release path runs the unsigned pipeline", () => {

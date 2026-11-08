@@ -37,8 +37,9 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts
-      # The bundle is built, verified and uploaded before the full gate runs any test, so no test
-      # or dependency code that runs later in this job can change the files attest signs.
+      # The bundle is built, verified and uploaded straight after the install, before any later step
+      # runs repository, test or dependency code that could change the files attest signs. (The
+      # bundle's own build still runs the offline smoke; what it records is what is uploaded.)
       - name: Build the release bundle
         run: node scripts/release-bundle.mjs dist/release --source-commit "$GITHUB_SHA"
       - name: Verify the bundle against its manifest
@@ -48,6 +49,8 @@ jobs:
           name: ninerr-release-evidence-${{ github.sha }}
           path: dist/release
           if-no-files-found: error
+          # A re-run replaces what an earlier attempt of this job uploaded, before its checks failed.
+          overwrite: true
           retention-days: 90
       # The full gate includes the desktop shell's tests, set up exactly as in CI.
       - name: Cache the pinned Electron archive
