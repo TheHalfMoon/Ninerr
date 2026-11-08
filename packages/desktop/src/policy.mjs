@@ -47,15 +47,22 @@ export function mayRequest(origin, target, { devtools = false } = {}) {
 export const WEBRTC_IP_POLICY = "disable_non_proxied_udp";
 
 /**
- * The proxy every request that would use one is sent to: a port on this computer that nothing
- * answers (#395). WebRTC's TCP (TURN, ICE-TCP) is governed by no request rule and would go direct
- * or through the system's proxy; here it goes nowhere. Chromium never proxies loopback or
- * link-local addresses on its own, so that rule is taken away (<-loopback>), and only 127.0.0.1,
- * where the host is, is left direct: a link-local peer or 169.254.169.254 goes to the sink too.
+ * The proxy every request that would use one is sent to: a sink, a port on this computer the app
+ * itself holds, which closes every connection (#395). WebRTC's TCP (TURN, ICE-TCP) is governed by
+ * no request rule and would go direct or through the system's proxy; here it goes nowhere. The
+ * port is the app's own, chosen when it starts, so no other account on the computer can listen
+ * there and answer as a proxy. Chromium never proxies loopback or link-local addresses on its own,
+ * so that rule is taken away (<-loopback>), and only the host's own port on 127.0.0.1 is left
+ * direct: any other local port, a link-local peer or 169.254.169.254 goes to the sink too.
  * A person who starts the app with --proxy-server has chosen otherwise. A proxy given by name, or by
  * any address but 127.0.0.1, also needs their own --host-resolver-rules (NO_NAME_RESOLUTION).
  */
-export const SINK_PROXY = Object.freeze({ proxyRules: "http://127.0.0.1:9", proxyBypassRules: "<-loopback>;127.0.0.1" });
+export function sinkProxy(sinkPort, hostPort) {
+  for (const port of [sinkPort, hostPort]) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`not a port: ${port}`);
+  }
+  return Object.freeze({ proxyRules: `http://127.0.0.1:${sinkPort}`, proxyBypassRules: `<-loopback>;127.0.0.1:${hostPort}` });
+}
 
 /**
  * Every name Chromium would look up is not found, except 127.0.0.1, where the host is (#395). The
@@ -82,5 +89,7 @@ export function windowPreferences(preload, { devTools = false } = {}) {
     navigateOnDragDrop: false,
     spellcheck: false,
     safeDialogs: true,
+    // No page may reach a radio: Bluetooth devices are not offered (and every chooser is refused).
+    disableBlinkFeatures: "WebBluetooth",
   };
 }
