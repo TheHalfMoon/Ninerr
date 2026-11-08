@@ -63,12 +63,15 @@ Pointing at the public repositories at the recorded commits is not one of those 
 
 The `Release Evidence` workflow (`.github/workflows/release.yml`) has five jobs.
 - **`build`** runs on every trigger:
-  1. installs the dependencies with `npm ci --ignore-scripts` and runs the full `npm run check`;
+  1. installs the dependencies with `npm ci --ignore-scripts`;
   2. builds the bundle for that commit and verifies it against its manifest;
-  3. uploads it as the artifact `ninerr-release-evidence-<sha>`, kept for 90 days.
+  3. uploads it as the artifact `ninerr-release-evidence-<sha>`, kept for 90 days;
+  4. runs the full `npm run check`, which the job must pass.
+
+  The bundle is uploaded straight after the install, so no repository, test or dependency code run later in the job can change what is signed. That does not make the code that builds it trusted: building the bundle runs the offline smoke. A run whose checks fail still leaves its unsigned artifact, which nothing collects or signs.
 
   This job cannot request an OIDC token.
-- **`desktop`** is the Desktop workflow (`.github/workflows/desktop.yml`) itself, the same one every pull request runs. It packages each archive on its own platform's runner, smoke-tests it, and runs the release-candidate journey through it. It cannot request an OIDC token either.
+- **`desktop`** is the Desktop workflow (`.github/workflows/desktop.yml`) itself, the same one every pull request runs. It packages each archive on its own platform's runner and uploads it at once, before anything runs from it. It then smoke-tests the archive and runs the release-candidate journey through it. It cannot request an OIDC token either.
 - **`collect`** runs no repository or dependency code. It:
   1. downloads the bundle and the three archives with their manifests;
   2. checks each archive against the SHA-256 its manifest records;
@@ -98,7 +101,7 @@ On macOS, `grep Ninerr-darwin-arm64.zip SHA256SUMS | shasum -a 256 --check` does
 
 The trust anchor is the attestation on `MANIFEST.json`. `--verify` only checks that the files match the manifest. Someone who edits a file can edit the manifest to match, so `--verify` on its own proves nothing about origin.
 
-1. Download `ninerr-release-evidence-<sha>.tar.gz` from the release and unpack it, or download the `ninerr-release-evidence-<sha>` artifact from the workflow run for the tag.
+1. Download `ninerr-release-evidence-<sha>.tar.gz` from the release and unpack it. The `ninerr-release-evidence-<sha>` artifact of a workflow run is uploaded before that run's checks, so it exists even for a run that failed. Use it only from the run for the tag, whose every job passed, and only with the attestation check in step 2.
 2. Check that the manifest was signed by this repository's release workflow, for that tag:
 
    ```sh

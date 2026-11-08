@@ -60,6 +60,20 @@ jobs:
           set -uo pipefail
           node scripts/package-desktop.mjs --out dist/desktop 2>&1 | tee package.log
           exit "${PIPESTATUS[0]}"
+      # Uploaded as packaged, before the smoke, journey and egress runs execute anything: what
+      # collect checks and attest signs is these bytes, which no later step can change. A run
+      # whose tests fail never reaches collect, which needs this job to succeed; its artifact is kept
+      # for seven days, unsigned, and a re-run of the job replaces it.
+      - name: Upload the package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ninerr-desktop-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            dist/desktop/Ninerr-${{ matrix.target }}.*
+          if-no-files-found: error
+          # A re-run replaces what an earlier attempt of this job uploaded, before its tests failed.
+          overwrite: true
+          retention-days: 7
       - name: Smoke-test the packaged app
         id: smoke
         shell: bash
@@ -177,12 +191,3 @@ jobs:
             } catch {}
           }
           NODE
-      - name: Upload the package
-        if: success()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ninerr-desktop-${{ matrix.target }}-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            dist/desktop/Ninerr-${{ matrix.target }}.*
-          if-no-files-found: error
-          retention-days: 7

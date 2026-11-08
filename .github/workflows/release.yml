@@ -37,6 +37,21 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts
+      # The bundle is built, verified and uploaded straight after the install, before any later step
+      # runs repository, test or dependency code that could change the files attest signs. (The
+      # bundle's own build still runs the offline smoke; what it records is what is uploaded.)
+      - name: Build the release bundle
+        run: node scripts/release-bundle.mjs dist/release --source-commit "$GITHUB_SHA"
+      - name: Verify the bundle against its manifest
+        run: node scripts/release-bundle.mjs --verify dist/release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ninerr-release-evidence-${{ github.sha }}
+          path: dist/release
+          if-no-files-found: error
+          # A re-run replaces what an earlier attempt of this job uploaded, before its checks failed.
+          overwrite: true
+          retention-days: 90
       # The full gate includes the desktop shell's tests, set up exactly as in CI.
       - name: Cache the pinned Electron archive
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -67,16 +82,6 @@ jobs:
           echo "::notice title=Test totals::head=${{ github.event.pull_request.head.sha || github.sha }} tested=${{ github.sha }} ${totals:-no test summary found}"
           failing=$(grep -E '^ *not ok [0-9]+ - ' check.log 2>/dev/null | sed -E 's/^ *not ok [0-9]+ - //' | cut -c1-200 | head -n 20 | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | paste -sd ';' - || true)
           if [ -n "$failing" ]; then echo "::warning title=Failing tests::head=${{ github.event.pull_request.head.sha || github.sha }} ${failing}"; fi
-      - name: Build the release bundle
-        run: node scripts/release-bundle.mjs dist/release --source-commit "$GITHUB_SHA"
-      - name: Verify the bundle against its manifest
-        run: node scripts/release-bundle.mjs --verify dist/release
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ninerr-release-evidence-${{ github.sha }}
-          path: dist/release
-          if-no-files-found: error
-          retention-days: 90
 
   desktop:
     # The Desktop workflow itself: each archive is packaged on its own platform's runner,
