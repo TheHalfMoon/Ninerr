@@ -70,6 +70,25 @@ test("the release is a draft for an existing tag, and every collected file is si
   assert.doesNotMatch(all.collect, /pattern:|merge-multiple/);
 });
 
+test("what is signed is uploaded as built, before any test runs", () => {
+  // The bundle: built, verified and uploaded before the full gate runs any test.
+  const at = (text, needle) => {
+    const index = text.indexOf(needle);
+    assert.ok(index >= 0, `finds "${needle}"`);
+    return index;
+  };
+  const uploaded = at(all.build, "name: ninerr-release-evidence-${{ github.sha }}");
+  assert.ok(at(all.build, "run: npm ci --ignore-scripts") < at(all.build, "name: Build the release bundle"));
+  assert.ok(at(all.build, "name: Verify the bundle against its manifest") < uploaded);
+  assert.ok(uploaded < at(all.build, "npm run check 2>&1 | tee check.log"), "the bundle is uploaded before the checks run");
+  // Each archive: uploaded straight after packaging, before the smoke, journey or egress runs.
+  const desktop = read(".github/workflows/desktop.yml");
+  const steps = [...desktop.matchAll(/^      - name: (.+)$/gm)].map((match) => match[1]);
+  const upload = steps.indexOf("Upload the package");
+  assert.equal(steps[upload - 1], "Package", "the archive is uploaded straight after it is packaged");
+  assert.equal(desktop.split("\n      - name: Upload the package\n")[1].split("\n      - ")[0].match(/^        if:/m), null, "the upload has no condition of its own");
+});
+
 test("a pull request that changes the release path runs the unsigned pipeline", () => {
   const on = release.slice(release.indexOf("\non:\n"), release.indexOf("\npermissions:"));
   assert.match(on, /^  pull_request:\n    paths:\n/m);

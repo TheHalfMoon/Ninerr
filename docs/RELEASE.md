@@ -63,12 +63,15 @@ Pointing at the public repositories at the recorded commits is not one of those 
 
 The `Release Evidence` workflow (`.github/workflows/release.yml`) has five jobs.
 - **`build`** runs on every trigger:
-  1. installs the dependencies with `npm ci --ignore-scripts` and runs the full `npm run check`;
+  1. installs the dependencies with `npm ci --ignore-scripts`;
   2. builds the bundle for that commit and verifies it against its manifest;
-  3. uploads it as the artifact `ninerr-release-evidence-<sha>`, kept for 90 days.
+  3. uploads it as the artifact `ninerr-release-evidence-<sha>`, kept for 90 days;
+  4. runs the full `npm run check`, which the job must pass.
+
+  The bundle is uploaded before any test runs, so no test or dependency code run later in the job can change what is signed.
 
   This job cannot request an OIDC token.
-- **`desktop`** is the Desktop workflow (`.github/workflows/desktop.yml`) itself, the same one every pull request runs. It packages each archive on its own platform's runner, smoke-tests it, and runs the release-candidate journey through it. It cannot request an OIDC token either.
+- **`desktop`** is the Desktop workflow (`.github/workflows/desktop.yml`) itself, the same one every pull request runs. It packages each archive on its own platform's runner and uploads it at once, before anything runs from it. It then smoke-tests the archive and runs the release-candidate journey through it. It cannot request an OIDC token either.
 - **`collect`** runs no repository or dependency code. It:
   1. downloads the bundle and the three archives with their manifests;
   2. checks each archive against the SHA-256 its manifest records;
