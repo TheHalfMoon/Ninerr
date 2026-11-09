@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
-import { isCodePart, textLayerOf } from "@ninerr/document-model";
+import { TOKEN_NAME, TOKEN_TYPES, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
+import { styleDeclarationProblem } from "@ninerr/renderer";
+import { componentsOf, createComponent, detachInstance, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas/components";
 import { exportJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
@@ -76,6 +78,15 @@ function summary(node: any, document: any) {
 }
 
 class ToolError extends Error {}
+
+// The operations a shared builder makes; what it refuses is said to the agent as a tool error.
+function tokenOperation(build: () => unknown[]): unknown[] {
+  try {
+    return build();
+  } catch (error) {
+    throw new ToolError(error instanceof Error ? error.message : String(error));
+  }
+}
 
 const strings = (value: unknown, label: string): string[] => {
   if (!Array.isArray(value) || value.length === 0 || value.length > 500 || value.some((item) => typeof item !== "string")) throw new ToolError(`${label} must be a list of 1-500 node ids`);
@@ -228,6 +239,8 @@ const TOOLS: Tool[] = [
         "Every edit you make is one history transaction attributed to you; the person sees it live on the canvas and can undo it.",
         "Read with project_info, layer_tree, layer_children, layer_details, find_layers and selection; layer_code gives a layer as JSX.",
         "Edit with create_frame, set_text, rename_layers, set_styles, move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
+        "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
+        "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), reset_instance and detach_instance undo that. An instance's layers are its component's: change the component itself to change every instance.",
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
@@ -396,6 +409,216 @@ const TOOLS: Tool[] = [
         return true;
       });
       return edit(outermost.map((nodeId) => ({ type: "remove-node", nodeId })), outermost.length === 1 ? "Delete layer" : "Delete layers");
+    },
+  },
+  // ---------- design tokens and components (ADR-0004, ADR-0005) ----------
+  {
+    name: "design_tokens",
+    title: "Design tokens",
+    description: "The project's design system: its collections with their modes, and every token with its type, collection, value per mode and how many layer values use it. Layers use a token as var(--name) in a style value.",
+    inputSchema: object({}),
+    run: ({ session }) => {
+      const document = session.document as any;
+      const system = designSystemOf(document);
+      if (system === null) return { designSystem: null, note: "No design system yet: set_token creates one with its first token." };
+      return {
+        designSystem: system.id,
+        collections: system.props.collections,
+        tokens: system.props.tokens.map((token: any) => ({ ...token, uses: tokenUses(document, token.name).length })),
+      };
+    },
+  },
+  {
+    name: "set_token",
+    title: "Set a design token",
+    description: "Add a token, or change its values (one CSS value per mode id; another token as var(--other)). A new token needs its type and collection. Creates the design system with the first token. One undoable change.",
+    inputSchema: object({ name: { type: "string", maxLength: 129 }, type: { type: "string", enum: [...TOKEN_TYPES] }, collection: { type: "string", maxLength: 128 }, values: { type: "object", additionalProperties: { type: "string", maxLength: 1024 }, maxProperties: 32 }, description: { type: "string", maxLength: 2000 } }, ["name", "values"]),
+    run: ({ session, edit }, args) => {
+      const document = session.document as any;
+      if (typeof args.name !== "string" || args.values === null || typeof args.values !== "object" || Array.isArray(args.values)) throw new ToolError("give the token's name and its values by mode");
+      if (designSystemOf(document) === null) {
+        const props: any = newDesignSystemProps();
+        const collection = typeof args.collection === "string" ? args.collection : props.collections[0].id;
+        if (collection !== props.collections[0].id) throw new ToolError(`a new design system has one collection, ${props.collections[0].id}; add the token to it`);
+        props.tokens.push({ name: args.name, type: args.type, collection, values: args.values, ...(typeof args.description === "string" ? { description: args.description } : {}) });
+        const problem = designSystemProblem(props);
+        if (problem !== null) throw new ToolError(problem);
+        return edit([{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: `design-system-${randomUUID()}`, type: "design-system", props } }], `Set ${args.name}`);
+      }
+      return edit(tokenOperation(() => setToken(document, { name: args.name, type: args.type, collection: args.collection, values: args.values, description: args.description })), `Set ${args.name}`);
+    },
+  },
+  {
+    name: "add_token_mode",
+    title: "Add a token mode",
+    description: "Add a mode (Dark, say) to a collection of the design system; each of its tokens starts with its default value in the new mode.",
+    inputSchema: object({ collection: { type: "string", maxLength: 128 }, name: { type: "string", maxLength: 200 }, id: { type: "string", maxLength: 128 } }, ["collection", "name"]),
+    run: ({ session, edit }, args) => {
+      if (typeof args.name !== "string" || args.name.trim() === "") throw new ToolError("give the mode a name");
+      const id = typeof args.id === "string" ? args.id : args.name.toLowerCase().replace(/[^a-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "") || "mode";
+      return edit(tokenOperation(() => addMode(session.document, args.collection, { id, name: args.name.trim() })), `Add mode ${args.name.trim()}`);
+    },
+  },
+  {
+    name: "rename_token",
+    title: "Rename a design token",
+    description: "Rename a token and every use of it (style values, stylesheets, overrides, aliases) in one undoable change.",
+    inputSchema: object({ from: { type: "string", maxLength: 129 }, to: { type: "string", maxLength: 129 } }, ["from", "to"]),
+    run: ({ session, edit }, args) => edit(tokenOperation(() => renameToken(session.document, args.from, args.to)), `Rename ${args.from} to ${args.to}`),
+  },
+  {
+    name: "delete_token",
+    title: "Delete a design token",
+    description: "Delete a token. One in use needs what replaces it: { token: \"--other\" } or { literal: true } (its own value). The person approves it in Ninerr.",
+    inputSchema: object({ name: { type: "string", maxLength: 129 }, replacement: object({ token: { type: "string", maxLength: 129 }, literal: { type: "boolean" } }) }, ["name"]),
+    run: ({ session, edit }, args) => {
+      const replacement = args.replacement === undefined ? undefined : args.replacement?.token !== undefined ? { token: args.replacement.token } : args.replacement?.literal === true ? { literal: true } : undefined;
+      return edit(tokenOperation(() => deleteToken(session.document, args.name, replacement)), `Delete ${args.name}`);
+    },
+  },
+  {
+    name: "set_layer_modes",
+    title: "Set layers' token mode",
+    description: "Give layers a collection's mode (mode null for the collection's default): the canvas draws their tokens in that mode.",
+    inputSchema: object({ nodeIds: idList, collection: { type: "string", maxLength: 128 }, mode: { type: ["string", "null"], maxLength: 128 } }, ["nodeIds", "collection", "mode"]),
+    run: ({ session, edit }, args) => {
+      const document = session.document as any;
+      const system = designSystemOf(document);
+      const collection = system?.props.collections.find((entry: any) => entry.id === args.collection);
+      if (!collection) throw new ToolError(`${String(args.collection).slice(0, 80)} is not a collection of the design system`);
+      if (args.mode !== null && !collection.modes.some((mode: any) => mode.id === args.mode)) throw new ToolError(`${String(args.mode).slice(0, 80)} is not a mode of ${collection.id}`);
+      const operations = strings(args.nodeIds, "nodeIds").map((id) => {
+        const node = nodeOf(session, id);
+        const modes = { ...(node.props.modes ?? {}) };
+        if (args.mode === null || args.mode === collection.defaultMode) delete modes[collection.id];
+        else modes[collection.id] = args.mode;
+        return Object.keys(modes).length === 0 ? { type: "set-props", nodeId: node.id, unset: ["modes"] } : { type: "set-props", nodeId: node.id, set: { modes } };
+      });
+      return edit(operations, "Set the layers' mode");
+    },
+  },
+  {
+    name: "list_components",
+    title: "Components",
+    description: "The project's components: each with its name, properties (id, name, kind, default, options) and how many instances it has.",
+    inputSchema: object({}),
+    run: ({ session }) => {
+      const document = session.document as any;
+      const instances = Object.values(document.nodes).filter((node: any) => node.type === "component-instance") as any[];
+      return { components: componentsOf(document).map(({ id, name }) => ({ id, name, properties: document.nodes[id].props.properties ?? [], instances: instances.filter((node) => node.props.componentId === id).length })) };
+    },
+  },
+  {
+    name: "create_component",
+    title: "Make a layer a component",
+    description: "Make a layer a component: the component takes its place, with its look and children. Then place instances with insert_instance.",
+    inputSchema: object({ nodeId: { type: "string" }, name: { type: "string", maxLength: 200 } }, ["nodeId"]),
+    run: ({ session, edit }, args) => {
+      const id = `component-${randomUUID()}`;
+      return { componentId: id, ...(edit(tokenOperation(() => createComponent(session.document, args.nodeId, { id, name: args.name })), "Make a component") as object) };
+    },
+  },
+  {
+    name: "add_component_property",
+    title: "Add a component property",
+    description: "Give a component a property its instances set: text (a layer's text), boolean (whether a layer is shown) or variant (a class added to a layer, from options). targetNodeId is one of the component's own layers.",
+    inputSchema: object({ componentId: { type: "string" }, name: { type: "string", maxLength: 200 }, kind: { type: "string", enum: ["text", "boolean", "variant"] }, targetNodeId: { type: "string" }, options: { type: "array", items: { type: "string", maxLength: 200 }, maxItems: 64 }, default: { type: ["string", "boolean"] } }, ["componentId", "name", "kind", "targetNodeId"]),
+    run: ({ session, edit }, args) => {
+      const component = nodeOf(session, args.componentId);
+      if (component.type !== "component-definition") throw new ToolError("componentId must name a component");
+      if (typeof args.name !== "string" || args.name.trim() === "") throw new ToolError("give the property a name");
+      const target = nodeOf(session, args.targetNodeId);
+      const properties = Array.isArray(component.props.properties) ? component.props.properties : [];
+      const stem = `p-${args.name.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "") || "property"}`;
+      let id = stem;
+      for (let at = 2; properties.some((property: any) => property.id === id); at += 1) id = `${stem}-${at}`;
+      const options = Array.isArray(args.options) ? [...new Set(args.options as string[])] : [];
+      const property = args.kind === "boolean"
+        ? { id, name: args.name.trim(), kind: "boolean", default: typeof args.default === "boolean" ? args.default : true, target: { nodeId: target.id, field: "visible" } }
+        : args.kind === "variant"
+          ? { id, name: args.name.trim(), kind: "variant", default: typeof args.default === "string" ? args.default : options[0], options, target: { nodeId: target.id, field: "attributes.class" } }
+          : { id, name: args.name.trim(), kind: "text", default: typeof args.default === "string" ? args.default : typeof target.props.text === "string" ? target.props.text : "", target: { nodeId: target.id, field: "text" } };
+      return { propertyId: id, ...(edit([{ type: "set-props", nodeId: component.id, set: { name: typeof component.props.name === "string" && component.props.name !== "" ? component.props.name : "Component", properties: [...properties, property] } }], `Add property ${args.name.trim()}`) as object) };
+    },
+  },
+  {
+    name: "insert_instance",
+    title: "Place an instance",
+    description: "Place an instance of a component after a layer (or at the top level). It is drawn from the component; a change to the component reaches it.",
+    inputSchema: object({ componentId: { type: "string" }, afterId: { type: "string" } }, ["componentId"]),
+    run: ({ session, edit }, args) => {
+      const id = `instance-${randomUUID()}`;
+      return { instanceId: id, ...(edit(tokenOperation(() => insertInstance(session.document, args.componentId, { id, afterId: typeof args.afterId === "string" ? args.afterId : null })), "Place an instance") as object) };
+    },
+  },
+  {
+    name: "instance_layers",
+    title: "Layers of an instance",
+    description: "The layers an instance draws, its root first: each with the path and nodeId that set_instance_override takes, its label, its text, whether it is hidden, and the instance's own override for it.",
+    inputSchema: object({ instanceId: { type: "string" } }, ["instanceId"]),
+    run: ({ session }, args) => {
+      const instance = nodeOf(session, args.instanceId);
+      if (instance.type !== "component-instance") throw new ToolError("instanceId must name an instance");
+      return { layers: instanceLayers(session.document, instance.id).map((layer: any) => ({ path: layer.path, nodeId: layer.nodeId, label: layer.label, text: layer.text, hidden: layer.hidden, override: overrideFor(session.document, instance.id, layer)?.set ?? null })) };
+    },
+  },
+  {
+    name: "set_instance_values",
+    title: "Set an instance's property values",
+    description: "Set an instance's property values by property id (text: a string; boolean: true or false; variant: one of its options).",
+    inputSchema: object({ instanceId: { type: "string" }, values: { type: "object", additionalProperties: { type: ["string", "boolean"] }, maxProperties: 200 } }, ["instanceId", "values"]),
+    run: ({ session, edit }, args) => {
+      const instance = nodeOf(session, args.instanceId);
+      if (instance.type !== "component-instance") throw new ToolError("instanceId must name an instance");
+      const component = (session.document as any).nodes[instance.props.componentId];
+      const properties = new Map((component?.props.properties ?? []).map((property: any) => [property.id, property]));
+      if (args.values === null || typeof args.values !== "object" || Array.isArray(args.values)) throw new ToolError("values must map property ids to values");
+      for (const [id, value] of Object.entries(args.values)) {
+        const property: any = properties.get(id);
+        if (!property) throw new ToolError(`${id.slice(0, 80)} is not a property of its component`);
+        if (property.kind === "boolean" ? typeof value !== "boolean" : typeof value !== "string") throw new ToolError(`${property.name} takes ${property.kind === "boolean" ? "true or false" : "text"}`);
+        if (property.kind === "variant" && !property.options.includes(value)) throw new ToolError(`${property.name} is one of ${property.options.join(", ")}`);
+      }
+      return edit([{ type: "set-props", nodeId: instance.id, set: { propertyValues: { ...(instance.props.propertyValues ?? {}), ...args.values } } }], "Set the instance's values");
+    },
+  },
+  {
+    name: "set_instance_override",
+    title: "Change a layer inside an instance",
+    description: "Change one layer an instance draws, for that instance alone: its text, style (property: value; an empty value takes one off) or visible. path and nodeId come from instance_layers. The component is not changed.",
+    inputSchema: object({ instanceId: { type: "string" }, path: { type: "array", items: { type: "string" }, maxItems: 64 }, nodeId: { type: "string" }, text: { type: ["string", "null"], maxLength: 100000 }, style: { type: "object", additionalProperties: { type: "string", maxLength: 1024 }, maxProperties: 200 }, visible: { type: ["boolean", "null"] } }, ["instanceId", "nodeId"]),
+    run: ({ session, edit }, args) => {
+      const path = Array.isArray(args.path) ? args.path : [];
+      if (!instanceLayers(session.document, args.instanceId).some((layer: any) => layer.nodeId === args.nodeId && JSON.stringify(layer.path) === JSON.stringify(path))) throw new ToolError("that instance draws no such layer; take path and nodeId from instance_layers");
+      if (args.style !== undefined) {
+        for (const [name, value] of Object.entries(args.style as Record<string, string>)) {
+          const problem = value === "" ? null : styleDeclarationProblem(name, value);
+          if (problem !== null) throw new ToolError(problem);
+        }
+      }
+      return edit(tokenOperation(() => setInstanceOverride(session.document, args.instanceId, { path, nodeId: args.nodeId }, { text: args.text, style: args.style, visible: args.visible })), "Change a layer in the instance");
+    },
+  },
+  {
+    name: "reset_instance",
+    title: "Reset an instance's overrides",
+    description: "Take off an instance's overrides: of one layer (path and nodeId), or all; its property values stay.",
+    inputSchema: object({ instanceId: { type: "string" }, path: { type: "array", items: { type: "string" }, maxItems: 64 }, nodeId: { type: "string" } }, ["instanceId"]),
+    run: ({ session, edit }, args) => edit(tokenOperation(() => resetInstance(session.document, args.instanceId, typeof args.nodeId === "string" ? { path: Array.isArray(args.path) ? args.path : [], nodeId: args.nodeId } : null)), "Reset the instance's overrides"),
+  },
+  {
+    name: "detach_instance",
+    title: "Detach an instance",
+    description: "Write what an instance draws as real layers in its place, in one undoable change; it no longer follows its component.",
+    inputSchema: object({ instanceId: { type: "string" } }, ["instanceId"]),
+    run: ({ session, edit }, args) => {
+      let detached: any;
+      try {
+        detached = detachInstance(session.document, args.instanceId, () => `layer-${randomUUID()}`);
+      } catch (error) {
+        throw new ToolError(error instanceof Error ? error.message : String(error));
+      }
+      return { nodeId: detached.rootId, ...(edit(detached.operations, "Detach instance") as object) };
     },
   },
 ];
@@ -683,7 +906,17 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
     }
     return `${label === null ? kind : `${label} (${kind})`}${inside > 0 ? ` with ${inside} layer${inside === 1 ? "" : "s"} inside` : ""}`;
   };
-  const summary = `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`;
+  // A token's deletion: which token, how many layer values use it, and what takes its place, from
+  // the document; a name that is not a token name is shown as such, never as given.
+  const tokenSummary = () => {
+    const name = (args as any)?.name;
+    const shown = typeof name === "string" && TOKEN_NAME.test(name) ? name : "(not a token name)";
+    const uses = typeof name === "string" && TOKEN_NAME.test(name) ? tokenUses(document, name).length : 0;
+    const replacement = (args as any)?.replacement;
+    const by = typeof replacement?.token === "string" && TOKEN_NAME.test(replacement.token) ? `replaced by ${replacement.token}` : replacement?.literal === true ? "replaced by its own value" : "with nothing in its place";
+    return `Delete token ${shown}, used by ${uses} layer value${uses === 1 ? "" : "s"}, ${by}`;
+  };
+  const summary = toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`;
   const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
   // A switch to another project drops the request: say so, rather than that the person declined.
   if (decision.outcome === "denied") return context.session() === session ? "The person declined this change." : "The open project changed while the call was waiting.";

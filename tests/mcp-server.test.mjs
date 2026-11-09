@@ -104,7 +104,7 @@ test("the MCP protocol: initialize, tools/list, notifications and errors", async
     assert.equal((await mcp(token, "initialize", { protocolVersion: "1999-01-01" })).json.result.protocolVersion, "2025-06-18", "an unknown version gets the latest");
     assert.equal((await mcp(token, "notifications/initialized", undefined, { notification: true })).status, 202);
     const { tools } = (await mcp(token, "tools/list")).json.result;
-    assert.equal(tools.length, 18);
+    assert.equal(tools.length, 33);
     assertMCPToolSurface({ tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
     assert.deepEqual(tools.map((tool) => tool.name), [...MCP_TOOL_NAMES], "the server lists the catalog, in its order");
     for (const tool of tools) {
@@ -113,7 +113,7 @@ test("the MCP protocol: initialize, tools/list, notifications and errors", async
       assert.equal(tool.annotations.readOnlyHint, toolClass === "read", tool.name);
       assert.equal(tool.annotations.destructiveHint, toolClass === "consequential", tool.name);
     }
-    assert.deepEqual(tools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name), ["delete_layers"]);
+    assert.deepEqual(tools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name), ["delete_layers", "delete_token"]);
     assert.deepEqual(mcpToolDefinitions(), tools);
     assert.equal((await mcp(token, "resources/list")).json.error.code, -32601);
     const batch = await fetch(`${(await owner("GET", "/api/agents")).json.mcpUrl}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: "[]" });

@@ -9,6 +9,7 @@
     "node": "^22.18.0 || >=24.11.0"
   },
   "dependencies": {
+    "@ninerr/canvas": "0.0.0",
     "@ninerr/code-ir": "0.0.0",
     "@ninerr/collaboration": "0.0.0",
     "@ninerr/component-sources": "0.0.0",

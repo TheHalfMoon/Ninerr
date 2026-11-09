@@ -42,8 +42,8 @@ test("the MCP documentation matches the tool surface, classes and confirmation w
   assert.match(doc, new RegExp(`the ${classes.read.length} read-only tools`));
   assert.equal(CONFIRMATION_WAIT_MS, 50_000);
   assert.match(doc, /up to 50 seconds for an answer \(`CONFIRMATION_WAIT_MS`\)/);
-  assert.deepEqual(classes.consequential, ["delete_layers"]);
-  assert.match(doc, /\| consequential \| `delete_layers` \|/);
+  assert.deepEqual(classes.consequential, ["delete_layers", "delete_token"]);
+  assert.match(doc, /\| consequential \| `delete_layers`, `delete_token` \|/);
   assert.equal(classifyTool("not_a_tool"), "unknown");
   assert.deepEqual([...MCP_TRANSPORTS], ["stdio", "http"]);
   assert.match(doc, /`stdio` and `http`/);
@@ -78,7 +78,7 @@ test("the MCP documentation matches the tool surface, classes and confirmation w
   // The rename table maps each earlier name to a current tool; an earlier name is unknown now.
   const renamed = [...doc.matchAll(/^\| `([a-z_]+)` \| `([a-z_]+)` \|$/gm)];
   // Tools added after the rename have no earlier name.
-  const sinceRename = ["search_design_references", "get_design_reference"];
+  const sinceRename = ["search_design_references", "get_design_reference", "design_tokens", "set_token", "add_token_mode", "rename_token", "delete_token", "set_layer_modes", "list_components", "create_component", "add_component_property", "insert_instance", "instance_layers", "set_instance_values", "set_instance_override", "reset_instance", "detach_instance"];
   const renamedTools = MCP_TOOL_NAMES.filter((name) => !sinceRename.includes(name));
   assert.equal(renamed.length, renamedTools.length);
   assert.deepEqual(renamed.map((row) => row[2]).sort(), [...renamedTools].sort());
