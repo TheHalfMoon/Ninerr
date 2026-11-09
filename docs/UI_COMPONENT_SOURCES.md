@@ -13,8 +13,10 @@ Status (2026-11-09): **Source catalog and in-editor offline discovery implemente
 | Specialist | Vaul | Gesture-driven drawers |
 | Specialist | cmdk | Command palettes and searchable choices |
 | Specialist | NumberFlow | Localized animated numbers |
-| Gallery | Beautiful UI (Turbo), beautifului.dev | AI-native interface states, streaming, approval and agent workflows |
+| Gallery | Beautiful UI (Turbo), www.beautifului.dev | AI-native interface states, streaming, approval and agent workflows |
+| Gallery | Beautiful UI (Notchset), beautiful-ui.dev | React 19 components, charts, Base UI and Radix variants |
 | Gallery | RareUI (Swappy), rareui.in | Expressive buttons, motion and effects |
+| Gallery | Rare UI (Swami), rareui.com | Separate animated registry with Commons Clause restrictions |
 | Gallery | Magic UI | Animated UI and polished sections |
 | Gallery | Aceternity UI | Landing-page motion and visual layouts |
 | Marketplace | 21st.dev | Per-author React components, themes and templates |
@@ -23,8 +25,8 @@ The live curated metadata lives in `packages/studio-web/src/ui-sources.mjs` and 
 
 ### Source identity cautions
 
-- **Beautiful UI (Turbo)** is `https://www.beautifului.dev`, *not* the unrelated `https://beautiful-ui.dev` (Notchset). Both can be evaluated separately, but they are not interchangeable.
-- **RareUI (Swappy)** is `https://rareui.in` / `Codewithswappy/RareUI`, *not* the distinct `rareui.com` / `swamimalode07/rare-ui`. The latter has additional restrictions on component redistribution.
+- **Beautiful UI** names two distinct sources, **Turbo** (`https://www.beautifului.dev`) and **Notchset** (`https://beautiful-ui.dev`); both are now indexed separately. Notchset free items are MIT, while Pro items restrict distribution as a component collection.
+- **RareUI** also names two distinct sources, **Swappy** (`https://rareui.in`) and **Swami** (`https://rareui.com` / `swamimalode07/rare-ui`); both are indexed separately. Swami's registry uses MIT plus Commons Clause and attribution; do not treat this as unconditional permission to redistribute component kits.
 - 21st.dev is a marketplace: each author's item requires separate license and provenance review.
 - Free vs Pro items must be distinguished by *item*, not by the overall marketing site.
 

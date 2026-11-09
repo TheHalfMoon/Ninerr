@@ -6,9 +6,9 @@ import {
   searchUiComponentSources,
 } from "../packages/studio-web/src/ui-sources.mjs";
 
-test("all twelve requested UI sources are present with stable unique IDs", () => {
-  assert.equal(UI_COMPONENT_SOURCES.length, 12);
-  assert.equal(new Set(UI_COMPONENT_SOURCES.map(({ id }) => id)).size, 12);
+test("all twelve requested UI ecosystems and two same-name alternatives have stable unique IDs", () => {
+  assert.equal(UI_COMPONENT_SOURCES.length, 14);
+  assert.equal(new Set(UI_COMPONENT_SOURCES.map(({ id }) => id)).size, 14);
   assert.deepEqual(new Set(UI_COMPONENT_SOURCES.map(({ group }) => group)),
     new Set(["Foundation", "Specialist", "Gallery", "Marketplace"]));
   assert.equal(UI_COMPONENT_SOURCE_GROUPS[0], "All");
