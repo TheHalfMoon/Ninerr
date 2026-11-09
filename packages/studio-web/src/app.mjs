@@ -781,13 +781,15 @@ function openComponentsDialog() {
           }
           const style = el("textarea", { id: "instance-style", rows: 2, spellcheck: "false", "aria-label": "Its style in this instance, as CSS declarations" }, said);
           style.addEventListener("change", () => run((doc) => {
-            const wanted = parseDeclarations(style.value);
+            const wanted = parseDeclarations(style.value, overrideFor(doc, selected.id, target)?.set?.style ?? {});
             // Each property set before and now gone is taken off.
             const cleared = Object.fromEntries(Object.keys(overrideFor(doc, selected.id, target)?.set?.style ?? {}).filter((name) => !Object.hasOwn(wanted, name)).map((name) => [name, ""]));
             return setInstanceOverride(doc, selected.id, target, { style: { ...cleared, ...wanted } });
           }, "Change a layer's style in the instance"));
-          const shown = el("input", { id: "instance-shown", type: "checkbox", checked: set.visible !== false });
-          shown.addEventListener("change", () => run((doc) => setInstanceOverride(doc, selected.id, target, { visible: shown.checked ? null : false }), shown.checked ? "Show a layer in the instance" : "Hide a layer in the instance"));
+          // As the instance draws it now (a variant or a property may have hidden it); the person's
+          // choice is the last word, so it can show what a variant hid.
+          const shown = el("input", { id: "instance-shown", type: "checkbox", checked: layer ? !layer.hidden : set.visible !== false });
+          shown.addEventListener("change", () => run((doc) => setInstanceOverride(doc, selected.id, target, { visible: shown.checked }), shown.checked ? "Show a layer in the instance" : "Hide a layer in the instance"));
           const reset = el("button", { type: "button", id: "instance-reset-layer", disabled: Object.keys(set).length === 0 }, "Reset this layer");
           reset.addEventListener("click", () => run((doc) => resetInstance(doc, selected.id, target), "Reset a layer in the instance"));
           const main = el("button", { type: "button", id: "instance-edit-main" }, "Edit main component");
@@ -2668,7 +2670,7 @@ async function main() {
     onCommit: (operations, intent, meta) => commit(operations, intent, meta?.revision),
     // A layer inside the selected instance, picked by double-click: the Components dialog edits it.
     onTarget: (target) => {
-      if (target !== null) setStatus("Editing a layer inside the instance: open Components to change it for this instance.");
+      setStatus(target !== null ? "Editing a layer inside the instance: open Components to change it for this instance." : "");
       if (redrawComponents !== null && redrawComponents() === false) redrawComponents = null;
     },
     onSelect: (ids) => {

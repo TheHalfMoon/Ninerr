@@ -245,9 +245,13 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
   };
   const setSelection = (next) => {
     selection = document ? normalizeSelection(document, next) : [];
-    if (target !== null && !(selection.length === 1 && selection[0] === target.instanceId)) target = null;
+    // The target goes with its instance's selection, and with its layer: one the instance no
+    // longer draws (an Undo, an agent's change to the component) is no target.
+    const lost = target !== null && (!(selection.length === 1 && selection[0] === target.instanceId) || renderer.elementForTarget(target) === null);
+    if (lost) target = null;
     drawSelection();
     onSelect([...selection]);
+    if (lost) onTarget(null);
   };
   function drawSelection() {
     overlay.replaceChildren();
@@ -269,8 +273,9 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     }
     if (target !== null) {
       const element = renderer.elementForTarget(target);
-      if (element) {
-        const rect = worldRect(element);
+      const rect = element ? worldRect(element) : null;
+      // A layer hidden in this instance has no box to outline.
+      if (element && rect.width > 0 && rect.height > 0) {
         const topLeft = worldToScreen(viewport, rect);
         const box = owner.createElement("div");
         box.dataset.ninerrTarget = target.nodeId;
@@ -513,6 +518,11 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     setDocument(next) {
       releaseHeld();
       document = next;
+      // Another document (a project opened): no layer of the last one is a target.
+      if (target !== null) {
+        target = null;
+        onTarget(null);
+      }
       renderer.setTokens(compileTokens(next));
       renderer.render(next);
       sizeFrame();

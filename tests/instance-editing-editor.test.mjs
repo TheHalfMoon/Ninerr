@@ -81,12 +81,33 @@ test("double-click a layer inside an instance, change it for that instance, rese
     await page.locator("#instance-reset-layer").click();
     await waitRevision(page, 7);
     assert.deepEqual(await drawn(page, instanceId, "title"), { text: "Hello", color: "rgb(0, 0, 0)", display: "block" });
+    // A Shown property hides the title by default: the box says so, and ticking it shows the title
+    // in this instance, over the component's default.
+    const { document: now1 } = await ok(call("GET", "/api/document"), "document");
+    const componentId = Object.values(now1.nodes).find((node) => node.type === "component-definition").id;
+    await ok(call("POST", "/api/edit", { baseRevision: now1.revision, operations: [{ type: "set-props", nodeId: componentId, set: { properties: [{ id: "p-show", name: "Show title", kind: "boolean", default: false, target: { nodeId: "title", field: "visible" } }] } }], intent: "Add Shown" }), "shown property");
+    await waitRevision(page, 8);
+    assert.equal((await drawn(page, instanceId, "title")).display, "none");
+    await page.locator("#instance-shown").waitFor();
+    assert.equal(await page.locator("#instance-shown").isChecked(), false, "the box shows what the instance draws");
+    await page.locator("#instance-shown").check();
+    await waitRevision(page, 9);
+    assert.equal((await drawn(page, instanceId, "title")).display, "block", "shown in this instance though the component hides it");
     // By keyboard: the layer is picked from the list too.
     await page.locator("#instance-layer").selectOption({ label: "Title" });
     await page.locator("#instance-text").waitFor();
     // Edit main component: the component's own layer is selected, as a layer.
     await page.locator("#instance-edit-main").click();
     await page.waitForFunction(() => document.querySelector('#layers [role=treeitem][data-node-id="title"]')?.getAttribute("aria-selected") === "true");
+    // A picked layer the component no longer has is no target: the editing fields go.
+    await page.locator(`#layers [role=treeitem][data-node-id="${instanceId}"] > .row`).click();
+    await page.locator("#action-components").click();
+    await page.locator("#instance-layer").selectOption({ label: "Title" });
+    await page.locator("#instance-style").waitFor();
+    const { document: now2 } = await ok(call("GET", "/api/document"), "document");
+    await ok(call("POST", "/api/edit", { baseRevision: now2.revision, operations: [{ type: "remove-node", nodeId: "title" }], intent: "Remove title" }), "remove title");
+    await page.waitForFunction(() => document.getElementById("instance-style") === null);
+    assert.equal(await page.locator('[data-ninerr-target]').count(), 0);
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();

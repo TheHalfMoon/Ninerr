@@ -232,5 +232,31 @@ test("a layer inside an instance is changed as the instance's override: merged, 
   p.run(setInstanceOverride(p.document, "inst", { path: [], nodeId: "badge" }, { text: "Hot" }));
   p.run(resetInstance(p.document, "inst"));
   assert.deepEqual(p.document.nodes.inst.props.overrides, []);
-  for (const bad of ["color red", "color: ", "x{}: 1", "color: red}"]) assert.throws(() => parseDeclarations(bad), /is not a CSS declaration/u, bad);
+  for (const bad of ["color red", "color: "]) assert.throws(() => parseDeclarations(bad), /is not a CSS declaration/u, bad);
+  // What the canvas would not draw is refused, saying why, never dropped silently.
+  for (const bad of ["x{}: 1", "grid-row2: 1", "background: url(x.png)", "color: red}"]) assert.throws(() => parseDeclarations(bad), /not a style property the canvas draws|could fetch or run something/u, bad);
+  assert.deepEqual(parseDeclarations("--brand: #f00; color: var(--brand)"), { "--brand": "#f00", color: "var(--brand)" }, "a custom property themes one instance");
+  // A semicolon inside a string or brackets does not end a declaration; a value already held
+  // (an agent's) stands as written while the person changes another.
+  assert.deepEqual(parseDeclarations('font-family: "a;b", serif; color: red', { "font-family": '"a;b", serif' }), { "font-family": '"a;b", serif', color: "red" });
+  assert.throws(() => parseDeclarations('font-family: "a;b", serif'), /could fetch or run something, or hide a declaration/u, "the same value, newly written, is checked");
+  assert.deepEqual(parseDeclarations("background: f(a;b); color: red", { background: "f(a;b)" }), { background: "f(a;b)", color: "red" }, "nor one inside brackets");
+});
+
+test("a layer of a nested instance is overridden by its path, and the layer list knows what is hidden", async () => {
+  const { instanceLayers, setInstanceOverride } = await import("../packages/canvas/src/components.mjs");
+  const p = project();
+  p.run(createComponent(p.document, "card", { id: "comp", name: "Card" }));
+  p.run([
+    { type: "insert-node", parentId: "page", index: 1, node: { id: "row", type: "component-definition", props: { name: "Row", properties: [] } } },
+    { type: "insert-node", parentId: "row", index: 0, node: { id: "row-card", type: "component-instance", props: { componentId: "comp" } } },
+    { type: "insert-node", parentId: "page", index: 2, node: { id: "use", type: "component-instance", props: { componentId: "row" } } },
+  ]);
+  const layers = instanceLayers(p.document, "use");
+  const nestedTitle = layers.find((layer) => layer.nodeId === "title");
+  assert.deepEqual(nestedTitle.path, ["row-card"], "a layer of the nested instance is reached through it");
+  p.run(setInstanceOverride(p.document, "use", nestedTitle, { text: "Deep", visible: false }));
+  const drawn = expandInstance(p.document, "use").children[0].children[0];
+  assert.equal(drawn.props.text, "Deep");
+  assert.equal(instanceLayers(p.document, "use").find((layer) => layer.nodeId === "title").hidden, true);
 });

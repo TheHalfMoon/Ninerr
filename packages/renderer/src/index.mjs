@@ -69,6 +69,14 @@ const MAX_VALUE = 2_000;
 const STYLE_NAME = /^(--[A-Za-z0-9_-]{1,64}|-?[a-z][a-z-]{0,63})$/u;
 // Anything that could fetch, execute, or escape a declaration is refused outright.
 const UNSAFE_STYLE = /url\s*\(|image-set|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|[\\;{}<>]/iu;
+
+/** Why the renderer would not draw this style declaration, or null: the rule planElement applies. */
+export function styleDeclarationProblem(name, value) {
+  if (typeof name !== "string" || !STYLE_NAME.test(name)) return `${String(name).slice(0, 40)} is not a style property the canvas draws`;
+  if (typeof value !== "string" || value.trim() === "") return `${name} has no value`;
+  if (UNSAFE_STYLE.test(value)) return `${name}'s value could fetch or run something, or hide a declaration, and is never drawn`;
+  return null;
+}
 // A stylesheet that could fetch or execute is not drawn at all. It is judged with its escapes
 // decoded: a comment can hide a url( from a browser but never create one, so this raw view
 // holds every function and at-rule the browser would see. The frame's policy loads nothing but
@@ -912,6 +920,7 @@ export function createRenderer(root) {
     if (view === null) {
       for (const child of [...element.children]) child.remove();
       element.setAttribute("data-ninerr-stale", "");
+      element.removeAttribute("data-ninerr-component");
       return element;
     }
     const plan = planElement(view);

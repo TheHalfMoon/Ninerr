@@ -1,6 +1,6 @@
 // Components, instances and detaching (ADR-0005): the history operations the editor sends as one
 // transaction each. Pure functions over the document; the canvas draws the result.
-import { expandInstance } from "../../renderer/src/index.mjs";
+import { expandInstance, styleDeclarationProblem } from "../../renderer/src/index.mjs";
 
 const siblingsOf = (document, node) => (node.parentId === null ? document.rootIds : document.nodes[node.parentId].children);
 const ancestors = function* (document, node) {
@@ -129,12 +129,13 @@ export function instanceLayers(document, instanceId) {
   // Its root first: the component's root node, drawn as the instance itself.
   const componentId = document.nodes[instanceId].props.componentId;
   const rootNode = document.nodes[componentId];
-  const layers = [{ instanceId, path: [], nodeId: componentId, label: `${rootNode?.props?.name ?? "Component"} (its root)`, depth: 0, text: typeof view.props.text === "string" ? view.props.text : null }];
+  const hidden = (props) => props.attributes?.hidden !== undefined;
+  const layers = [{ instanceId, path: [], nodeId: componentId, label: `${rootNode?.props?.name ?? "Component"} (its root)`, depth: 0, text: typeof view.props.text === "string" ? view.props.text : null, hidden: hidden(view.props) }];
   const walk = (entry, depth) => {
     for (const child of entry.children) {
       const node = document.nodes[child.id];
       const label = node?.props?.name ?? (typeof child.props.text === "string" && child.props.text !== "" ? child.props.text : child.props.tag ?? child.type);
-      layers.push({ instanceId, path: child.chain.slice(1), nodeId: child.id, label: String(label).slice(0, 60), depth, text: typeof child.props.text === "string" ? child.props.text : null });
+      layers.push({ instanceId, path: child.chain.slice(1), nodeId: child.id, label: String(label).slice(0, 60), depth, text: typeof child.props.text === "string" ? child.props.text : null, hidden: hidden(child.props) });
       walk(child, depth + 1);
     }
   };
@@ -148,17 +149,46 @@ export function overrideFor(document, instanceId, { path, nodeId }) {
   return overrides.find((override) => override.nodeId === nodeId && samePath(override.path, path)) ?? null;
 }
 
-// A style written as CSS declarations ("color: red; padding: 4px") as a record. A declaration that
-// is not a property name and one value is refused, saying which.
-export function parseDeclarations(text) {
+// Declarations split at the semicolons that end them: not one inside a string or brackets.
+function declarationsOf(text) {
+  const parts = [];
+  let current = "";
+  let quote = null;
+  let depth = 0;
+  for (const character of String(text)) {
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === "(") depth += 1;
+    else if (character === ")") depth = Math.max(0, depth - 1);
+    else if (character === ";" && depth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim()).filter((part) => part !== "");
+}
+
+/**
+ * A style written as CSS declarations ("color: red; padding: 4px; --brand: blue") as a record. A
+ * declaration the canvas would not draw is refused, saying why, so nothing is dropped silently;
+ * one that `kept` already holds with that value stands as it is (an agent's, say).
+ */
+export function parseDeclarations(text, kept = {}) {
   const style = {};
-  for (const part of String(text).split(";")) {
-    const declaration = part.trim();
-    if (declaration === "") continue;
+  for (const declaration of declarationsOf(text)) {
     const colon = declaration.indexOf(":");
-    const name = colon === -1 ? "" : declaration.slice(0, colon).trim().toLowerCase();
+    const raw = colon === -1 ? "" : declaration.slice(0, colon).trim();
+    const name = raw.startsWith("--") ? raw : raw.toLowerCase();
     const value = colon === -1 ? "" : declaration.slice(colon + 1).trim();
-    if (!/^-?[a-z][a-z0-9-]*$/u.test(name) || value === "" || /[{}<>\\]/u.test(value)) throw new Error(`"${declaration.slice(0, 60)}" is not a CSS declaration`);
+    if (colon === -1 || name === "" || value === "") throw new Error(`"${declaration.slice(0, 60)}" is not a CSS declaration`);
+    if (kept[name] !== value) {
+      const problem = styleDeclarationProblem(name, value);
+      if (problem !== null) throw new Error(`"${declaration.slice(0, 60)}": ${problem}`);
+    }
     style[name] = value;
   }
   return style;
