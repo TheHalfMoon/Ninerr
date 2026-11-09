@@ -13,7 +13,7 @@ import {
   resolveTarget,
   sourceForRegistryUrl,
 } from "@ninerr/component-sources";
-import { TOKEN_NAME, cssValueProblem, designSystemOf, designSystemProblem, newDesignSystemProps } from "@ninerr/document-model";
+import { TOKEN_NAME, cssValueProblem, designSystemOf, designSystemProblem, newDesignSystemProps, tokenReferences } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
 
 // Bringing a registry item a person chose into their connected codebase (#405). Only the person,
@@ -43,7 +43,7 @@ export interface ComponentImportRequest {
   addTokens?: unknown;
 }
 
-type TokenStatus = "new" | "same" | "conflict" | "refused";
+type TokenStatus = "new" | "same" | "extended" | "conflict" | "refused";
 export interface PlannedToken { name: string; type: string; values: Record<string, string>; status: TokenStatus; reason?: string }
 
 type FileStatus = "new" | "same" | "conflict";
@@ -241,10 +241,18 @@ function tokenTypeOf(name: string): string {
 }
 
 /**
- * The item's CSS variables against the project's design system: its theme and light values go to
- * the design system's first collection's default mode, its dark values to that collection's Dark
- * mode (added if it has none). Returns each token's status, and the operations that add the new
- * ones in one transaction, or a reason they cannot be added.
+ * The item's CSS variables against the project's design system. Its theme and light values go to
+ * the first collection's default mode and its dark values to that collection's Dark mode (added
+ * if it has none). Each token is judged on its own:
+ * - new: added;
+ * - same: already there with these values;
+ * - extended: already there with the same values, and the item gives modes it lacks, which are
+ *   added (nothing it has is changed);
+ * - conflict: its name is taken with another value, and it is kept as it is;
+ * - refused: not a custom property name, not one safe CSS value, or an alias to a token that will
+ *   not be there.
+ * Returns the operations that make it so in one transaction, or why the whole set cannot be added
+ * (a limit or a cycle), which blocks only an import that adds tokens.
  */
 export function planItemTokens(document: any, cssVars: any): { tokens: PlannedToken[]; operations: unknown[]; problem: string | null } {
   const system = document === null ? null : designSystemOf(document);
@@ -253,8 +261,7 @@ export function planItemTokens(document: any, cssVars: any): { tokens: PlannedTo
   const darkMode = collection.modes.find((mode: any) => mode.id === "dark" || mode.name.toLowerCase() === "dark");
   const darkId = darkMode?.id ?? "dark";
   const byName = new Map<string, PlannedToken>();
-  const scopes: Array<[string, string]> = [["theme", collection.defaultMode], ["light", collection.defaultMode], ["dark", darkId]];
-  for (const [scope, mode] of scopes) {
+  for (const [scope, mode] of [["theme", collection.defaultMode], ["light", collection.defaultMode], ["dark", darkId]] as const) {
     for (const [key, value] of Object.entries(cssVars?.[scope] ?? {})) {
       const name = `--${key}`;
       const planned = byName.get(name) ?? { name, type: tokenTypeOf(key), values: {}, status: "new" as TokenStatus };
@@ -263,25 +270,59 @@ export function planItemTokens(document: any, cssVars: any): { tokens: PlannedTo
     }
   }
   const tokens = [...byName.values()];
+  // A design system whose default mode is its Dark one has no mode for an item's light values.
+  if (darkId === collection.defaultMode && Object.keys(cssVars?.dark ?? {}).length > 0 && (Object.keys(cssVars?.light ?? {}).length > 0 || Object.keys(cssVars?.theme ?? {}).length > 0)) {
+    for (const token of tokens) {
+      token.status = "refused";
+      token.reason = "the design system's default mode is its Dark one, so the item's light values have no mode to go in";
+    }
+    return { tokens, operations: [], problem: null };
+  }
   for (const planned of tokens) {
+    // A dark-only variable takes its dark value in the default mode too, so it is always defined.
+    if (planned.values[collection.defaultMode] === undefined && planned.values[darkId] !== undefined) planned.values[collection.defaultMode] = planned.values[darkId];
     const problem = !TOKEN_NAME.test(planned.name) ? "it is not a CSS custom property name" : Object.values(planned.values).map((value) => cssValueProblem(value)).find((entry) => entry !== null) ?? null;
     const existing = props.tokens.find((token: any) => token.name === planned.name);
     if (problem !== null) {
       planned.status = "refused";
       planned.reason = problem;
     } else if (existing) {
-      const same = Object.entries(planned.values).every(([mode, value]) => existing.values[mode] === value);
-      planned.status = same ? "same" : "conflict";
-      if (!same) planned.reason = `${planned.name} is already a token with another value; it is kept as it is`;
+      const shared = Object.keys(planned.values).filter((mode) => existing.values[mode] !== undefined);
+      const agrees = shared.every((mode) => existing.values[mode] === planned.values[mode]);
+      const lacking = Object.keys(planned.values).filter((mode) => existing.values[mode] === undefined);
+      planned.status = !agrees ? "conflict" : lacking.length === 0 ? "same" : "extended";
+      if (!agrees) planned.reason = `${planned.name} is already a token with another value; it is kept as it is`;
     }
   }
+  // An alias must name a token that will be there: the design system's own, or one this import
+  // adds. One that does not is refused, and so is anything that leans on it.
+  const present = new Set<string>(props.tokens.map((token: any) => token.name));
+  for (;;) {
+    const adding = new Set(tokens.filter((token) => token.status === "new").map((token) => token.name));
+    const missing = tokens.find((token) => (token.status === "new" || token.status === "extended") && Object.values(token.values).some((value) => tokenReferences(value).some((name) => !present.has(name) && !adding.has(name))));
+    if (missing === undefined) break;
+    const name = Object.values(missing.values).flatMap((value) => tokenReferences(value)).find((reference) => !present.has(reference) && !adding.has(reference));
+    missing.status = "refused";
+    missing.reason = `it refers to ${name}, which is not a token and is not one this import adds`;
+  }
   const added = tokens.filter((token) => token.status === "new");
+  const extended = tokens.filter((token) => token.status === "extended");
   // With no document (a plan made apart from a project) there is no design system to add to.
-  if (added.length === 0 || document === null) return { tokens, operations: [], problem: null };
-  if (added.some((token) => token.values[darkId] !== undefined) && !darkMode) {
+  if ((added.length === 0 && extended.length === 0) || document === null) return { tokens, operations: [], problem: null };
+  const needsDark = [...added, ...extended].some((token) => token.values[darkId] !== undefined) && !darkMode;
+  if (needsDark) {
     collection.modes.push({ id: darkId, name: "Dark" });
-    // Every token already in the collection takes its default value in the new mode.
-    for (const token of props.tokens) if (token.collection === collection.id && token.values[collection.defaultMode] !== undefined) token.values[darkId] = token.values[collection.defaultMode];
+    // A token already there takes the item's dark value when the item agrees with it, and its own
+    // default value otherwise, until the person changes it.
+    for (const token of props.tokens) {
+      if (token.collection !== collection.id || token.values[collection.defaultMode] === undefined) continue;
+      const fromItem = byName.get(token.name);
+      token.values[darkId] = fromItem && (fromItem.status === "extended" || fromItem.status === "same") && fromItem.values[darkId] !== undefined ? fromItem.values[darkId] : token.values[collection.defaultMode];
+    }
+  }
+  for (const token of extended) {
+    const target = props.tokens.find((entry: any) => entry.name === token.name);
+    for (const [mode, value] of Object.entries(token.values)) if (target.values[mode] === undefined && collection.modes.some((entry: any) => entry.id === mode)) target.values[mode] = value;
   }
   for (const token of added) {
     const values = { ...token.values };
@@ -290,8 +331,10 @@ export function planItemTokens(document: any, cssVars: any): { tokens: PlannedTo
   }
   const problem = designSystemProblem(props);
   if (problem !== null) return { tokens, operations: [], problem };
+  let id = `design-system-${sha256(JSON.stringify(props)).slice(0, 12)}`;
+  for (let suffix = 2; system === null && Object.hasOwn(document.nodes, id); suffix += 1) id = `design-system-${sha256(JSON.stringify(props)).slice(0, 12)}-${suffix}`;
   const operations = system === null
-    ? [{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: `design-system-${sha256(JSON.stringify(props)).slice(0, 12)}`, type: "design-system", props } }]
+    ? [{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id, type: "design-system", props } }]
     : [{ type: "set-props", nodeId: system.id, set: { collections: props.collections, tokens: props.tokens } }];
   return { tokens, operations, problem: null };
 }
@@ -358,7 +401,8 @@ export function planComponentImport(folder: string, request: ComponentImportRequ
   });
   const tokens = { theme: Object.keys(item.cssVars.theme ?? {}), light: Object.keys(item.cssVars.light ?? {}), dark: Object.keys(item.cssVars.dark ?? {}) };
   const itemTokens = planItemTokens(document, item.cssVars);
-  if (itemTokens.problem !== null) blockers.push(`Its tokens cannot be added to the design system: ${itemTokens.problem}`);
+  // The tokens block only an import that adds them: without, the files come in alone.
+  if (itemTokens.problem !== null && request?.addTokens === true) blockers.push(`Its tokens cannot be added to the design system: ${itemTokens.problem}. Import without adding its tokens, or add them in Tokens.`);
   const addingTokens = request?.addTokens === true && itemTokens.operations.length > 0;
   // The plan covers the tokens too: a design system that changed since is a changed plan.
   const token = sha256(JSON.stringify([folder, sha256(request.item as string), origin.label, decision, files, layout, itemTokens.tokens, addingTokens]));

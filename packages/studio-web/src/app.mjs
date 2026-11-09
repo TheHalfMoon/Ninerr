@@ -765,7 +765,11 @@ function componentImportSection(close) {
     if (!chosen) return;
     fileName = chosen.name;
     text.value = await chosen.text();
+    planView.replaceChildren();
   });
+  // A plan is for the choices it was made with: changing one takes it down, to be reviewed again.
+  for (const control of [text, url, free, addTokens]) control.addEventListener("change", () => planView.replaceChildren());
+  text.addEventListener("input", () => planView.replaceChildren());
   const request = () => ({
     item: text.value,
     origin: url.value.trim() !== "" ? { url: url.value.trim() } : fileName !== null ? { fileName } : undefined,
@@ -807,11 +811,15 @@ function componentImportSection(close) {
         try {
           const written = await state.client.post("/api/components/apply", { ...body, token: plan.token }, { project });
           if (written.tokens) applyChange(written.tokens);
+          const filesSaid = written.written.length === 0 ? "No new files." : `Created ${written.written.length} file${written.written.length === 1 ? "" : "s"}: ${written.written.join(", ")}.`;
+          const tokensSaid = written.tokens
+            ? ` ${written.tokens.intent}: Undo takes the tokens back, but not the files; delete those yourself if you change your mind.`
+            : written.tokenError ? ` Its tokens were not added: ${written.tokenError}` : written.written.length > 0 ? " Undo does not remove files; delete them yourself if you change your mind." : "";
           planView.replaceChildren(
-            el("p", { id: "component-import-done" }, `Created ${written.written.length} file${written.written.length === 1 ? "" : "s"}: ${written.written.join(", ")}. Undo does not remove files; delete them yourself if you change your mind.`),
+            el("p", { id: "component-import-done", role: written.tokenError ? "alert" : null }, filesSaid + tokensSaid),
             ...(written.components.length === 0 ? [] : [bringIn(written)]),
           );
-          setStatus(`Imported ${plan.item.name} into the codebase.`);
+          setStatus(written.tokens ? `Imported ${plan.item.name}: ${written.tokens.intent}.` : `Imported ${plan.item.name} into the codebase.`);
         } catch (failure) {
           create.disabled = false;
           if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
@@ -827,8 +835,9 @@ function componentImportSection(close) {
       el("ul", { id: "component-import-files", "aria-label": "Files the import would create" }, plan.files.map((entry) => el("li", { "data-status": entry.status }, `${entry.path} (${entry.status === "new" ? "new" : entry.status === "same" ? "already there" : "exists with other content"})`))),
       ...list("component-import-dependencies", "Packages to add with your package manager (Ninerr installs nothing):", install),
       ...list("component-import-registry", "Other items it needs, to import the same way:", [...plan.registryDependencies]),
-      ...list("component-import-tokens", "Design tokens it defines:", plan.designTokens.map((entry) => `${entry.name} (${entry.type}): ${entry.status === "new" ? "new" : entry.status === "same" ? "already in the design system" : entry.status === "conflict" ? "kept: the design system has another value" : `refused: ${entry.reason}`}`)),
+      ...list("component-import-tokens", "Design tokens it defines:", plan.designTokens.map((entry) => `${entry.name} (${entry.type}): ${entry.status === "new" ? "new" : entry.status === "same" ? "already in the design system" : entry.status === "extended" ? "already there; its missing modes are added" : entry.status === "conflict" ? "kept: the design system has another value" : `refused: ${entry.reason}`}`)),
       ...list("component-import-blockers", "This import cannot go ahead:", plan.blockers),
+      ...(plan.appliable || plan.blockers.length > 0 ? [] : [el("p", { id: "component-import-nothing" }, body.addTokens ? "Nothing new to import: its files and tokens are already there." : "Nothing new to import: its files are already there, and adding its tokens is off.")]),
       el("div", { class: "actions" }, create),
     );
   };

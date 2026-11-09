@@ -418,9 +418,15 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       // The item's new tokens join the design system as one transaction, undone by Undo; the
       // files are already written, and Undo does not remove them.
       if (tokenOperations.length === 0) return applied;
-      const added = applied.plan.designTokens.filter((entry) => entry.status === "new").length;
-      const event = current.edit(owner, { baseRevision: current.revision, operations: tokenOperations, intent: `Add ${added} token${added === 1 ? "" : "s"} from ${applied.plan.item.name}`, tool: "ninerr:components" });
-      return { ...applied, tokens: event };
+      const added = applied.plan.designTokens.filter((entry) => entry.status === "new" || entry.status === "extended").length;
+      try {
+        const event = current.edit(owner, { baseRevision: current.revision, operations: tokenOperations, intent: `Add ${added} token${added === 1 ? "" : "s"} from ${applied.plan.item.name}`, tool: "ninerr:components" });
+        return { ...applied, tokens: event };
+      } catch (error) {
+        // The files are written; the tokens were not added. Both are said, so a retry is not
+        // taken for a changed codebase.
+        return { ...applied, tokenError: error instanceof Error ? error.message : String(error) };
+      }
     },
     "POST /api/import/discard": (body) => {
       imports.discard(body?.proposalId);

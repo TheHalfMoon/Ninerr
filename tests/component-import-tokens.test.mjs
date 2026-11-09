@@ -94,3 +94,59 @@ test("without addTokens nothing joins the design system; a theme item with only 
   assert.equal(stale.status, 409);
   assert.equal(stale.json.error.code, "plan-changed");
 });
+
+test("one bad token is refused alone: its files still come in, and without adding tokens nothing blocks", async (t) => {
+  const { call, documentNow } = await setup(t);
+  // --sidebar-ring aliases --ring, which this item refuses (unbalanced), so it is refused too.
+  const vars = { light: { ring: "calc(1px", "sidebar-ring": "var(--ring)", accent: "#f0a" } };
+  const plan = await ok(call("POST", "/api/components/plan", { item: item(vars), addTokens: true }), "plan");
+  assert.deepEqual(plan.designTokens.map(({ name, status }) => [name, status]), [["--ring", "refused"], ["--sidebar-ring", "refused"], ["--accent", "new"]]);
+  assert.match(plan.designTokens[1].reason, /refers to --ring, which is not a token and is not one this import adds/u);
+  assert.equal(plan.appliable, true, "the good token and the files still come in");
+  await ok(call("POST", "/api/components/apply", { item: item(vars), addTokens: true, token: plan.token }), "apply");
+  const system = Object.values((await documentNow()).nodes).find((node) => node.type === "design-system");
+  assert.deepEqual(system.props.tokens.map((token) => token.name), ["--accent"]);
+  // A whole-set problem (an alias cycle among the item's own tokens) blocks only an import that adds them.
+  const cycle = { light: { a: "var(--b)", b: "var(--a)" } };
+  const blocked = await ok(call("POST", "/api/components/plan", { item: item(cycle, { name: "loop" }), addTokens: true }), "cycle with tokens");
+  assert.match(blocked.blockers.join(" "), /cannot be added to the design system: .*cycle.*Import without adding its tokens/u);
+  const fine = await ok(call("POST", "/api/components/plan", { item: item(cycle, { name: "loop" }) }), "cycle without tokens");
+  assert.deepEqual(fine.blockers, []);
+});
+
+test("the item's dark values fill the modes an agreeing token lacks; adding Dark never turns a token white-on-white", async (t) => {
+  const { call, documentNow, edit } = await setup(t);
+  const { rootIds } = await documentNow();
+  await edit([{ type: "insert-node", parentId: null, index: rootIds.length, node: { id: "ds", type: "design-system", props: { name: "Site", collections: [{ id: "base", name: "Base", modes: [{ id: "default", name: "Default" }], defaultMode: "default" }], tokens: [{ name: "--background", type: "color", collection: "base", values: { default: "white" } }, { name: "--keep", type: "color", collection: "base", values: { default: "grey" } }] } } }]);
+  const vars = { light: { background: "white", foreground: "black" }, dark: { background: "black", foreground: "white" } };
+  const plan = await ok(call("POST", "/api/components/plan", { item: item(vars), addTokens: true }), "plan");
+  assert.deepEqual(plan.designTokens.map(({ name, status }) => [name, status]), [["--background", "extended"], ["--foreground", "new"]]);
+  await ok(call("POST", "/api/components/apply", { item: item(vars), addTokens: true, token: plan.token }), "apply");
+  const tokens = Object.fromEntries((await documentNow()).nodes.ds.props.tokens.map((token) => [token.name, token.values]));
+  assert.deepEqual(tokens["--background"], { default: "white", dark: "black" }, "its Dark value comes from the item, which agrees with it");
+  assert.deepEqual(tokens["--foreground"], { default: "black", dark: "white" });
+  assert.deepEqual(tokens["--keep"], { default: "grey", dark: "grey" }, "a token the item does not name takes its own default in Dark");
+});
+
+test("a design system whose default mode is Dark has no mode for light values; a Dark mode under another id is used", async (t) => {
+  const { call, documentNow, edit } = await setup(t);
+  const { rootIds } = await documentNow();
+  await edit([{ type: "insert-node", parentId: null, index: rootIds.length, node: { id: "ds", type: "design-system", props: { name: "Site", collections: [{ id: "base", name: "Base", modes: [{ id: "night", name: "Dark" }, { id: "day", name: "Day" }], defaultMode: "night" }], tokens: [] } } }]);
+  const plan = await ok(call("POST", "/api/components/plan", { item: item({ light: { x: "red" }, dark: { x: "blue" } }), addTokens: true }), "plan");
+  assert.equal(plan.designTokens[0].status, "refused");
+  assert.match(plan.designTokens[0].reason, /default mode is its Dark one/u);
+  const { revision } = await documentNow();
+  await ok(call("POST", "/api/edit", { baseRevision: revision, operations: [{ type: "set-props", nodeId: "ds", set: { collections: [{ id: "base", name: "Base", modes: [{ id: "day", name: "Day" }, { id: "night", name: "Dark" }], defaultMode: "day" }] } }], intent: "test" }), "default day");
+  const second = await ok(call("POST", "/api/components/plan", { item: item({ light: { x: "red" }, dark: { x: "blue" } }), addTokens: true }), "plan");
+  assert.deepEqual(second.designTokens[0].values, { day: "red", night: "blue" }, "the existing Dark mode, by name, is used");
+});
+
+test("a plan made to add tokens is not applied without them, nor one made without them with them", async (t) => {
+  const { app, call } = await setup(t);
+  const body = { item: item({ light: { pill: "green" } }), addTokens: true };
+  const plan = await ok(call("POST", "/api/components/plan", body), "plan");
+  assert.equal((await call("POST", "/api/components/apply", { ...body, addTokens: false, token: plan.token })).status, 409);
+  const without = await ok(call("POST", "/api/components/plan", { ...body, addTokens: false }), "plan without");
+  assert.equal((await call("POST", "/api/components/apply", { ...body, token: without.token })).status, 409);
+  assert.equal(existsSync(join(app, "components")), false, "neither wrote anything");
+});
