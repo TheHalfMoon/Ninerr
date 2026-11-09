@@ -87,7 +87,7 @@ Only the person, through the editor's session, plans or applies an import; agent
 
 - **Fetching from a registry.** A pinned, per-item fetch from the catalog's licensed registries needs network access the host does not have today, and a decision on how a person grants it.
 
-- **Component instances and variants.** Accepted with schema v2 (ADR-0005); the renderer does not yet expand instances.
+- **Imported components as Ninerr components.** Components, instances, properties and variants now exist (ADR-0005): in **Components** a layer becomes a component and instances of it are drawn from it. An imported item's component is still brought in as layers; making it a component is one more step for the person.
 - **Interactive preview.** A React component cannot run on the script-free canvas. A preview needs an isolated, permission-scoped runner with React available offline: a separate decision.
 - **Updating an imported item.** Today a changed upstream item conflicts with the created file. A three-way update against the imported version can reuse `threeWayMerge` from `@ninerr/code-ir`.
 - **Aceternity UI and 21st.dev.** Their terms grant no license to import; that needs the publishers' written permission.

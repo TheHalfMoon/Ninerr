@@ -9,6 +9,7 @@ import { accessibilityTreeFromDesignDoc, auditAccessibility } from "../packages/
 import { exportJsx, importJsx } from "../packages/studio-host/src/index.ts";
 import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
 import { browserTestOptions } from "./support/browser.mjs";
+import { client, ok } from "./support/host-api.mjs";
 import { layerCount, openEditor, waitRevision } from "./support/editor.mjs";
 import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
 
@@ -923,6 +924,39 @@ test("the Tokens dialog audits clean, with no design system and with tokens in t
     await waitRevision(page, 3);
     await page.locator('[data-token-row="--brand"]').waitFor();
     await audit(page, "the Tokens dialog with a token in two modes");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the Components dialog audits clean, for a layer, a component and an instance", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-components-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("components");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    const call = client(host.url, host.token);
+    const { document } = await ok(call("GET", "/api/document"), "document");
+    await ok(call("POST", "/api/edit", { baseRevision: document.revision, operations: [{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: "card", type: "frame", props: { name: "Card", text: "Hi", style: { width: "120px", height: "40px" } } } }], intent: "Add card" }), "card");
+    await waitRevision(page, 1);
+    await page.locator('#layers [role=treeitem][data-node-id="card"] > .row').click();
+    await page.locator("#action-components").click();
+    await page.locator("#component-create").waitFor();
+    await audit(page, "the Components dialog for a layer");
+    await page.locator("#component-create").click();
+    await waitRevision(page, 2);
+    await page.locator("#property-add").waitFor();
+    await audit(page, "the Components dialog for a component");
+    await page.locator("#components-list button").first().click();
+    await waitRevision(page, 3);
+    await page.locator("#components-detach").waitFor();
+    await audit(page, "the Components dialog for an instance");
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();

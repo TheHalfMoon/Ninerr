@@ -464,7 +464,7 @@ export function propertyRenameProblem(before, after) {
 function referenceProblem(nodes, node) {
   if (node.type !== "component-instance") return null;
   const component = Object.hasOwn(nodes, node.props.componentId) ? nodes[node.props.componentId] : undefined;
-  if (component === undefined) return `its component ${shown(node.props.componentId)} does not exist`;
+  if (component === undefined) return `an instance${typeof node.props.name === "string" ? ` (${shown(node.props.name)})` : ""} still uses its component ${shown(node.props.componentId)}, which does not exist: detach or delete its instances before deleting a component`;
   if (component.type !== "component-definition") return `its component ${shown(node.props.componentId)} is not a component`;
   return null;
 }
