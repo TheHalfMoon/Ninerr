@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
 import { join, sep } from "node:path";
 import { exportedComponents } from "@ninerr/code-ir";
 import {
@@ -24,6 +24,14 @@ export const MAX_COMPONENT_REQUEST_BYTES = REGISTRY_ITEM_LIMITS.bytes * 6 + 64 *
 const MAX_PROJECT_FILE_BYTES = 256 * 1024;
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+// Characters that end a line in JavaScript or CSS, or are not printable: never in a notice.
+const LINE_BREAKING = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu;
+// The MIT permission notice, which travels with every copy of MIT-licensed code.
+const MIT_PERMISSION = [
+  "Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:",
+  "The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.",
+  "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.",
+];
 
 export interface ComponentImportRequest {
   item?: unknown;
@@ -38,7 +46,7 @@ export interface ComponentImportPlan {
   token: string;
   item: { name: string; type: string; title: string | null; description: string | null; author: string | null };
   origin: string;
-  source: { id: string; name: string; license: string; importPolicy: string } | null;
+  source: { id: string; name: string; license: string; importPolicy: string; copyright: string | null } | null;
   decision: { allowed: boolean; reason: string; attribution: string | null };
   primitives: { family: string; evidence: readonly string[] };
   project: { family: string; layout: Record<string, string>; layoutFrom: string };
@@ -81,7 +89,7 @@ function readOrigin(origin: unknown): { url: string | null; label: string } {
     return { url: parsed.href, label: parsed.href };
   }
   if (fileName !== undefined && fileName !== null && fileName !== "") {
-    if (typeof fileName !== "string" || fileName.length > 200 || /[\u0000-\u001f\u007f/\\]/u.test(fileName)) throw new StudioError(400, "invalid-origin", "the file name must be a plain name of at most 200 characters");
+    if (typeof fileName !== "string" || fileName.length > 200 || /[\u0000-\u001f\u007f-\u009f\u2028\u2029/\\]/u.test(fileName)) throw new StudioError(400, "invalid-origin", "the file name must be a plain name of at most 200 characters");
     return { url: null, label: `the file ${fileName}` };
   }
   return { url: null, label: "an item you gave" };
@@ -133,20 +141,42 @@ function parseJsonObject(text: string | null): Record<string, any> | null {
 }
 
 /**
+ * Where `@/` points in the codebase, from tsconfig.json or jsconfig.json `paths` (`"@/*":
+ * ["./src/*"]` is `src`). Comments in those files are allowed, so the entry is matched, not parsed.
+ */
+function aliasRoot(folder: string): string {
+  for (const name of ["tsconfig.json", "jsconfig.json"]) {
+    const text = readProjectFile(folder, name);
+    if (text === null) continue;
+    const match = /"@\/\*"\s*:\s*\[\s*"(?:\.\/)?([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*)\/\*"/u.exec(text);
+    if (match) return match[1];
+    if (/"@\/\*"\s*:\s*\[\s*"(?:\.\/)?\*"/u.test(text)) return "";
+  }
+  return "";
+}
+
+/**
  * The folders an item's files go in. components.json's aliases are read when the connected folder
- * has one: `@/components` is the folder's components directory. Anything that is not a plain
- * relative folder keeps the default, so the plan always shows a path inside the codebase.
+ * has one: `@/components` is the components folder under wherever `@/` points (tsconfig `paths`,
+ * so `src/components` in a src project). An alias of any other form keeps the default folder, and
+ * the plan says so: the plan always shows a path inside the codebase.
  */
 function projectLayout(folder: string): { layout: Record<string, string>; from: string } {
   const config = parseJsonObject(readProjectFile(folder, "components.json"));
   const aliases = config?.aliases;
   if (aliases === null || typeof aliases !== "object") return { layout: { ...DEFAULT_LAYOUT }, from: "the default folders" };
+  const root = aliasRoot(folder);
+  let defaulted = false;
   const folderOf = (alias: unknown, fallback: string) => {
-    if (typeof alias !== "string") return fallback;
-    const path = alias.replace(/^[@~]\//u, "");
+    if (typeof alias !== "string" || !/^[@~]\//u.test(alias)) {
+      if (alias !== undefined) defaulted = true;
+      return root === "" ? fallback : `${root}/${fallback}`;
+    }
+    const path = (root === "" ? "" : `${root}/`) + alias.slice(2);
     try {
       return checkLayout({ ...DEFAULT_LAYOUT, components: path }).components;
     } catch {
+      defaulted = true;
       return fallback;
     }
   };
@@ -156,7 +186,7 @@ function projectLayout(folder: string): { layout: Record<string, string>; from: 
     lib: folderOf(aliases.lib, DEFAULT_LAYOUT.lib),
     hooks: folderOf(aliases.hooks, DEFAULT_LAYOUT.hooks),
   };
-  return { layout, from: "components.json" };
+  return { layout, from: defaulted ? "components.json, with the default folder for aliases that are not @/ or ~/ paths" : "components.json" };
 }
 
 /** The project's declared packages, by section. */
@@ -177,9 +207,14 @@ const COMMENT = /\.css$/u;
  * credit the license asks for. The upstream text follows unchanged.
  */
 function withNotice(path: string, content: string, origin: string, source: ComponentImportPlan["source"], attribution: string | null): string {
-  const clean = (text: string) => text.replace(/[\u0000-\u001f\u007f]/gu, " ").replace(/\*\//gu, "* /");
+  const clean = (text: string) => text.replace(LINE_BREAKING, " ").replace(/\*\//gu, "* /");
   const lines = [`Imported by Ninerr from ${clean(origin)}.`];
-  if (source) lines.push(`${clean(source.name)}: ${clean(source.license)}.`);
+  if (source) {
+    lines.push(`${clean(source.name)}: ${clean(source.license)}.`);
+    if (source.copyright) lines.push(clean(source.copyright));
+    // MIT code carries its permission notice with every copy, here at the top of the file.
+    if (source.license.startsWith("MIT")) lines.push(...MIT_PERMISSION);
+  }
   if (attribution) lines.push(`Its license requires a visible link to ${clean(attribution)} in any project that ships it.`);
   const header = COMMENT.test(path) ? `/*\n${lines.map((line) => ` * ${line}`).join("\n")}\n */\n` : `${lines.map((line) => `// ${line}`).join("\n")}\n`;
   return header + content;
@@ -194,13 +229,19 @@ export function planComponentImport(folder: string, request: ComponentImportRequ
     throw new StudioError(403, "unknown-registry", "Ninerr imports from a URL only when it is one of the catalog's registries; save the item and give it as a file to judge its license yourself");
   }
   const decision = importDecision(catalogSource, { freeItemConfirmed: request?.freeItemConfirmed === true });
-  const source = catalogSource ? { id: catalogSource.id, name: catalogSource.name, license: catalogSource.license, importPolicy: catalogSource.importPolicy } : null;
+  const source = catalogSource ? { id: catalogSource.id, name: catalogSource.name, license: catalogSource.license, importPolicy: catalogSource.importPolicy, copyright: catalogSource.copyright } : null;
 
   const { layout, from: layoutFrom } = projectLayout(folder);
   const packages = projectPackages(folder);
   const projectFamily = primitiveFamily({ dependencies: [...packages.all].map((name) => ({ name, range: null })), files: [] }).family;
   const blockers: string[] = [];
   if (!decision.allowed) blockers.push(decision.reason);
+  // An item's own dependencies on a source Ninerr may not import from block it, however the item
+  // itself was given.
+  for (const reference of item.registryDependencies) {
+    const from = /^https:/u.test(reference) ? sourceForRegistryUrl(reference) : null;
+    if (from !== null && from.importPolicy === "permission-required") blockers.push(`It needs ${reference}, from ${from.name}, which Ninerr may not import: ${from.rights}`);
+  }
   if (item.primitives.family === "mixed") blockers.push("The item uses more than one primitive family (Base UI, Radix, React Aria); one component builds on one.");
   if (projectFamily === "mixed") blockers.push("The project already uses more than one primitive family; choose one before importing.");
   else if (item.primitives.family !== "none" && item.primitives.family !== "mixed" && projectFamily !== "none" && projectFamily !== item.primitives.family) {
@@ -262,6 +303,9 @@ export function planComponentImport(folder: string, request: ComponentImportRequ
   };
 }
 
+// Windows and macOS compare paths without case; a link or junction changes the whole path.
+const samePath = (a: string, b: string) => (process.platform === "linux" ? a === b : a.toLowerCase() === b.toLowerCase());
+
 /** A plan as the editor sees it: no file contents. */
 export function publicPlan(plan: ReturnType<typeof planComponentImport>): ComponentImportPlan {
   const { writes: _writes, ...shown } = plan;
@@ -273,7 +317,7 @@ export function publicPlan(plan: ReturnType<typeof planComponentImport>): Compon
  * exclusively (an existing one is never replaced); if any write fails, the files and folders this
  * call created are removed again. Returns what was written and the components it exports.
  */
-export function applyComponentImport(folder: string, request: ComponentImportRequest) {
+export function applyComponentImport(folder: string, request: ComponentImportRequest, hooks: { beforeWrite?: (path: string) => void } = {}) {
   const plan = planComponentImport(folder, request);
   if (typeof request?.token !== "string" || request.token !== plan.token) throw new StudioError(409, "plan-changed", "the item or the codebase changed since the plan; review it again");
   if (!plan.appliable) throw new StudioError(409, "import-blocked", plan.blockers[0] ?? "the import writes no new file");
@@ -310,6 +354,11 @@ export function applyComponentImport(folder: string, request: ComponentImportReq
         const entry = lstatSync(current);
         if (entry.isSymbolicLink() || !entry.isDirectory()) throw new StudioError(409, "plan-changed", `${current.slice(folder.length + 1).split(sep).join("/")} changed while the import ran`);
       }
+      hooks.beforeWrite?.(write.path);
+      // The folder about to hold the file is, on disk, the one planned: no folder on the way was
+      // replaced by a link or junction since it was checked.
+      const parent = join(folder, ...segments.slice(0, -1));
+      if (!samePath(realpathSync.native(parent), parent)) throw new StudioError(409, "plan-changed", `${segments.slice(0, -1).join("/") || "the codebase folder"} changed while the import ran`);
       const absolute = join(folder, ...segments);
       const fd = openSync(absolute, "wx", 0o644);
       createdFiles.push(absolute);

@@ -70,14 +70,14 @@ Ninerr's existing editor is a local-first JavaScript/CSS canvas; these are React
 In **Component sources**, under *Import a registry item*, the person chooses a saved item file or pastes its JSON, and may say which URL it came from. Ninerr fetches nothing.
 
 1. **Read.** `parseRegistryItem` (`packages/component-sources/src/index.mjs`) reads the item: at most 1 MiB, 64 files of 256 KiB each. It refuses:
-   - a path that leaves the project, however it is percent-encoded, or that names a hidden file, `node_modules`, a Windows device or a stream;
-   - a file that is build configuration, a lockfile, or not component source or a stylesheet;
+   - a path that leaves the project, however it is percent-encoded, or that names a hidden file, `node_modules` in any case, a Windows device, an 8.3 short name or a stream, or that is not in NFC form;
+   - a file that is build configuration (any `*.config.*` or `*.workspace.*` file, the files a framework runs by name), a lockfile, or not component source or a stylesheet;
    - a dependency that is not an npm name with a plain version range (no URL, git, file, link or alias spec);
    - a style, base or font item, which reconfigures a project, and any request for environment variables;
    - CSS variables or rules that hide markup, a URL or an import.
-2. **Judge.** A stated URL must belong to a catalog registry, and that source's import policy decides: Aceternity UI and 21st.dev URLs are recognised and refused, a Notchset item needs the person's word that it is free, and a Rare UI (Swami) item carries its required credit. An item given as a file is the person's to judge.
+2. **Judge.** A stated URL must belong to a catalog registry, and that source's import policy decides: Aceternity UI and 21st.dev URLs are recognised and refused, a Notchset item needs the person's word that it is free, and a Rare UI (Swami) item carries its required credit. An item that depends on an item from Aceternity UI or 21st.dev is refused however it was given. Beyond that, an item given as a file is the person's to judge: Ninerr cannot tell where a saved file came from.
 3. **Plan.** `POST /api/components/plan` (`packages/studio-host/src/component-import.ts`) shows every file and where it goes, using the codebase's `components.json` folders when it has one, and whether each is new, already there or in conflict. It lists the packages to add (Ninerr installs nothing), the other items needed, and the design tokens the item defines. It refuses an item that mixes primitive families, or whose family differs from the project's: a Radix project gets Radix items, a Base UI project Base UI items.
-4. **Create.** `POST /api/components/apply` re-plans and goes ahead only if nothing changed. It creates each new file exclusively, never replacing one, and never through a link; if a write fails, the files and folders it created are removed. Each file starts with a notice of where it came from, its source's license and any credit its license requires; the upstream text follows unchanged.
+4. **Create.** `POST /api/components/apply` re-plans and goes ahead only if nothing changed. It creates each new file exclusively, never replacing one, and never through a link; if a write fails, the files and folders it created are removed. Each file starts with a notice of where it came from, its source's license and copyright line, the MIT permission notice for MIT sources, and any credit its license requires; the upstream text follows unchanged. A folder replaced by a link or junction while the import runs is refused before the file is written.
 5. **Bring in.** The components the files export are offered to **Bring in**, the codebase's existing path: one transaction on the canvas, undone by Undo. Undo does not remove the created files, which the editor says.
 
 Only the person, through the editor's session, plans or applies an import; agents have no tool for it.
@@ -101,9 +101,9 @@ A person searches *Command palette* → Ninerr suggests **cmdk**, shows a source
 - [x] One primitive family per component and per project: a mixed item, or one whose family differs from the project's, is refused (`tests/component-sources.test.mjs`, `tests/component-import.test.mjs`).
 - [ ] Native and generated component previews never bypass Ninerr's script-free canonical canvas.
 - [ ] Accessibility: keyboard, focus, screen-reader, contrast, reduced-motion and RTL.
-- [x] Security for import: no fetch, no path traversal however encoded, no build configuration, lockfile or environment written, no file replaced, no write through a link, item text treated as data only.
+- [x] Security for import: no fetch, no path traversal however encoded (including case, 8.3 short names and Unicode forms), no build configuration, lockfile or environment written, no file replaced, no write through a link even one made mid-import, item text treated as data only.
 - [ ] Security for preview and fetch: blocked scripts and assets, no silent egress.
-- [x] Licensing for import: each source's license and import policy with evidence, a notice at the top of each created file, and no import from a source whose terms grant no license. Nothing from any source is distributed with Ninerr.
+- [x] Licensing for import: each source's license and import policy with evidence; at the top of each created file, its origin, license, copyright line and, for MIT, the permission notice; no import by URL from, or depending on, a source whose terms grant no license. An item given as a file is the person's to judge. Nothing from any source is distributed with Ninerr.
 - [ ] Full Windows/macOS/Linux CI and packaged app E2E.
 - [ ] Code ↔ design round trip and undo/redo maintain the single document authority.
 

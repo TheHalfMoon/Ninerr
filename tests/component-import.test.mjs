@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { hostPool, ok } from "./support/host-api.mjs";
+import { applyComponentImport, planComponentImport } from "../packages/studio-host/src/component-import.ts";
 
 // #405: a registry item the person chose comes into the connected codebase as a plan first, then
 // as new files exactly as planned. Nothing is fetched; nothing is replaced. The items are written
@@ -71,8 +72,14 @@ test("an item is planned without writing, then created exactly as planned, and i
   assert.deepEqual(applied.written, ["components/ui/pill.tsx", "components/ui/pill.css"]);
   assert.deepEqual(applied.components, [{ file: "components/ui/pill.tsx", component: "Pill" }]);
   const written = readFileSync(join(app, "components", "ui", "pill.tsx"), "utf8");
-  assert.equal(written, "// Imported by Ninerr from https://magicui.design/r/pill.json.\n// Magic UI: MIT.\n" + PILL, "the upstream text follows its notice unchanged");
-  assert.match(readFileSync(join(app, "components", "ui", "pill.css"), "utf8"), /^\/\*\n \* Imported by Ninerr from https:\/\/magicui\.design\/r\/pill\.json\.\n \* Magic UI: MIT\.\n \*\/\n\.pill \{/u);
+  // The notice: origin, license, copyright line and the MIT permission notice, all comments; then
+  // the upstream text unchanged.
+  assert.ok(written.endsWith(PILL), "the upstream text follows its notice unchanged");
+  const notice = written.slice(0, written.length - PILL.length);
+  assert.match(notice, /^\/\/ Imported by Ninerr from https:\/\/magicui\.design\/r\/pill\.json\.\n\/\/ Magic UI: MIT\.\n\/\/ Copyright \(c\) Magic UI\n\/\/ Permission is hereby granted, free of charge,/u);
+  assert.match(notice, /\/\/ The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software\.\n/u);
+  assert.ok(notice.split("\n").slice(0, -1).every((line) => line.startsWith("// ")), "every notice line is a comment");
+  assert.match(readFileSync(join(app, "components", "ui", "pill.css"), "utf8"), /^\/\*\n \* Imported by Ninerr from https:\/\/magicui\.design\/r\/pill\.json\.\n \* Magic UI: MIT\.\n \* Copyright \(c\) Magic UI\n \* Permission is hereby granted/u);
 
   // The component comes onto the canvas through the codebase's own Bring in: one transaction.
   const before = (await ok(call("GET", "/api/document"), "document")).revision;
@@ -146,7 +153,9 @@ test("each source's import policy decides, and an unknown registry URL is refuse
   const plan = await ok(call("POST", "/api/components/plan", swami), "swami");
   assert.equal(plan.decision.attribution, "https://rareui.com");
   await ok(call("POST", "/api/components/apply", { ...swami, token: plan.token }), "apply");
-  assert.match(readFileSync(join(app, "components", "ui", "pill.tsx"), "utf8"), /^\/\/ Imported by Ninerr from https:\/\/raw\.githubusercontent\.com\/swamimalode07\/rare-ui\/main\/public\/r\/pill\.json\.\n\/\/ Rare UI \(Swami\): MIT \+ Commons Clause \+ Attribution\.\n\/\/ Its license requires a visible link to https:\/\/rareui\.com in any project that ships it\.\n/u);
+  const credited = readFileSync(join(app, "components", "ui", "pill.tsx"), "utf8");
+  assert.match(credited, /^\/\/ Imported by Ninerr from https:\/\/raw\.githubusercontent\.com\/swamimalode07\/rare-ui\/main\/public\/r\/pill\.json\.\n\/\/ Rare UI \(Swami\): MIT with the Commons Clause v1\.0 and an attribution condition\.\n\/\/ Copyright \(c\) 2026 Swami Malode\n/u);
+  assert.match(credited, /\/\/ Its license requires a visible link to https:\/\/rareui\.com in any project that ships it\.\n/u);
 });
 
 test("unsafe items, build configuration, links and a missing codebase are refused before anything is written", async (t) => {
@@ -162,6 +171,8 @@ test("unsafe items, build configuration, links and a missing codebase are refuse
   await refusedWith({ item: item({ files: [{ path: "a.tsx", type: "registry:ui", content: "" }, { path: "b/a.tsx", type: "registry:ui", content: "" }] }) }, 400, "item-duplicate-target");
   await refusedWith({ item: 42 }, 400, "invalid-item");
   await refusedWith({ item: item(), origin: { fileName: "../x.json" } }, 400, "invalid-origin");
+  // A line separator in a file name would end the notice's comment line in JavaScript.
+  await refusedWith({ item: item(), origin: { fileName: "x alert(1) .json" } }, 400, "invalid-origin");
 
   let linked = false;
   try {
@@ -176,4 +187,72 @@ test("unsafe items, build configuration, links and a missing codebase are refuse
 
   await ok(call("POST", "/api/codebase/disconnect", {}), "disconnect");
   await refusedWith({ item: item() }, 409, "no-codebase");
+});
+
+test("components.json folders follow where @/ points, and an alias of another form keeps the default", async (t) => {
+  const { app, call } = await setup(t, { components: { aliases: { components: "@/components", ui: "@/components/ui", lib: "@acme/lib", hooks: "@/hooks" } } });
+  writeFileSync(join(app, "tsconfig.json"), '{\n  // a src project\n  "compilerOptions": { "paths": { "@/*": ["./src/*"] } },\n}\n');
+  const plan = await ok(call("POST", "/api/components/plan", { item: item({ files: [
+    { path: "registry/ui/pill.tsx", type: "registry:ui", content: PILL },
+    { path: "registry/lib/pill.ts", type: "registry:lib", content: "export const x = 1;\n" },
+  ] }) }), "plan");
+  assert.deepEqual(plan.files.map(({ path }) => path), ["src/components/ui/pill.tsx", "src/lib/pill.ts"]);
+  assert.equal(plan.project.layout.lib, "src/lib", "the @acme/lib alias is not taken as a folder");
+  assert.match(plan.project.layoutFrom, /default folder for aliases that are not @\/ or ~\/ paths/u);
+});
+
+test("an item that needs something from a source Ninerr may not import is blocked, however it was given", async (t) => {
+  const { call } = await setup(t);
+  const plan = await ok(call("POST", "/api/components/plan", { item: item({ registryDependencies: ["https://ui.aceternity.com/registry/3d-card.json"] }), origin: { fileName: "pill.json" } }), "plan");
+  assert.equal(plan.appliable, false);
+  assert.match(plan.blockers.join(" "), /It needs https:\/\/ui\.aceternity\.com\/registry\/3d-card\.json, from Aceternity UI, which Ninerr may not import/u);
+});
+
+test("a write that fails part-way, or a folder replaced by a link mid-import, leaves nothing it created", (t) => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ninerr-component-rollback-")));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const request = { item: item() };
+  // Another writer creates the second file just before Ninerr does: the first file and the
+  // folders this import made are removed again, and the other writer's file is left alone.
+  const first = join(root, "first");
+  mkdirSync(first);
+  const plan = planComponentImport(first, request);
+  assert.throws(() => applyComponentImport(first, { ...request, token: plan.token }, {
+    beforeWrite: (path) => {
+      if (path.endsWith(".css")) writeFileSync(join(first, "components", "ui", "pill.css"), "/* someone else */\n");
+    },
+  }), (error) => error.code === "plan-changed");
+  assert.equal(existsSync(join(first, "components", "ui", "pill.tsx")), false, "the first file is removed");
+  assert.equal(readFileSync(join(first, "components", "ui", "pill.css"), "utf8"), "/* someone else */\n");
+
+  // A folder the plan checked is swapped for a junction to somewhere else before the write.
+  const outside = join(root, "outside");
+  const app = join(root, "app");
+  mkdirSync(outside);
+  mkdirSync(app);
+  // One file, so no later folder check can catch the swap: only the check before the write does.
+  const single = { item: item({ files: [{ path: "registry/ui/pill.tsx", type: "registry:ui", content: PILL }] }) };
+  const again = planComponentImport(app, single);
+  let swapped = false;
+  let refusal = null;
+  try {
+    applyComponentImport(app, { ...single, token: again.token }, {
+      beforeWrite: (path) => {
+        if (swapped || !path.endsWith(".tsx")) return;
+        rmSync(join(app, "components", "ui"), { recursive: true });
+        try {
+          symlinkSync(outside, join(app, "components", "ui"), "junction");
+          swapped = true;
+        } catch {
+          mkdirSync(join(app, "components", "ui"));
+        }
+      },
+    });
+  } catch (error) {
+    refusal = error;
+  }
+  if (swapped) {
+    assert.equal(refusal?.code, "plan-changed", "the swapped folder is refused");
+    assert.deepEqual(readdirSync(outside), [], "nothing is written through the junction");
+  } else t.diagnostic("links could not be created here; the junction case is covered where they can");
 });
