@@ -7,6 +7,7 @@
 // Node built-ins, so the browser loads this module as is.
 
 import { mountSandboxedRenderer } from "../../renderer/src/index.mjs";
+import { compileTokens, designSystemOf } from "../../document-model/src/tokens.mjs";
 
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 8;
@@ -481,6 +482,7 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     setDocument(next) {
       releaseHeld();
       document = next;
+      renderer.setTokens(compileTokens(next));
       renderer.render(next);
       sizeFrame();
       setSelection(selection);
@@ -488,7 +490,11 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     /** Apply a committed change: patch only `affectedNodeIds`. */
     update(next, affectedNodeIds) {
       releaseHeld();
+      const before = document === null ? null : designSystemOf(document)?.id ?? null;
       document = next;
+      // The token sheet changes only with the design system (ADR-0004).
+      const after = designSystemOf(next)?.id ?? null;
+      if (before !== after || affectedNodeIds.includes(after)) renderer.setTokens(compileTokens(next));
       renderer.patch(next, affectedNodeIds);
       sizeFrame();
       setSelection(selection);

@@ -2,6 +2,8 @@ import { isV2Type, v2DocumentProblem, v2NodesProblem } from "./schema-v2.mjs";
 
 import { schemaVersionFor } from "./schema-v2.mjs";
 
+export { addCollection, addMode, compileTokens, createDesignSystem, deleteToken, designSystemOf, modeAttribute, renameToken, setToken, tokenUses } from "./tokens.mjs";
+
 export { SCHEMA_V2_LIMITS, TOKEN_NAME, TOKEN_TYPES, V2_NODE_TYPES, PROPERTY_KINDS, PROPERTY_FIELDS, cssValueProblem, designSystemProblem, definitionProblem, instanceProblem, isV2Type, propertyRenameProblem, requiresSchemaV2, schemaVersionFor, tokenReferences } from "./schema-v2.mjs";
 
 // The newest schema this build reads and writes. A document is schema 2 exactly when it holds a

@@ -85,7 +85,8 @@ Only the person, through the editor's session, plans or applies an import; agent
 ### What remains, and what it waits on
 
 - **Fetching from a registry.** A pinned, per-item fetch from the catalog's licensed registries needs network access the host does not have today, and a decision on how a person grants it.
-- **Design tokens and variants on the canvas.** The item's CSS variables are listed, not applied. Tokens, component instances and variants need document schema v2, proposed in `docs/design-platform/adr/0003` to `0005` and not approved (P13 and P14 in the design-platform plan, PR #359).
+- **Design tokens from an item.** Schema v2 was accepted on 2026-11-09 (#408), and the project's design system and its tokens are now edited in **Tokens** and drawn on the canvas per mode. An item's CSS variables are still listed in the plan, not added to the design system; that is the next grain.
+- **Component instances and variants.** Accepted with schema v2 (ADR-0005); the renderer does not yet expand instances.
 - **Interactive preview.** A React component cannot run on the script-free canvas. A preview needs an isolated, permission-scoped runner with React available offline: a separate decision.
 - **Updating an imported item.** Today a changed upstream item conflicts with the created file. A three-way update against the imported version can reuse `threeWayMerge` from `@ninerr/code-ir`.
 - **Aceternity UI and 21st.dev.** Their terms grant no license to import; that needs the publishers' written permission.
