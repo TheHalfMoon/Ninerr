@@ -4,10 +4,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": "./src/index.mjs",
-    "./components": "./src/components.mjs"
-  },
+  "exports": "./src/index.mjs",
   "engines": {
     "node": "^22.18.0 || >=24.11.0"
   },

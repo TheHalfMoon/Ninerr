@@ -9,6 +9,9 @@
 import { mountSandboxedRenderer } from "../../renderer/src/index.mjs";
 import { compileTokens, designSystemOf } from "../../document-model/src/tokens.mjs";
 
+// Components and instances (ADR-0005): the operations the editor and the host's MCP tools send.
+export { componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, parseDeclarations, resetInstance, setInstanceOverride } from "./components.mjs";
+
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 8;
 
