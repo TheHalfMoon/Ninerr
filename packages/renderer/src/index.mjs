@@ -249,6 +249,9 @@ export function drawnRoots(document) {
 
 // ---------- component instances (ADR-0005) ----------
 
+/** The id of what a slot draws in a layer: the layer's id and a separator no stored id uses. */
+export const slotIdOf = (layerId) => `${layerId}\u001fslot`;
+
 // An instance is expanded when it is drawn, and nothing expanded is ever stored: one change to
 // its component redraws every instance. Its drawn layers keep their component node's id as
 // data-ninerr-id (so scoped stylesheets match inside instances) and carry the instance chain as
@@ -360,7 +363,7 @@ function expand(document, instance, chain, outer, depth, budget, seen) {
     // children: an instance the slot makes, whose id is the layer's with "/slot".
     const slot = properties.find((property) => property.kind === "slot" && property.target?.nodeId === node.id && typeof values[property.id] === "string" && values[property.id] !== "");
     if (slot) {
-      const slotId = `${node.id}/slot`;
+      const slotId = slotIdOf(node.id);
       const passed = [...variantOverrides, ...own].filter((override) => override.path?.[0] === slotId).map((override) => ({ ...override, path: override.path.slice(1) }));
       const filled = expand(document, { id: slotId, props: { componentId: values[slot.id] } }, here, passed, depth + 1, budget, inside);
       // What is set on the slot's content itself (path [], node "<layer>/slot") is drawn on its
@@ -368,7 +371,9 @@ function expand(document, instance, chain, outer, depth, budget, seen) {
       let root = filled === null ? null : { props: filled.props, hidden: null };
       if (root !== null) for (const override of [...variantOverrides, ...own]) if (Array.isArray(override?.path) && override.path.length === 0 && override.nodeId === slotId) root = overridden(root, override.set);
       const children = filled === null ? [] : [{ ...filled, props: withVisibility(root.props, root.hidden), chain: here }];
-      return { id: node.id, type: node.type, props: withVisibility(drawnProps(current.props), current.hidden), chain: here, children };
+      // What the slot draws takes the place of the layer's own children and text.
+      const { text: _text, ...props } = drawnProps(current.props);
+      return { id: node.id, type: node.type, props: withVisibility(props, current.hidden), chain: here, children, ...(filled === null ? { stale: true } : {}) };
     }
     return { id: node.id, type: node.type, props: withVisibility(drawnProps(current.props), current.hidden), chain: here, children: node.children.filter((id) => Object.hasOwn(nodes, id)).map((id) => view(nodes[id])) };
   };
@@ -377,7 +382,7 @@ function expand(document, instance, chain, outer, depth, budget, seen) {
   const style = { ...(isPlainRecord(root.props.style) ? root.props.style : {}), ...(isPlainRecord(instance.props.style) ? instance.props.style : {}) };
   const props = { ...root.props, style };
   if (isPlainRecord(instance.props.modes)) props.modes = instance.props.modes;
-  return { id: instanceId, type: "component-instance", props, chain, children: root.children };
+  return { id: instanceId, type: "component-instance", componentId: definition.id, props, chain, children: root.children };
 }
 
 /**
@@ -428,7 +433,7 @@ export function instancesDrawing(document, definitionIds) {
       }
     }
     // The components it can draw: its own, and those its swap and slot values choose.
-    const chosen = Object.values(isPlainRecord(node.props.propertyValues) ? node.props.propertyValues : {}).filter((value) => typeof value === "string");
+    const chosen = Object.values(isPlainRecord(node.props.propertyValues) ? node.props.propertyValues : {}).filter((value) => typeof value === "string" && Object.hasOwn(document.nodes, value) && document.nodes[value].type === "component-definition");
     instances.push({ id, componentId: node.props.componentId, draws: [node.props.componentId, ...chosen], inside });
   }
   // A component whose swap or slot defaults draw a touched one is touched too.
@@ -946,6 +951,7 @@ export function createRenderer(root) {
     element.setAttribute("data-ninerr-id", view.id);
     element.setAttribute("data-ninerr-instance", JSON.stringify(view.chain));
     apply(element, view, plan, { sheet: false });
+    if (view.stale) element.setAttribute("data-ninerr-stale", "");
     for (const child of view.children) element.appendChild(drawView(child));
     return element;
   }

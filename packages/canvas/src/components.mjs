@@ -58,11 +58,17 @@ export function drawsComponent(document, componentId, targetId) {
     if (id === targetId) return true;
     if (seen.has(id) || !document.nodes[id]) continue;
     seen.add(id);
+    const component = (value) => typeof value === "string" && document.nodes[value]?.type === "component-definition";
+    // Its swap and slot defaults, and every instance inside it with its swap and slot values.
+    for (const property of document.nodes[id].props.properties ?? []) if ((property.kind === "instance-swap" || property.kind === "slot") && component(property.default)) queue.push(property.default);
     const stack = [...document.nodes[id].children];
     while (stack.length > 0) {
       const node = document.nodes[stack.pop()];
       if (!node) continue;
-      if (node.type === "component-instance") queue.push(node.props.componentId);
+      if (node.type === "component-instance") {
+        queue.push(node.props.componentId);
+        for (const value of Object.values(node.props.propertyValues ?? {})) if (component(value)) queue.push(value);
+      }
       stack.push(...node.children);
     }
   }
@@ -130,12 +136,14 @@ export function instanceLayers(document, instanceId) {
   const componentId = document.nodes[instanceId].props.componentId;
   const rootNode = document.nodes[componentId];
   const hidden = (props) => props.attributes?.hidden !== undefined;
-  const layers = [{ instanceId, path: [], nodeId: componentId, label: `${rootNode?.props?.name ?? "Component"} (its root)`, depth: 0, text: typeof view.props.text === "string" ? view.props.text : null, hidden: hidden(view.props) }];
+  const layers = [{ instanceId, path: [], nodeId: componentId, mainId: componentId, label: `${rootNode?.props?.name ?? "Component"} (its root)`, depth: 0, text: typeof view.props.text === "string" ? view.props.text : null, hidden: hidden(view.props), stale: false }];
   const walk = (entry, depth) => {
     for (const child of entry.children) {
       const node = document.nodes[child.id];
-      const label = node?.props?.name ?? (typeof child.props.text === "string" && child.props.text !== "" ? child.props.text : child.props.tag ?? child.type);
-      layers.push({ instanceId, path: child.chain.slice(1), nodeId: child.id, label: String(label).slice(0, 60), depth, text: typeof child.props.text === "string" ? child.props.text : null, hidden: hidden(child.props) });
+      // A drawn instance root (a nested instance, or what a slot draws) is its component's root.
+      const main = child.type === "component-instance" && typeof child.componentId === "string" ? child.componentId : child.id;
+      const label = document.nodes[main]?.props?.name ?? node?.props?.name ?? (typeof child.props.text === "string" && child.props.text !== "" ? child.props.text : child.props.tag ?? child.type);
+      layers.push({ instanceId, path: child.chain.slice(1), nodeId: child.id, mainId: main, label: String(label).slice(0, 60), depth, text: typeof child.props.text === "string" ? child.props.text : null, hidden: hidden(child.props), stale: child.stale === true });
       walk(child, depth + 1);
     }
   };

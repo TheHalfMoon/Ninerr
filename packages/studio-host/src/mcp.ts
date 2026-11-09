@@ -543,8 +543,14 @@ const TOOLS: Tool[] = [
       if (args.kind === "slot" && target.type === "component-instance") throw new ToolError("a slot targets a layer that holds what is put in it, not an instance");
       const options = Array.isArray(args.options) ? [...new Set(args.options as string[])] : [];
       if (args.kind === "variant" && options.length === 0) throw new ToolError("a variant property needs its options");
+      // A swap or slot default is "" or a component, never one that draws this component.
+      if ((args.kind === "instance-swap" || args.kind === "slot") && typeof args.default === "string" && args.default !== "") {
+        const chosen = (session.document as any).nodes[args.default];
+        if (!chosen || chosen.type !== "component-definition") throw new ToolError("default takes a component's id, or \"\" for none");
+        if (drawsComponent(session.document, args.default, component.id)) throw new ToolError("that default draws this component, so it cannot go inside it");
+      }
       const property = args.kind === "instance-swap" || args.kind === "slot"
-        ? { id, name: args.name.trim(), kind: args.kind, default: "", target: { nodeId: target.id, field: "children" } }
+        ? { id, name: args.name.trim(), kind: args.kind, default: typeof args.default === "string" ? args.default : "", target: { nodeId: target.id, field: "children" } }
         : args.kind === "boolean"
         ? { id, name: args.name.trim(), kind: "boolean", default: typeof args.default === "boolean" ? args.default : true, target: { nodeId: target.id, field: "visible" } }
         : args.kind === "variant"
@@ -572,7 +578,7 @@ const TOOLS: Tool[] = [
     run: ({ session }, args) => {
       const instance = nodeOf(session, args.instanceId);
       if (instance.type !== "component-instance") throw new ToolError("instanceId must name an instance");
-      return { layers: instanceLayers(session.document, instance.id).map((layer: any) => ({ path: layer.path, nodeId: layer.nodeId, label: layer.label, text: layer.text, hidden: layer.hidden, override: overrideFor(session.document, instance.id, layer)?.set ?? null })) };
+      return { layers: instanceLayers(session.document, instance.id).map((layer: any) => ({ path: layer.path, nodeId: layer.nodeId, componentId: layer.mainId, label: layer.label, text: layer.text, hidden: layer.hidden, stale: layer.stale, override: overrideFor(session.document, instance.id, layer)?.set ?? null })) };
     },
   },
   {
