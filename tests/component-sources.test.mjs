@@ -49,6 +49,10 @@ test("one component builds on one primitive family", () => {
   assert.equal(primitiveFamily({ files: files('const m = await import("@base-ui-components/react");') }).family, "base");
   assert.equal(primitiveFamily({ files: files('import { Button } from "react-aria-components";') }).family, "aria");
   assert.equal(primitiveFamily({ files: files('import { cn } from "@/lib/utils";') }).family, "none");
+  // Icons and colours from Radix are not primitives; React Aria's packages are.
+  assert.equal(primitiveFamily({ dependencies: [parseDependency("@base-ui/react"), parseDependency("@radix-ui/react-icons"), parseDependency("@radix-ui/colors")], files: [] }).family, "base");
+  assert.equal(primitiveFamily({ files: files('import { useButton } from "@react-aria/button";') }).family, "aria");
+  assert.equal(primitiveFamily({ dependencies: [parseDependency("react-aria-modal")], files: [] }).family, "none");
   const mixed = primitiveFamily({ dependencies: [parseDependency("@base-ui/react")], files: files('import "@radix-ui/react-slot";') });
   assert.equal(mixed.family, "mixed");
   assert.deepEqual(mixed.evidence, ["base:@base-ui/react", "radix:@radix-ui/react-slot"]);
@@ -60,11 +64,15 @@ test("a path that could leave the project, hide or name a device is refused, how
     refused(item({ files: [{ path, type: "registry:ui", content: "" }] }), "unsafe-path");
     refused(item({ files: [{ path: "ui/ok.tsx", type: "registry:file", target: path, content: "" }] }), path === "" ? "invalid-file" : "unsafe-path");
   }
-  for (const path of ["components/ui/badge.tsx", "app/[...slug]/page.tsx", "~/lib/utils.ts", "src/hooks/use-thing.ts"]) assert.equal(unsafePathReason(path), null, path);
+  for (const path of ["components/ui/badge.tsx", "app/[...slug]/page.tsx", "~/lib/utils.ts", "src/hooks/use-thing.ts", "app/@modal/page.tsx"]) assert.equal(unsafePathReason(path), null, path);
+  // Names a case-blind or short-name-answering file system would read as something else.
+  for (const path of ["NODE_MODULES/react/index.mjs", "Node_Modules/x.js", "STORYB~1/preview.tsx", "GITHUB~1/workflows/x.ts", "a/NODE_M~1/x.js", "a b.tsx", "a b.tsx", "ab.tsx", "café.tsx"]) {
+    assert.ok(unsafePathReason(path), `${JSON.stringify(path)} is refused`);
+  }
 });
 
 test("an item never writes build configuration or anything but component source", () => {
-  for (const path of ["package.json", "tsconfig.json", "tsconfig.app.json", "components.json", "next.config.mjs", "src/vite.config.ts", "tailwind.config.js", "postcss.config.cjs", "pnpm-lock.yaml", "scripts/install.sh", "README.md", "public/logo.svg"]) {
+  for (const path of ["gatsby-node.js", "lint-staged.config.js", "commitlint.config.js", "vitest.workspace.ts", "drizzle.config.ts", "react-router.config.ts", "sentry.client.config.ts", "electron.vite.config.ts", "jsconfig.base.json", "pnpm-workspace.yaml", "package.json", "tsconfig.json", "tsconfig.app.json", "components.json", "next.config.mjs", "src/vite.config.ts", "tailwind.config.js", "postcss.config.cjs", "pnpm-lock.yaml", "scripts/install.sh", "README.md", "public/logo.svg"]) {
     assert.ok(unwritableReason(path), `${path} is never written`);
   }
   for (const path of ["components/ui/badge.tsx", "lib/utils.ts", "app/globals.css", "hooks/use-x.js"]) assert.equal(unwritableReason(path), null, path);
@@ -87,7 +95,10 @@ test("targets resolve through the project's folders, and placeholders only begin
     "src/components/ui/badge.tsx", "src/lib/format.ts", "src/hooks/use-count.ts", "src/components/ui/notchset/button.tsx", "app/demo/page.tsx", "components/rareui/Tab/Tab.tsx",
   ]);
   assert.ok(files.every((file) => resolveTarget(file, layout).refused === null));
-  refused(item({ files: [{ path: "x.tsx", type: "registry:file", target: "components/@ui/x.tsx", content: "" }] }), "unsafe-path");
+  refused(item({ files: [{ path: "x.tsx", type: "registry:file", target: "@acme/x.tsx", content: "" }] }), "unsafe-path");
+  // An @ later in a target is a folder name, such as a Next.js parallel route.
+  const route = parseRegistryItem(item({ files: [{ path: "x.tsx", type: "registry:page", target: "~/app/@modal/page.tsx", content: "" }] })).files[0];
+  assert.deepEqual(resolveTarget(route), { path: "app/@modal/page.tsx", refused: null });
   assert.throws(() => resolveTarget(files[0], { ui: "../outside" }), /the ui folder/u);
 });
 
@@ -134,6 +145,12 @@ test("an item's registry dependencies come first, and a cycle or an unknown item
   const loop = new Map([["a", make("a", ["b"])], ["b", make("b", ["a"])]]);
   assert.throws(() => registryClosure(loop.get("a"), (name) => loop.get(name) ?? null), /depends on itself/u);
   assert.throws(() => registryClosure(make("root", ["button"]), () => make("not-button")), /answered by an item named/u);
+  // A cycle through a namespaced name or a URL is a cycle, and an item reached by two names is
+  // ordered once.
+  const named = new Map([["@acme/a", make("a", ["https://acme.example/r/b.json"])], ["https://acme.example/r/b.json", make("b", ["@acme/a"])]]);
+  assert.throws(() => registryClosure(make("root", ["@acme/a"]), (name) => named.get(name) ?? null), /depends on itself/u);
+  const twice = new Map([["utils", make("utils")], ["@acme/utils", make("utils")]]);
+  assert.deepEqual(registryClosure(make("root", ["utils", "@acme/utils"]), (name) => twice.get(name) ?? null).order.map((entry) => entry.name), ["utils", "root"]);
   const deep = (depth) => make(`d${depth}`, depth < 20 ? [`d${depth + 1}`] : []);
   assert.throws(() => registryClosure(deep(0), (name) => deep(Number(name.slice(1)))), /nest more than/u);
 });
@@ -146,7 +163,10 @@ test("a registry URL belongs to its catalog source, whose import policy decides"
   // Sources with no license to import from are still recognized, so their policy refuses them.
   assert.equal(sourceForRegistryUrl("https://ui.aceternity.com/registry/3d-card.json").id, "aceternity");
   assert.equal(sourceForRegistryUrl("https://21st.dev/r/someone/button").id, "21st");
-  for (const url of ["http://magicui.design/r/marquee.json", "https://user:pw@magicui.design/r/marquee.json", "https://magicui.design.evil.example/r/x.json", "https://example.com/r/x.json", "not a url"]) {
+  assert.equal(sourceForRegistryUrl("https://MagicUI.design./r/marquee.json").id, "magic-ui", "host case and a trailing dot");
+  assert.equal(sourceForRegistryUrl("https://beautifului.dev/r/button.json").id, "beautiful-ui", "with or without www");
+  assert.equal(parseRegistryItem(item({ type: "registry:example" })).type, "registry:example");
+  for (const url of ["https://magicui.design:8443/r/marquee.json", "https://raw.githubusercontent.com/swamimalode07/rare-ui-fork/main/public/r/x.json", "http://magicui.design/r/marquee.json", "https://user:pw@magicui.design/r/marquee.json", "https://magicui.design.evil.example/r/x.json", "https://example.com/r/x.json", "not a url"]) {
     assert.equal(sourceForRegistryUrl(url), null, url);
   }
   assert.equal(importDecision(sourceForRegistryUrl("https://magicui.design/r/marquee.json")).allowed, true);
