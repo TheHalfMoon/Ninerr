@@ -5,7 +5,7 @@ import {
   UI_COMPONENT_SOURCE_GROUPS,
   UI_IMPORT_POLICIES,
   searchUiComponentSources,
-} from "../packages/studio-web/src/ui-sources.mjs";
+} from "../packages/component-sources/src/catalog.mjs";
 
 test("all twelve requested UI ecosystems and two same-name alternatives have stable unique IDs", () => {
   assert.equal(UI_COMPONENT_SOURCES.length, 14);

@@ -67,7 +67,7 @@ test("the SBOM has the CycloneDX 1.5 shape, correct purls, hashes, scopes and gr
   assert.deepEqual(sbom.metadata.component.licenses, [{ expression: "Apache-2.0" }], "the declared project license, not a guess");
   assert.equal(sbom.metadata.component.properties, undefined);
   const firstParty = sbom.components.filter((component) => component["bom-ref"].startsWith("workspace:"));
-  assert.equal(firstParty.length, 26);
+  assert.equal(firstParty.length, 27);
   for (const component of firstParty) {
     assert.deepEqual(component.licenses, [{ expression: "Apache-2.0" }], component.name);
     assert.deepEqual(component.properties, [{ name: "ninerr:first-party", value: "true" }], component.name);

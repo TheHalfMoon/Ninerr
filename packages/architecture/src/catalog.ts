@@ -75,6 +75,14 @@ const SUBSYSTEMS = [
     dependsOn: ["document-model", "code-ir", "tokens-themes"],
   },
   {
+    id: "component-sources",
+    title: "Component sources",
+    owner: "@ninerr/component-sources",
+    status: "implemented",
+    boundary: "The offline catalog of React component sources with each one's license and import policy, and the reading of a registry item a person chose: bounded parsing, paths that stay in the project and never touch build configuration, npm dependencies with plain ranges, one primitive family per component, registry closure and target resolution. It fetches, runs and writes nothing itself.",
+    dependsOn: [],
+  },
+  {
     id: "tokens-themes",
     title: "Tokens and themes",
     owner: "@ninerr/tokens",

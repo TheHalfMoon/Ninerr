@@ -73,7 +73,7 @@ const MAX_STREAMS = 32;
 // the client reconnects and resynchronizes from GET /api/document.
 const MAX_STREAM_BUFFER = 1024 * 1024;
 // The editor and the browser-loadable packages it imports; nothing else is served.
-const BROWSER_PACKAGES = new Set(["studio-web", "document-model", "history", "renderer", "canvas"]);
+const BROWSER_PACKAGES = new Set(["studio-web", "document-model", "history", "renderer", "canvas", "component-sources"]);
 const STATIC_FILE = /^\/packages\/([a-z-]+)\/src\/([a-z0-9-]+\.(?:mjs|css|html))$/u;
 const STATIC_TYPES: Record<string, string> = { ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8" };
 const TICKET_TTL_MS = 120_000;
