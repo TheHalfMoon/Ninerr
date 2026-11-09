@@ -171,7 +171,8 @@ The editor's component-source catalog (`packages/component-sources/src/catalog.m
 - `barvian/number-flow` (MIT, Copyright (c) 2024 Maxwell Barvian)
 - `magicuidesign/magicui` (MIT, Copyright (c) Magic UI)
 - `Codewithswappy/RareUI` (MIT, Copyright (c) 2025 Swapnil Kalambe (RareUI))
-- `swamimalode07/rare-ui` (MIT with the Commons Clause and an attribution condition, Copyright (c) 2026 Swami Malode): its components may not be sold or redistributed themselves, and a project that ships one shows a visible link to https://rareui.com.
+- `swamimalode07/rare-ui` (MIT with the Commons Clause v1.0 and an attribution condition, Copyright (c) 2026 Swami Malode): use is allowed “so long as you do not sell, sublicense, or redistribute the components themselves”, and a project that ships one shows a visible link to https://rareui.com.
+- Beautiful UI (Turbo), www.beautifului.dev (MIT, Copyright (c) 2026 Shane Levine), and Beautiful UI (Notchset), beautiful-ui.dev (free items MIT; Pro items under a commercial license).
 
 shadcn/ui is listed under the projects Ninerr was dogfooded on.
 

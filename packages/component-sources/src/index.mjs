@@ -35,10 +35,10 @@ const fail = (code, message) => {
 // whole project rather than adding to it, so it is refused here.
 export const IMPORTABLE_ITEM_TYPES = Object.freeze([
   "registry:ui", "registry:component", "registry:block", "registry:lib", "registry:hook",
-  "registry:page", "registry:file", "registry:theme", "registry:item",
+  "registry:page", "registry:file", "registry:theme", "registry:item", "registry:example",
 ]);
 const PROJECT_ITEM_TYPES = new Set(["registry:style", "registry:base", "registry:font"]);
-const FILE_TYPES = new Set(["registry:ui", "registry:component", "registry:block", "registry:lib", "registry:hook", "registry:page", "registry:file", "registry:item", "registry:theme"]);
+const FILE_TYPES = new Set(["registry:ui", "registry:component", "registry:block", "registry:lib", "registry:hook", "registry:page", "registry:file", "registry:item", "registry:theme", "registry:example"]);
 // Top-level fields this module reads. Anything else is reported, never acted on.
 const KNOWN_FIELDS = new Set(["$schema", "name", "type", "title", "description", "author", "dependencies", "devDependencies", "registryDependencies", "files", "cssVars", "css", "tailwind", "envVars", "meta", "docs", "categories", "extends"]);
 
@@ -48,7 +48,10 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const WRITABLE_EXTENSION = /\.(?:tsx|ts|jsx|js|mjs|css)$/u;
 // Files that change how a project builds, installs or is configured. An item never writes them;
 // a dependency is listed for the person to add, not written into package.json.
-const BUILD_CONFIG = /^(?:package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|tsconfig(?:\.[^/]+)?\.json|jsconfig\.json|components\.json|(?:next|vite|vitest|webpack|rollup|postcss|tailwind|babel|eslint|prettier|svelte|astro|nuxt|remix|jest|playwright|turbo)\.config\.[a-z]+)$/iu;
+// Any `*.config.*` or `*.workspace.*` file, whatever tool reads it (next, vite, electron.vite,
+// sentry.client, drizzle, lint-staged, commitlint, react-router, ...), and the files a
+// framework runs by name.
+const BUILD_CONFIG = /^(?:package\.json|package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|bun\.lockb?|tsconfig(?:\.[^/]+)?\.json|jsconfig(?:\.[^/]+)?\.json|components\.json|.+\.config\.[a-z0-9]+|.+\.workspace\.[a-z0-9]+|gatsby-(?:node|browser|ssr|config)\.[a-z]+)$/iu;
 const WINDOWS_RESERVED = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?$/iu;
 const PLACEHOLDERS = Object.freeze({ "@components/": "components", "@ui/": "ui", "@lib/": "lib", "@hooks/": "hooks" });
 
@@ -69,7 +72,9 @@ export function unsafePathReason(path) {
     forms.push(decoded);
   }
   for (const form of forms) {
-    if (/[\u0000-\u001f\u007f]/u.test(form)) return "it contains a control character";
+    if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(form)) return "it contains a control character";
+    // One spelling per name: a file system that normalizes would otherwise see two names as one.
+    if (form !== form.normalize("NFC")) return "it is not in normalized (NFC) form";
     if (form.includes("\\")) return "it contains a backslash";
     if (form.includes(":")) return "it contains a colon";
     if (form.startsWith("/")) return "it is absolute";
@@ -79,7 +84,10 @@ export function unsafePathReason(path) {
       if (segment === "" ) return "it has an empty segment";
       if (segment === "." || segment === "..") return "it leaves its folder";
       if (segment.startsWith(".")) return `it names a hidden file or folder (${segment})`;
-      if (segment === "node_modules") return "it writes into node_modules";
+      // Windows and macOS compare names without case, and Windows also answers 8.3 short names
+      // (NODE_M~1, GITHUB~1): a short name could reach a hidden folder or node_modules.
+      if (segment.toLowerCase() === "node_modules") return "it writes into node_modules";
+      if (/~\d/u.test(segment)) return `it looks like a Windows short name (${segment})`;
       if (WINDOWS_RESERVED.test(segment)) return `it names a reserved device (${segment})`;
       if (/[ .]$/u.test(segment)) return "a segment ends in a space or a dot";
       if (/[<>"|?*]/u.test(segment)) return "it contains a character Windows refuses";
@@ -191,10 +199,12 @@ const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["']([^"'\n]
  */
 export function primitiveFamily({ dependencies = [], files = [] }) {
   const evidence = new Set();
+  const within = (name, base) => name === base || name.startsWith(base + "/");
+  // Icons and colours are not primitives: @radix-ui/react-icons sits beside Base UI often.
   const note = (name) => {
-    if (name === "@base-ui/react" || name.startsWith("@base-ui/react/") || name === "@base-ui-components/react" || name.startsWith("@base-ui-components/react/")) evidence.add("base:" + name);
-    else if (name === "radix-ui" || name.startsWith("@radix-ui/")) evidence.add("radix:" + name);
-    else if (name === "react-aria-components" || name.startsWith("react-aria")) evidence.add("aria:" + name);
+    if (within(name, "@base-ui/react") || within(name, "@base-ui-components/react")) evidence.add("base:" + name);
+    else if (within(name, "radix-ui") || (name.startsWith("@radix-ui/react-") && !within(name, "@radix-ui/react-icons"))) evidence.add("radix:" + name);
+    else if (within(name, "react-aria-components") || within(name, "react-aria") || name.startsWith("@react-aria/")) evidence.add("aria:" + name);
   };
   for (const dependency of dependencies) note(dependency.name);
   for (const file of files) {
@@ -248,7 +258,9 @@ export function parseRegistryItem(text) {
     if (Object.hasOwn(file, "target") && file.target !== "") {
       if (typeof file.target !== "string") fail("invalid-file", `${file.path} has a target that is not text`);
       const placeholder = Object.keys(PLACEHOLDERS).find((prefix) => file.target.startsWith(prefix));
-      if (!placeholder && file.target.includes("@")) fail("unsafe-path", `${file.target.slice(0, 80)}: a placeholder may only begin a target`);
+      // A target that begins with @ must be a placeholder; an @ later is a folder name (a Next.js
+      // parallel route such as app/@modal).
+      if (!placeholder && file.target.startsWith("@")) fail("unsafe-path", `${file.target.slice(0, 80)}: only @components/, @ui/, @lib/ and @hooks/ may begin a target`);
       const targetProblem = unsafePathReason(placeholder ? file.target.slice(placeholder.length) : file.target);
       if (targetProblem) fail("unsafe-path", `target ${file.target.slice(0, 80)}: ${targetProblem}`);
       target = file.target;
@@ -324,21 +336,22 @@ export function resolveTarget(file, layout = DEFAULT_LAYOUT) {
 export function registryClosure(root, lookup) {
   const order = [];
   const missing = new Set();
+  // By the item's own name, whatever a dependency called it (a name, @ns/name or a URL).
   const state = new Map();
   const visit = (item, depth) => {
     if (depth > REGISTRY_ITEM_LIMITS.closureDepth) fail("closure-too-deep", `the items ${root.name} needs nest more than ${REGISTRY_ITEM_LIMITS.closureDepth} deep`);
     state.set(item.name, "visiting");
-    for (const name of item.registryDependencies) {
-      if (state.get(name) === "visiting") fail("closure-cycle", `${name} depends on itself through ${item.name}`);
-      if (state.get(name) === "done") continue;
-      const next = lookup(name);
+    for (const reference of item.registryDependencies) {
+      const next = lookup(reference);
       if (next === null || next === undefined) {
-        missing.add(name);
+        missing.add(reference);
         continue;
       }
-      if (next.name !== name && !/^https:/u.test(name) && !name.includes("/")) fail("closure-mismatch", `${name} was answered by an item named ${next.name}`);
+      // A plain name must be answered by the item of that name.
+      if (!/^https:/u.test(reference) && !reference.includes("/") && next.name !== reference) fail("closure-mismatch", `${reference} was answered by an item named ${next.name}`);
+      if (state.get(next.name) === "visiting") fail("closure-cycle", `${next.name} depends on itself through ${item.name}`);
+      if (state.get(next.name) === "done") continue;
       visit(next, depth + 1);
-      state.set(name, "done");
     }
     order.push(item);
     if (order.length > REGISTRY_ITEM_LIMITS.closureItems) fail("closure-too-large", `${root.name} needs more than ${REGISTRY_ITEM_LIMITS.closureItems} items`);
@@ -360,18 +373,19 @@ export function sourceForRegistryUrl(url) {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) return null;
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port !== "") return null;
+  const host = (name) => name.toLowerCase().replace(/\.$/u, "").replace(/^www\./u, "");
+  const where = host(parsed.hostname);
   for (const source of UI_COMPONENT_SOURCES) {
     if (source.registry === null) continue;
     const pattern = new URL(source.registry.replace("{style}", "s").replace("{name}", "n"));
-    const prefix = source.registry.slice(0, source.registry.search(/\{(?:style|name)\}/u));
-    if (parsed.host === pattern.host && url.startsWith(prefix) && parsed.pathname.endsWith(".json")) return source;
+    const prefix = new URL(source.registry.slice(0, source.registry.search(/\{(?:style|name)\}/u))).pathname;
+    if (where === host(pattern.hostname) && parsed.pathname.startsWith(prefix) && parsed.pathname.endsWith(".json")) return source;
   }
-  const host = parsed.hostname.replace(/^www\./u, "");
   for (const source of UI_COMPONENT_SOURCES) {
     if (source.importPolicy !== "permission-required") continue;
-    const site = new URL(source.website).hostname.replace(/^www\./u, "");
-    if (host === site || host.endsWith("." + site)) return source;
+    const site = host(new URL(source.website).hostname);
+    if (where === site || where.endsWith("." + site)) return source;
   }
   return null;
 }
