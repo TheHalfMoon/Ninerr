@@ -55,6 +55,13 @@ test("create a design system, add a token, and draw a layer with it in each mode
     await page.locator('input[data-token="--brand"][data-mode="dark"]').press("Tab");
     await waitRevision(page, 5);
     assert.equal(await colourOf(page, "hero"), "rgb(255, 0, 0)", "the layer is still in the default mode");
+    // The redraw after the change keeps focus where the keyboard left it, inside the dialog.
+    assert.equal(await page.evaluate(() => document.getElementById("dialog").contains(document.activeElement) && document.activeElement !== document.body), true, "focus stays in the dialog");
+    // A refused change is said in the dialog.
+    await page.locator("#token-new-name").fill("--brand");
+    await page.locator("#token-new-value").fill("red");
+    await page.locator("#token-add").click();
+    assert.match(await page.locator("#tokens-error").textContent(), /--brand is already a token/u);
     await page.locator("#dialog[open] button", { hasText: "Close" }).last().click();
 
     await page.locator('#layers [role=treeitem][data-node-id="hero"] > .row').click();

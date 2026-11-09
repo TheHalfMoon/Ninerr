@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
 import { DRAWN_ID, planElement } from "@ninerr/renderer";
-import { compileTokens, designSystemOf, isCodePart, tokenReferences } from "@ninerr/document-model";
+import { compileTokens, designSystemOf, isCodePart, modeAttribute, styleValuesOf, tokenReferences } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
 import { importedStyle, styleOutOfWrittenOrder, styleProperties } from "./imports.ts";
 
@@ -103,12 +103,17 @@ function tokensUsedUnder(document: any, nodeId: string): string | null {
   if (system === null || system.props.tokens.length === 0) return null;
   const names = new Set(system.props.tokens.map((token: any) => token.name));
   const stack = [nodeId];
+  const seen = new Set<string>();
   while (stack.length > 0) {
-    const node = document.nodes[stack.pop() as string];
+    const id = stack.pop() as string;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const node = document.nodes[id];
     if (!node) continue;
-    const values = [...Object.values(node.props.style ?? {}), node.props.stylesheet];
-    if (values.some((value) => tokenReferences(value).some((name: string) => names.has(name)))) return compileTokens(document);
+    // Its style, stylesheet and overrides; and, for an instance, its component's layers, which it draws.
+    if (styleValuesOf(node).some(({ value }: { value: string }) => tokenReferences(value).some((name: string) => names.has(name)))) return compileTokens(document);
     stack.push(...node.children);
+    if (node.type === "component-instance" && typeof node.props.componentId === "string") stack.push(node.props.componentId);
   }
   return null;
 }
@@ -208,6 +213,9 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
       else if (name === "for") props.htmlFor = value;
       else if (/^[A-Za-z_][A-Za-z0-9_:.-]*$/u.test(name) && !/[\r\n]/u.test(value)) props[name] = value;
     }
+    // The design-system modes it takes (ADR-0004), which the exported token CSS selects on.
+    const modes = modeAttribute(node.props);
+    if (modes !== null) props["data-ninerr-mode"] = modes;
     if (exportedId.has(id)) props.id = exportedId.get(id)!;
     if (labelTarget.has(id)) props.htmlFor = labelTarget.get(id)!;
     else if (props.htmlFor !== undefined) delete props.htmlFor; // names nothing in this export

@@ -10,7 +10,11 @@ import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs"
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
 import { UI_COMPONENT_SOURCE_GROUPS, searchUiComponentSources } from "/packages/component-sources/src/catalog.mjs";
 import { TOKEN_TYPES } from "/packages/document-model/src/schema-v2.mjs";
-import { addMode, createDesignSystem, deleteToken, designSystemOf, renameToken, setToken, tokenUses } from "/packages/document-model/src/tokens.mjs";
+import { addMode, addToken, createDesignSystem, deleteToken, designSystemOf, renameToken, setToken, tokenUses } from "/packages/document-model/src/tokens.mjs";
+
+// While the Tokens dialog is open, how it shows the document again after any change (an Undo, an
+// agent's edit); it answers false once the dialog is gone.
+let redrawTokens = null;
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attributes = {}, ...children) => {
@@ -537,7 +541,8 @@ function openTokensDialog() {
   showDialog("Tokens", (close) => {
     const error = el("p", { id: "tokens-error", role: "alert" });
     const body = el("div", { id: "tokens-body" });
-    // Run one change, then show the dialog again as it now is.
+    // Run one change; the dialog is shown again as the document now is when the change arrives.
+    // A refusal is said here, where the person is looking.
     const change = (build, intent) => {
       error.textContent = "";
       let operations;
@@ -548,10 +553,27 @@ function openTokensDialog() {
         return;
       }
       commit(operations, intent).then((event) => {
-        if (event) draw();
+        if (!event) error.textContent = $("status").textContent || "That change was not made.";
       });
     };
+    // Which control had focus, so a redraw puts it back on the same one.
+    const focusKey = () => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || !body.contains(active)) return null;
+      if (active.dataset.token && active.dataset.mode) return `[data-token="${CSS.escape(active.dataset.token)}"][data-mode="${CSS.escape(active.dataset.mode)}"]`;
+      if (active.id) return `#${CSS.escape(active.id)}`;
+      if (active.getAttribute("aria-label")) return `[aria-label="${CSS.escape(active.getAttribute("aria-label"))}"]`;
+      return null;
+    };
     const draw = () => {
+      if (!body.isConnected && redrawTokens !== null && body.dataset.drawn === "yes") return false;
+      const key = focusKey();
+      drawBody();
+      body.dataset.drawn = "yes";
+      if (key !== null) body.querySelector(key)?.focus();
+      return true;
+    };
+    const drawBody = () => {
       const document = state.document;
       const system = document === null ? null : designSystemOf(document);
       if (system === null) {
@@ -581,9 +603,10 @@ function openTokensDialog() {
           remove.addEventListener("click", () => {
             const uses = tokenUses(state.document, token.name).length;
             const others = system.props.tokens.filter((entry) => entry.name !== token.name);
+            const collection = system.props.collections.find((entry) => entry.id === token.collection);
             const choice = el("select", { "aria-label": `What replaces ${token.name} where it is used` },
               el("option", { value: "" }, uses === 0 ? "Nothing (unused)" : "Choose what replaces it"),
-              el("option", { value: "literal" }, "Its own value"),
+              el("option", { value: "literal" }, `Its value: ${token.values[collection.defaultMode] ?? ""} on layers (the default mode), and its own value in each mode for tokens that use it`),
               ...others.map((entry) => el("option", { value: entry.name }, entry.name)));
             const confirm = el("button", { type: "button", class: "primary" }, "Delete");
             confirm.addEventListener("click", () => change((doc) => deleteToken(doc, token.name, choice.value === "literal" ? { literal: true } : choice.value === "" ? undefined : { token: choice.value }), `Delete ${token.name}`));
@@ -611,21 +634,26 @@ function openTokensDialog() {
       const add = el("button", { type: "button", class: "primary", id: "token-add" }, "Add token");
       add.addEventListener("click", () => {
         const collection = system.props.collections.find((entry) => entry.id === collectionSelect.value);
-        change((doc) => setToken(doc, { name: name.value.trim(), type: type.value, collection: collection.id, values: { [collection.defaultMode]: value.value.trim() } }), `Add ${name.value.trim()}`);
+        change((doc) => addToken(doc, { name: name.value.trim(), type: type.value, collection: collection.id, values: { [collection.defaultMode]: value.value.trim() } }), `Add ${name.value.trim()}`);
       });
-      // A selected layer takes a collection's mode: the canvas draws its tokens in that mode.
+      // A selected layer takes a collection's mode: the canvas draws its tokens in that mode. Each
+      // collection's default is chosen apart, and clears that collection's mode alone.
       const selected = state.selection.filter((id) => state.document.nodes[id]);
       const modeChoice = el("select", { id: "token-layer-mode", "aria-label": "Mode for the selected layers" },
-        el("option", { value: "" }, "Default modes"),
-        ...system.props.collections.flatMap((collection) => collection.modes.map((mode) => el("option", { value: `${collection.id}:${mode.id}` }, `${collection.name}: ${mode.name}`))));
+        ...system.props.collections.flatMap((collection) => collection.modes.map((mode) => el("option", { value: `${collection.id}:${mode.id === collection.defaultMode ? "" : mode.id}` }, `${collection.name}: ${mode.name}${mode.id === collection.defaultMode ? " (default)" : ""}`))));
       const applyMode = el("button", { type: "button", id: "token-layer-mode-apply", disabled: selected.length === 0 }, "Apply to selected layers");
-      applyMode.addEventListener("click", () => change((doc) => selected.map((id) => {
+      applyMode.addEventListener("click", () => change((doc) => {
+        // The selection as it is now, not as it was when the dialog was drawn.
+        const ids = state.selection.filter((id) => doc.nodes[id]);
+        if (ids.length === 0) throw new Error("Select a layer on the canvas first.");
         const [collection, mode] = modeChoice.value.split(":");
-        const modes = { ...(doc.nodes[id].props.modes ?? {}) };
-        if (modeChoice.value === "") return { type: "set-props", nodeId: id, unset: ["modes"] };
-        modes[collection] = mode;
-        return { type: "set-props", nodeId: id, set: { modes } };
-      }), "Set the mode of the selected layers"));
+        return ids.map((id) => {
+          const modes = { ...(doc.nodes[id].props.modes ?? {}) };
+          if (mode === "") delete modes[collection];
+          else modes[collection] = mode;
+          return Object.keys(modes).length === 0 ? { type: "set-props", nodeId: id, unset: ["modes"] } : { type: "set-props", nodeId: id, set: { modes } };
+        });
+      }, "Set the mode of the selected layers"));
       body.replaceChildren(
         ...sections,
         el("h3", {}, "Add a token"),
@@ -641,6 +669,7 @@ function openTokensDialog() {
       );
     };
     draw();
+    redrawTokens = draw;
     return [
       el("p", {}, "Layers use a token by holding var(--name) in a style value, for example color: var(--brand)."),
       error, body,
@@ -1422,6 +1451,8 @@ function applyChange(event) {
   }
   state.document = result.document;
   state.revision = event.revision;
+  // The Tokens dialog shows the document as it now is, whoever changed it.
+  if (redrawTokens !== null && redrawTokens() === false) redrawTokens = null;
   if (!state.seen.has(event.transactionId)) {
     state.seen.add(event.transactionId);
     const { operations: _operations, ...summary } = event;

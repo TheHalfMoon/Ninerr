@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createDocument, createNode } from "../packages/document-model/src/index.mjs";
-import { addCollection, addMode, compileTokens, createDesignSystem, deleteToken, designSystemOf, modeAttribute, renameToken, setToken, tokenUses } from "../packages/document-model/src/tokens.mjs";
+import { addCollection, addMode, addToken, compileTokens, createDesignSystem, deleteToken, designSystemOf, modeAttribute, renameToken, setToken, tokenUses } from "../packages/document-model/src/tokens.mjs";
 import { commitTransaction, createHistoryState, undo } from "../packages/history/src/index.mjs";
 
 // ADR-0004: tokens live on the design-system node; a style binds one with var(--name). Every
@@ -111,4 +111,95 @@ test("code export carries the compiled tokens when the exported layers use any",
   assert.equal(exported.tokens, compileTokens(plain));
   assert.match(exported.tokens, /^:root \{\n {2}--blue: #2255ff;/u);
   assert.equal(exportJsx(plain, "plain").tokens, null, "a layer that uses no token carries none");
+});
+
+test("an alias follows the token it names into each mode, across collections too", () => {
+  const project = start();
+  project.run(addMode(project.state.document, "base", { id: "dark", name: "Dark" }));
+  project.run(setToken(project.state.document, { name: "--blue", values: { dark: "#88aaff" } }));
+  // --button in another collection, set only in its default: it must still follow --brand.
+  project.run(addCollection(project.state.document, { id: "semantic", name: "Semantic" }));
+  project.run(addToken(project.state.document, { name: "--button", type: "color", collection: "semantic", values: { default: "var(--brand)" } }));
+  const css = compileTokens(project.state.document);
+  const dark = css.slice(css.indexOf('[data-ninerr-mode~="base:dark"]'));
+  assert.match(dark, /--blue: #88aaff;/u);
+  assert.match(dark, /--brand: var\(--blue\);/u, "an alias in the same collection is declared again in the mode");
+  assert.match(dark, /--button: var\(--brand\);/u, "and so is one in another collection that reaches it through --brand");
+  assert.throws(() => addToken(project.state.document, { name: "--blue", type: "color", collection: "base", values: { default: "red" } }), /already a token/u);
+});
+
+test("uses in instance overrides and variant overrides are found, renamed and replaced", () => {
+  const project = start();
+  project.run([
+    { type: "insert-node", parentId: "page", index: 2, node: { id: "def", type: "component-definition", props: { name: "Btn", properties: [], variants: [{ values: {}, overrides: [{ path: [], nodeId: "def", set: { style: { color: "var(--brand)" } } }] }] } } },
+    { type: "insert-node", parentId: "page", index: 3, node: { id: "inst", type: "component-instance", props: { componentId: "def", overrides: [{ path: [], nodeId: "def", set: { style: { "border-color": "var(--brand)" } } }] } } },
+  ]);
+  const found = tokenUses(project.state.document, "--brand").map(({ nodeId, fields }) => `${nodeId}:${fields.join(",")}`);
+  assert.ok(found.includes("def:variants.0.overrides.0.style.color"), found.join(" "));
+  assert.ok(found.includes("inst:overrides.0.style.border-color"), found.join(" "));
+  const renamed = project.run(renameToken(project.state.document, "--brand", "--primary"));
+  assert.equal(renamed.nodes.inst.props.overrides[0].set.style["border-color"], "var(--primary)");
+  assert.equal(renamed.nodes.def.props.variants[0].overrides[0].set.style.color, "var(--primary)");
+  const deleted = project.run(deleteToken(renamed, "--primary", { token: "--blue" }));
+  assert.equal(deleted.nodes.inst.props.overrides[0].set.style["border-color"], "var(--blue)");
+  assert.equal(tokenUses(deleted, "--primary").length, 0);
+});
+
+test("comments and escaped quotes in a stylesheet never hide a use or make one", () => {
+  const project = start();
+  const sheet = "/* don't */ .x { color: var(--brand) } /* it's var(--brand) */ .y::before { content: \"\\\" var(--brand)\" }";
+  const document = project.run([{ type: "set-props", nodeId: "card", set: { stylesheet: sheet } }]);
+  assert.deepEqual(tokenUses(document, "--brand").find(({ nodeId }) => nodeId === "card").fields, ["stylesheet"]);
+  assert.throws(() => deleteToken(document, "--brand"), /in use/u, "the use behind an apostrophe in a comment is found");
+  const renamed = project.run(renameToken(document, "--brand", "--primary"));
+  assert.equal(renamed.nodes.card.props.stylesheet, "/* don't */ .x { color: var(--primary) } /* it's var(--brand) */ .y::before { content: \"\\\" var(--brand)\" }", "only the code's reference changes");
+  // A layer stylesheet that declares the token locally is a use, and is renamed with it.
+  const local = project.run([{ type: "set-props", nodeId: "card", set: { stylesheet: ":scope { --primary: red; color: var(--primary); }" } }]);
+  assert.equal(project.run(renameToken(local, "--primary", "--accent")).nodes.card.props.stylesheet, ":scope { --accent: red; color: var(--accent); }");
+});
+
+test("collection and mode ids hold no colon, and values never hold what a stylesheet may not", () => {
+  const project = start();
+  assert.throws(() => addCollection(project.state.document, { id: "a:b", name: "A" }), /letters, digits and \. _ -/u);
+  assert.throws(() => addMode(project.state.document, "base", { id: "b:c", name: "B" }), /letters, digits and \. _ -/u);
+  for (const value of ['"javascript:x"', "'vbscript:x'", "behavior: x", "-moz-binding"]) {
+    assert.throws(() => setToken(project.state.document, { name: "--f", type: "fontFamily", collection: "base", values: { default: value } }), /scheme or binding|character/u, value);
+  }
+});
+
+test("a delete by literal gives aliases the token's value in each mode; one by a token that refers back is refused", () => {
+  const project = start();
+  project.run(addMode(project.state.document, "base", { id: "dark", name: "Dark" }));
+  project.run(setToken(project.state.document, { name: "--blue", values: { dark: "#88aaff" } }));
+  const deleted = project.run(deleteToken(project.state.document, "--blue", { literal: true }));
+  const brand = designSystemOf(deleted).props.tokens.find((token) => token.name === "--brand");
+  assert.deepEqual(brand.values, { default: "#2255ff", dark: "#88aaff" });
+  // --brand refers to --blue; replacing --blue with --brand would make a cycle.
+  const again = start();
+  assert.throws(() => deleteToken(again.state.document, "--blue", { token: "--brand" }), /--brand itself refers to --blue; choose another token, or its value/u);
+});
+
+test("a rename that would rewrite more layers than one change may is refused with how many", () => {
+  const nodes = [createNode({ id: "page", type: "page", children: Array.from({ length: 5_000 }, (_, index) => `n${index}`) })];
+  for (let index = 0; index < 5_000; index += 1) nodes.push(createNode({ id: `n${index}`, type: "frame", parentId: "page", props: { style: { color: "var(--brand)" } } }));
+  let state = createHistoryState(createDocument({ id: "d", name: "n", nodes }));
+  const run = (operations) => {
+    state = commitTransaction(state, { id: `big${clock += 1}`, actor: "person", baseRevision: state.document.revision, intent: "t", tool: "t", timestamp: "2026-11-09T00:00:00.000Z", operations });
+  };
+  run(createDesignSystem(state.document, { id: "ds" }));
+  run(addToken(state.document, { name: "--brand", type: "color", collection: "base", values: { default: "red" } }));
+  assert.throws(() => renameToken(state.document, "--brand", "--primary"), /--brand is used by 5000 layers; one change can rewrite at most 4999/u);
+});
+
+test("code export carries tokens an instance's component uses, and each layer's mode", async () => {
+  const { exportJsx } = await import("../packages/studio-host/src/code.ts");
+  const project = start();
+  const document = project.run([
+    { type: "insert-node", parentId: "page", index: 2, node: { id: "def", type: "component-definition", props: { name: "Btn", properties: [] } } },
+    { type: "insert-node", parentId: "def", index: 0, node: { id: "def-label", type: "text", props: { text: "Go", style: { color: "var(--brand)" } } } },
+    { type: "insert-node", parentId: "page", index: 3, node: { id: "box", type: "frame", props: { modes: { base: "default" } } } },
+    { type: "insert-node", parentId: "box", index: 0, node: { id: "inst", type: "component-instance", props: { componentId: "def" } } },
+  ]);
+  assert.match(exportJsx(document, "box").tokens ?? "", /--brand/u, "the instance's component uses --brand");
+  assert.match(exportJsx(document, "box").code, /data-ninerr-mode="base:default"/u);
 });
