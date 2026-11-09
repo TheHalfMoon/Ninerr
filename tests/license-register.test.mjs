@@ -29,6 +29,8 @@ const distributedOrPermissive = (entry) => PERMISSIVE.has(entry.license) || (NOT
 // Node.js is built into the Electron runtime, which carries its license; the corresponding-source
 // record links its source.
 const URL_ALIASES = { "inikulin/parse5": "parse5", "Koromix/koffi": "koffi", "babel/babel": "@babel/parser", "fb55/entities": "entities", "microsoft/playwright": "playwright-core", "nodejs/node": "electron/electron" };
+// Product names written as owner/name that are registered under their repository's id.
+const NAME_ALIASES = { "shadcn/ui": "shadcn-ui/ui" };
 const URL_NOT_INCORPORATED = new Set(["ehmo/platform-design-skills", "trailhq/Graft", "owner/repo", "TheHalfMoon/Ninerr"]); // owner/repo: the placeholder in docs; TheHalfMoon/Ninerr: this repository (its clone URL in docs/RELEASE.md)
 // owner/name literals that are not upstream projects: rule ids, MIME types, Ninerr paths, and
 // MCP JSON-RPC method names (tools/list).
@@ -103,7 +105,7 @@ test("every upstream project named anywhere in package sources or the donor ledg
   // Ledger table rows name projects even when they look like file names (opentype.js).
   for (const [, name] of read("docs/DONORS.md").matchAll(/^\| `([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)` \|/gmu)) named.add(name);
   assert.ok(named.size >= 22, `found ${named.size} upstream names`);
-  for (const name of named) assert.ok(byId.has(name), `${name} is registered`);
+  for (const name of named) assert.ok(byId.has(NAME_ALIASES[name] ?? name), `${name} is registered`);
 });
 
 test("every GitHub project linked from any tracked file is registered", () => {

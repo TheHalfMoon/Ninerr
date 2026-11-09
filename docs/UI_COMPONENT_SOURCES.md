@@ -23,6 +23,29 @@ Status (2026-11-09): **Source catalog and in-editor offline discovery implemente
 
 The live curated metadata lives in `packages/studio-web/src/ui-sources.mjs` and is accessible from the **Component sources** button in the Ninerr editor. Search and category filters run entirely in the browser with **no network access**. Selecting an entry shows its source, intent, usage, license review gate and a manual setup example. No components are downloaded, installed, copied, imported or executed by the catalog.
 
+### Licenses and what Ninerr may import
+
+Checked against each publisher's own license file or terms on 2026-11-09. Nothing from any source is bundled with Ninerr; the catalog names them, and an import puts an item into the person's own project under the item's license. Each catalog entry carries this as `license` and `importPolicy`.
+
+| Source | License | Import policy | Registry items | Evidence |
+| --- | --- | --- | --- | --- |
+| shadcn/ui | MIT, Copyright (c) 2023 shadcn | allowed | `https://ui.shadcn.com/r/styles/<style>/<name>.json` | https://github.com/shadcn-ui/ui/blob/main/LICENSE.md |
+| Base UI | MIT, Copyright (c) 2019 Material-UI SAS | allowed | npm `@base-ui/react` | https://github.com/mui/base-ui/blob/master/LICENSE |
+| Radix UI | MIT, Copyright (c) 2022 WorkOS | allowed | npm `radix-ui`, `@radix-ui/react-*` | https://github.com/radix-ui/primitives/blob/main/LICENSE |
+| Sonner | MIT, Copyright (c) 2023 Emil Kowalski | allowed | npm `sonner` | https://github.com/emilkowalski/sonner/blob/main/LICENSE.md |
+| Vaul | MIT, Copyright (c) 2023 Emil Kowalski | allowed | npm `vaul` | https://github.com/emilkowalski/vaul/blob/main/LICENSE.md |
+| cmdk | MIT, Copyright (c) 2022 Paco Coursey | allowed | npm `cmdk` | https://github.com/dip/cmdk/blob/main/LICENSE.md |
+| NumberFlow | MIT, Copyright (c) 2024 Maxwell Barvian | allowed | npm `@number-flow/react` | https://github.com/barvian/number-flow/blob/main/LICENSE.md |
+| Magic UI | MIT, Copyright (c) Magic UI (Pro is separate) | allowed | `https://magicui.design/r/<name>.json` | https://github.com/magicuidesign/magicui/blob/main/LICENSE.md |
+| Beautiful UI (Turbo) | MIT, Copyright (c) 2026 Shane Levine | allowed | `https://www.beautifului.dev/r/<name>.json` | https://www.beautifului.dev/license |
+| Beautiful UI (Notchset) | Free items MIT; Pro items commercial | free items only | `https://beautiful-ui.dev/r/<name>.json` (Pro items answer HTTP 402) | https://beautiful-ui.dev/license |
+| RareUI (Swappy) | MIT, Copyright (c) 2025 Swapnil Kalambe (RareUI) | allowed | `https://rareui.in/r/<Name>.json` | https://github.com/Codewithswappy/RareUI/blob/main/LICENSE |
+| Rare UI (Swami) | MIT + Commons Clause + Attribution, Copyright (c) 2026 Swami Malode | allowed with attribution: the project must show a visible link to https://rareui.com, and the components may not be sold or redistributed themselves | GitHub raw `public/r/<name>.json` | https://github.com/swamimalode07/rare-ui/blob/main/LICENSE |
+| Aceternity UI | No open-source license: site terms reserve all rights; Pro is commercial | **permission required** | not used | https://ui.aceternity.com/terms, https://ui.aceternity.com/licence |
+| 21st.dev | Terms of Service: no automated collection or redistribution without written consent; registry requires sign-in | **permission required** | not used | https://21st.dev/terms |
+
+Aceternity UI and 21st.dev stay in the catalog so a person can find them, but Ninerr will import nothing from them until the publisher grants permission in writing. The project owner decides whether to seek it.
+
 ### Source identity cautions
 
 - **Beautiful UI** names two distinct sources, **Turbo** (`https://www.beautifului.dev`) and **Notchset** (`https://beautiful-ui.dev`); both are now indexed separately. Notchset free items are MIT, while Pro items restrict distribution as a component collection.

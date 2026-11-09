@@ -526,6 +526,14 @@ function openResearchDialog() {
 
 // ---------- curated UI component sources ----------
 
+// What each import policy lets a person do with a source's items, in the catalog's words.
+const IMPORT_POLICY_TEXT = {
+  "allowed": "Its items may be imported into your own project, keeping their license notice.",
+  "allowed-with-attribution": "Its items may be imported into your own project, which must then show the credit link its license requires.",
+  "free-items-only": "Only its free items may be imported. Pro items need your own license and are never offered by Ninerr.",
+  "permission-required": "Ninerr imports nothing from it: its terms need the publisher's written permission.",
+};
+
 // Discovery is local-only. Selecting a source does not fetch or execute code or
 // grant any redistribution rights. Each chosen component still needs review.
 function openComponentSourcesDialog() {
@@ -546,6 +554,8 @@ function openComponentSourcesDialog() {
         el("h3", {}, source.name),
         el("p", {}, source.purpose),
         el("p", {}, source.usage),
+        el("p", {}, "License: " + source.license),
+        el("p", { "data-import-policy": source.importPolicy }, IMPORT_POLICY_TEXT[source.importPolicy]),
         el("p", {}, "Rights: " + source.rights),
         el("p", {}, "Review gate: " + source.gate),
         field("Official website", source.website),
