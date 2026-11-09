@@ -122,7 +122,11 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   // Instances export as the layers they draw (ADR-0005), as the canvas shows them.
   const stored = document;
-  document = withInstancesExpanded(document, nodeId);
+  try {
+    document = withInstancesExpanded(document, nodeId);
+  } catch (error) {
+    throw new StudioError(422, "export-too-large", error instanceof Error ? error.message : "these instances draw too many layers to export");
+  }
   // The page imported code was placed in, as import made it, exports as the component inside
   // it, under the page's name. Wrapping it instead would nest one more element each time the
   // export is brought in again (#398). A page the person has styled exports as itself.

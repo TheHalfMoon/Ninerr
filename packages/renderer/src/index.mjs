@@ -246,28 +246,62 @@ export function drawnRoots(document) {
 // data-ninerr-id (so scoped stylesheets match inside instances) and carry the instance chain as
 // data-ninerr-instance; they are not layers of their own.
 export const MAX_INSTANCE_DEPTH = 16;
+// The most layers one instance draws, nested instances included: a document whose instances nest
+// wide (8 levels of 10) would otherwise expand to millions of layers. Past it, the instance is
+// drawn as stale, and code export refuses it.
+export const MAX_EXPANDED_LAYERS = 5_000;
 
 const isPlainRecord = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-// One override's set onto a copy of props: text, style, attributes, visibility.
-function overridden(props, set) {
-  if (!isPlainRecord(set)) return props;
-  const next = { ...props };
-  if (typeof set.text === "string") next.text = set.text;
-  if (isPlainRecord(set.style)) next.style = { ...(isPlainRecord(props.style) ? props.style : {}), ...set.style };
-  if (isPlainRecord(set.attributes)) next.attributes = { ...(isPlainRecord(props.attributes) ? props.attributes : {}), ...set.attributes };
-  if (set.visible === false) next.attributes = { ...(isPlainRecord(next.attributes) ? next.attributes : {}), hidden: "" };
-  return next;
+// One override's set onto a copy of a view's props and visibility: text, style, attributes, and
+// shown or hidden (the last word on visibility wins, so an instance's own override can show what a
+// variant hid).
+function overridden(view, set) {
+  if (!isPlainRecord(set)) return view;
+  const props = { ...view.props };
+  if (typeof set.text === "string") props.text = set.text;
+  if (isPlainRecord(set.style)) props.style = { ...(isPlainRecord(props.style) ? props.style : {}), ...set.style };
+  if (isPlainRecord(set.attributes)) props.attributes = { ...(isPlainRecord(props.attributes) ? props.attributes : {}), ...set.attributes };
+  return { props, hidden: typeof set.visible === "boolean" ? !set.visible : view.hidden };
 }
+
+// A hidden layer is hidden whatever display its own style gives it.
+function withVisibility(props, hidden) {
+  const attributes = { ...(isPlainRecord(props.attributes) ? props.attributes : {}) };
+  const style = { ...(isPlainRecord(props.style) ? props.style : {}) };
+  if (hidden === true) {
+    attributes.hidden = "";
+    style.display = "none !important";
+  } else if (hidden === false) delete attributes.hidden;
+  return { ...props, attributes, style };
+}
+
+// A component's own props (its name, properties and variants) are not drawn.
+const drawnProps = (props) => {
+  const { properties: _properties, variants: _variants, ...rest } = props;
+  return rest;
+};
+
+class ExpansionTooLarge extends Error {}
 
 /**
  * What an instance draws, as a tree of views { id, type, props, chain, children }: its component's
  * subtree with, in order, the variant overrides its values select, its property values, and its
- * own overrides (an outer instance's overrides on a nested one win over the nested one's). The root
- * view is the instance itself, drawn as its component's root with the instance's own placement.
- * Null for a component that is missing or not a component, or past the depth limit.
+ * own overrides (an outer instance's overrides on a nested one, or on its layers, win over the
+ * nested one's own). The root view is the instance itself, drawn as its component's root with the
+ * instance's own placement and modes. Null for a component that is missing or not a component,
+ * past the depth limit, or past MAX_EXPANDED_LAYERS layers.
  */
-export function expandInstance(document, instanceId, chain = [], outer = [], depth = 0) {
+export function expandInstance(document, instanceId, chain = [], outer = [], depth = 0, budget = { left: MAX_EXPANDED_LAYERS }) {
+  try {
+    return expand(document, instanceId, chain, outer, depth, budget);
+  } catch (error) {
+    if (error instanceof ExpansionTooLarge) return null;
+    throw error;
+  }
+}
+
+function expand(document, instanceId, chain, outer, depth, budget) {
   const nodes = document.nodes;
   const instance = Object.hasOwn(nodes, instanceId) ? nodes[instanceId] : undefined;
   const definition = instance && Object.hasOwn(nodes, instance.props.componentId) ? nodes[instance.props.componentId] : undefined;
@@ -278,52 +312,67 @@ export function expandInstance(document, instanceId, chain = [], outer = [], dep
   if (isPlainRecord(instance.props.propertyValues)) Object.assign(values, instance.props.propertyValues);
   const variants = (Array.isArray(definition.props.variants) ? definition.props.variants : [])
     .filter((variant) => isPlainRecord(variant?.values) && Object.entries(variant.values).every(([id, value]) => values[id] === value));
-  // Overrides that reach this instance's own component nodes (path []), and those for nested
-  // instances (path starting with one of them), the outer instance's after its own so they win.
+  // Its own overrides, then an outer instance's on it, so the outer ones win.
   const own = [...(Array.isArray(instance.props.overrides) ? instance.props.overrides : []), ...outer];
+  const variantOverrides = variants.flatMap((variant) => (Array.isArray(variant.overrides) ? variant.overrides : []));
   const view = (node) => {
-    let props = { ...node.props };
-    for (const variant of variants) for (const override of variant.overrides ?? []) if (override.path?.length === 0 && override.nodeId === node.id) props = overridden(props, override.set);
+    budget.left -= 1;
+    if (budget.left < 0) throw new ExpansionTooLarge();
+    let current = { props: { ...node.props }, hidden: null };
+    for (const override of variantOverrides) if (override.path?.length === 0 && override.nodeId === node.id) current = overridden(current, override.set);
     for (const property of properties) {
       if (property.target?.nodeId !== node.id) continue;
       const value = values[property.id];
-      if (property.target.field === "text") props.text = String(value);
-      else if (property.target.field === "visible" && value === false) props = overridden(props, { visible: false });
-      else if (property.target.field === "attributes.class" && typeof value === "string") props.attributes = { ...(isPlainRecord(props.attributes) ? props.attributes : {}), class: value };
+      if (property.target.field === "text") current = overridden(current, { text: String(value) });
+      else if (property.target.field === "visible" && typeof value === "boolean") current = overridden(current, { visible: value });
+      else if (property.target.field === "attributes.class" && typeof value === "string" && value !== "") {
+        // A variant's value joins the layer's own classes; it does not replace them.
+        const classes = typeof current.props.attributes?.class === "string" ? current.props.attributes.class : "";
+        current = overridden(current, { attributes: { class: [classes, value].filter(Boolean).join(" ") } });
+      }
     }
-    for (const override of own) if (Array.isArray(override?.path) && override.path.length === 0 && override.nodeId === node.id) props = overridden(props, override.set);
+    for (const override of own) if (Array.isArray(override?.path) && override.path.length === 0 && override.nodeId === node.id) current = overridden(current, override.set);
     if (node.type === "component-instance") {
-      const passed = own.filter((override) => override.path?.[0] === node.id).map((override) => ({ ...override, path: override.path.slice(1) }));
-      const nested = expandInstance(document, node.id, here, passed, depth + 1);
-      return nested === null ? { id: node.id, type: node.type, props: {}, chain: here, children: [] } : { ...nested, props: overridden(nested.props, null), chain: here };
+      const passed = [...variantOverrides, ...own].filter((override) => override.path?.[0] === node.id).map((override) => ({ ...override, path: override.path.slice(1) }));
+      const nested = expand(document, node.id, here, passed, depth + 1, budget);
+      if (nested === null) return { id: node.id, type: node.type, props: withVisibility({}, current.hidden), chain: here, children: [], stale: true };
+      // What was set on the nested instance itself (its style, attributes, text, visibility) is
+      // drawn on its root, over what its component gives it.
+      const merged = overridden({ props: nested.props, hidden: null }, { text: current.props.text !== node.props.text ? current.props.text : undefined, style: current.props.style, attributes: current.props.attributes });
+      return { ...nested, props: withVisibility(merged.props, current.hidden), chain: here };
     }
-    return { id: node.id, type: node.type, props, chain: here, children: node.children.filter((id) => Object.hasOwn(nodes, id)).map((id) => view(nodes[id])) };
+    return { id: node.id, type: node.type, props: withVisibility(drawnProps(current.props), current.hidden), chain: here, children: node.children.filter((id) => Object.hasOwn(nodes, id)).map((id) => view(nodes[id])) };
   };
   const root = view(definition);
-  // The instance is drawn as its component's root, placed by its own style.
+  // The instance is drawn as its component's root, placed by its own style, in its own modes.
   const style = { ...(isPlainRecord(root.props.style) ? root.props.style : {}), ...(isPlainRecord(instance.props.style) ? instance.props.style : {}) };
-  return { id: instanceId, type: "component-instance", props: { ...root.props, style }, chain, children: root.children };
+  const props = { ...root.props, style };
+  if (isPlainRecord(instance.props.modes)) props.modes = instance.props.modes;
+  return { id: instanceId, type: "component-instance", props, chain, children: root.children };
 }
 
 /**
  * A copy of `document` in which every instance under `rootId` is replaced by the layers it draws,
  * as ordinary nodes, so code export writes what the canvas shows. The instance keeps its id; the
- * layers it draws get ids made from their instance chain, which no stored node has.
+ * layers it draws get ids made from their instance chain, which no stored node has. Throws when
+ * the instances under it would draw more than MAX_EXPANDED_LAYERS layers in all.
  */
 export function withInstancesExpanded(document, rootId) {
   const nodes = { ...document.nodes };
-  const synthetic = (view) => `${view.chain.join("")}${view.id}`;
+  const synthetic = (view) => `${view.chain.join("\u001f")}\u001f${view.id}`;
   const add = (view, parentId, id) => {
     const children = view.children.map((child) => add(child, id, synthetic(child)));
     nodes[id] = { id, type: view.type === "component-instance" ? "element" : view.type, parentId, children, props: view.props, metadata: {} };
     return id;
   };
+  const budget = { left: MAX_EXPANDED_LAYERS };
   const stack = [rootId];
   while (stack.length > 0) {
     const node = nodes[stack.pop()];
     if (!node) continue;
     if (node.type === "component-instance") {
-      const view = expandInstance(document, node.id);
+      const view = expandInstance(document, node.id, [], [], 0, budget);
+      if (view === null && budget.left < 0) throw new Error(`the instances here draw more than ${MAX_EXPANDED_LAYERS} layers`);
       if (view !== null) add(view, node.parentId, node.id);
       continue;
     }
@@ -337,26 +386,31 @@ export function instancesDrawing(document, definitionIds) {
   const touched = new Set(definitionIds);
   if (touched.size === 0) return [];
   const nodes = document.nodes;
-  const definitionOf = (id) => {
-    for (let node = nodes[id], steps = 0; node && steps <= 1_100; node = node.parentId === null ? undefined : nodes[node.parentId], steps += 1) {
-      if (node.type === "component-definition") return node.id;
+  // One pass: each instance, and the component it lies in, if any.
+  const instances = [];
+  for (const id in nodes) {
+    const node = nodes[id];
+    if (node.type !== "component-instance") continue;
+    let inside = null;
+    for (let parent = node.parentId === null ? undefined : nodes[node.parentId], steps = 0; parent && steps <= 1_100; parent = parent.parentId === null ? undefined : nodes[parent.parentId], steps += 1) {
+      if (parent.type === "component-definition") {
+        inside = parent.id;
+        break;
+      }
     }
-    return null;
-  };
-  // A component that instances a touched one is touched too.
+    instances.push({ id, componentId: node.props.componentId, inside });
+  }
+  // A component that holds an instance of a touched one is touched too.
   for (let grew = true; grew;) {
     grew = false;
-    for (const id in nodes) {
-      const node = nodes[id];
-      if (node.type !== "component-instance" || !touched.has(node.props.componentId)) continue;
-      const inside = definitionOf(node.parentId ?? "");
-      if (inside !== null && !touched.has(inside)) {
-        touched.add(inside);
+    for (const entry of instances) {
+      if (touched.has(entry.componentId) && entry.inside !== null && !touched.has(entry.inside)) {
+        touched.add(entry.inside);
         grew = true;
       }
     }
   }
-  return Object.keys(nodes).filter((id) => nodes[id].type === "component-instance" && touched.has(nodes[id].props.componentId));
+  return instances.filter((entry) => touched.has(entry.componentId)).map((entry) => entry.id);
 }
 
 /** The component-definition at or above each of `ids`. */
@@ -851,21 +905,32 @@ export function createRenderer(root) {
     for (const child of view.children) element.appendChild(drawView(child));
     return element;
   }
+  // Draw `node`'s expansion into its element; returns the element, a new one when the
+  // component's root takes another tag (the element is then replaced in place and re-registered).
   function expandInto(element, node, document) {
-    for (const child of [...element.children]) child.remove();
     const view = expandInstance(document, node.id);
     if (view === null) {
+      for (const child of [...element.children]) child.remove();
       element.setAttribute("data-ninerr-stale", "");
-      return;
+      return element;
     }
-    element.removeAttribute("data-ninerr-stale");
-    apply(element, { ...view, id: node.id, type: node.type }, planElement(view));
-    for (const child of view.children) element.appendChild(drawView(child));
+    const plan = planElement(view);
+    const namespace = plan.namespace === "svg" ? SVG_NS : "http://www.w3.org/1999/xhtml";
+    let target = element;
+    if (element.localName !== plan.tag || element.namespaceURI !== namespace) {
+      target = namespace === SVG_NS ? doc.createElementNS(SVG_NS, plan.tag) : doc.createElement(plan.tag);
+      target.setAttribute("data-ninerr-id", node.id);
+      element.replaceWith(target);
+      elements.set(node.id, target);
+    }
+    for (const child of [...target.children]) child.remove();
+    target.removeAttribute("data-ninerr-stale");
+    apply(target, { ...view, id: node.id, type: node.type }, plan);
+    for (const child of view.children) target.appendChild(drawView(child));
+    return target;
   }
   function buildInstance(node, document) {
-    const element = build(node);
-    expandInto(element, node, document);
-    return element;
+    return expandInto(build(node), node, document);
   }
 
   function forget(element) {
@@ -934,7 +999,8 @@ export function createRenderer(root) {
           continue;
         }
         const node = document.nodes[id];
-        if (element) {
+        // An instance is drawn from its expansion, below.
+        if (element && node.type !== "component-instance") {
           const plan = planElement(node);
           const namespace = plan.namespace === "svg" ? SVG_NS : "http://www.w3.org/1999/xhtml";
           let target = element;
@@ -947,12 +1013,14 @@ export function createRenderer(root) {
             apply(element, node, plan);
           }
           stats.updated += 1;
-          if (node.type === "component-instance") expandInto(target, node, document);
-          else reconcileChildren(target, node.children, document);
+          reconcileChildren(target, node.children, document);
         }
       }
-      // A change inside a component redraws every instance that draws it, nested ones too.
-      for (const id of instancesDrawing(document, definitionsAbove(document, affectedNodeIds))) {
+      // Each instance the change touches, or that draws a component it touched (nested ones too),
+      // is drawn again, once.
+      const redraw = new Set(affectedNodeIds.filter((id) => document.nodes[id]?.type === "component-instance"));
+      for (const id of instancesDrawing(document, definitionsAbove(document, affectedNodeIds))) redraw.add(id);
+      for (const id of redraw) {
         const element = elements.get(id);
         if (element) expandInto(element, document.nodes[id], document);
       }

@@ -109,7 +109,7 @@ test("components and instances: properties checked, an instance's component exis
     { type: "insert-node", parentId: "frame", index: 1, node: instance("buy", "button", { propertyValues: { "p-label": "Buy", "p-size": "sm" }, overrides: [{ path: [], nodeId: "button-text", set: { style: { color: "red" } } }] }) },
   ]);
   assert.equal(document.schemaVersion, 2);
-  refusedWith(() => apply(document, [{ type: "insert-node", parentId: "frame", index: 2, node: instance("ghost", "nothing") }]), /its component nothing does not exist/u);
+  refusedWith(() => apply(document, [{ type: "insert-node", parentId: "frame", index: 2, node: instance("ghost", "nothing") }]), /still uses its component nothing, which does not exist/u);
   refusedWith(() => apply(document, [{ type: "insert-node", parentId: "frame", index: 2, node: instance("odd", "frame") }]), /its component frame is not a component/u);
   refusedWith(() => apply(document, [{ type: "insert-node", parentId: "buy", index: 0, node: { id: "kid", type: "element", props: { tag: "span" } } }]), /an instance stores no children/u);
   refusedWith(() => apply(document, [{ type: "insert-node", parentId: "button", index: 1, node: instance("loop", "button") }]), /component button -> button contains an instance of itself/u);
@@ -118,7 +118,7 @@ test("components and instances: properties checked, an instance's component exis
   refusedWith(() => apply(two, [{ type: "insert-node", parentId: "button", index: 1, node: instance("back", "card") }]), /contains an instance of itself/u);
   refusedWith(() => apply(two, [{ type: "set-props", nodeId: "buy", set: { componentId: "missing" } }]), /does not exist/u);
   // A definition with live instances cannot be removed out from under them.
-  refusedWith(() => apply(document, [{ type: "remove-node", nodeId: "button" }]), /its component button does not exist/u);
+  refusedWith(() => apply(document, [{ type: "remove-node", nodeId: "button" }]), /still uses its component button, which does not exist: detach or delete its instances before deleting a component/u);
   // Property rules.
   const property = (fields) => apply(base(), [{ type: "insert-node", parentId: "frame", index: 0, node: definition("d", { properties: [{ id: "p", name: "P", kind: "text", default: "x", target: { nodeId: "d", field: "text" }, ...fields }] }) }]);
   refusedWith(() => property({ kind: "slider" }), /unknown kind/u);

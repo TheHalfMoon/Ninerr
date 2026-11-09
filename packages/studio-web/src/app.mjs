@@ -16,6 +16,8 @@ import { componentsOf, createComponent, detachInstance, insertInstance } from "/
 // While the Tokens dialog is open, how it shows the document again after any change (an Undo, an
 // agent's edit); it answers false once the dialog is gone.
 let redrawTokens = null;
+// The same for the Components dialog.
+let redrawComponents = null;
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attributes = {}, ...children) => {
@@ -707,13 +709,24 @@ function openComponentsDialog() {
       });
     };
     const draw = () => {
+      if (body.dataset.drawn === "yes" && !body.isConnected) return false;
+      const active = document.activeElement;
+      const key = active instanceof HTMLElement && body.contains(active)
+        ? (active.dataset.property ? `[data-property="${CSS.escape(active.dataset.property)}"]` : active.id ? `#${CSS.escape(active.id)}` : null)
+        : null;
+      drawBody();
+      body.dataset.drawn = "yes";
+      if (key !== null) body.querySelector(key)?.focus();
+      return true;
+    };
+    const drawBody = () => {
       const document = state.document;
       const selected = state.selection.length === 1 ? document.nodes[state.selection[0]] : undefined;
       const parts = [];
       // The selected layer: make it a component, or, for an instance, its values and Detach.
       if (selected?.type === "component-instance") {
         const component = document.nodes[selected.props.componentId];
-        parts.push(el("h3", {}, `Instance of ${component?.props?.name ?? "a missing component"}`));
+        parts.push(el("h3", {}, `Instance of ${component ? component.props.name ?? "Unnamed component" : "a missing component"}`));
         for (const property of component?.props?.properties ?? []) {
           const current = selected.props.propertyValues?.[property.id] ?? property.default;
           const label = `${property.name} of this instance`;
@@ -723,7 +736,8 @@ function openComponentsDialog() {
           else control = el("input", { value: String(current), "aria-label": label, "data-property": property.id });
           control.addEventListener("change", () => {
             const value = property.kind === "boolean" ? control.checked : control.value;
-            run(() => [{ type: "set-props", nodeId: selected.id, set: { propertyValues: { ...(selected.props.propertyValues ?? {}), [property.id]: value } } }], `Set ${property.name}`);
+            // The instance's values as they are now, not as they were when this was drawn.
+            run((doc) => [{ type: "set-props", nodeId: selected.id, set: { propertyValues: { ...(doc.nodes[selected.id]?.props.propertyValues ?? {}), [property.id]: value } } }], `Set ${property.name}`);
           });
           parts.push(el("label", {}, property.name, control));
         }
@@ -740,7 +754,7 @@ function openComponentsDialog() {
         });
         parts.push(el("div", { class: "actions" }, detach));
       } else if (selected?.type === "component-definition") {
-        parts.push(el("h3", {}, `Component ${selected.props.name}`));
+        parts.push(el("h3", {}, `Component ${selected.props.name ?? "Unnamed component"}`));
         const layers = [];
         const walk = (id, depth) => {
           const node = document.nodes[id];
@@ -758,14 +772,20 @@ function openComponentsDialog() {
           const component = doc.nodes[selected.id];
           const label = name.value.trim();
           if (label === "") throw new Error("Name the property.");
-          const id = `p-${label.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "") || "property"}-${(component.props.properties ?? []).length + 1}`;
-          const choices = options.value.split(",").map((entry) => entry.trim()).filter(Boolean);
+          // An id no property of this component has, now or before: ids are never reused.
+          const taken = new Set((component.props.properties ?? []).map((property) => property.id));
+          const stem = `p-${label.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "") || "property"}`;
+          let id = stem;
+          for (let at = 2; taken.has(id); at += 1) id = `${stem}-${at}`;
+          const choices = [...new Set(options.value.split(",").map((entry) => entry.trim()).filter(Boolean))];
+          if (kind.value === "variant" && choices.length === 0) throw new Error("Give the variant its options, for example: sm, md, lg.");
           const property = kind.value === "boolean"
             ? { id, name: label, kind: "boolean", default: true, target: { nodeId: target.value, field: "visible" } }
             : kind.value === "variant"
               ? { id, name: label, kind: "variant", default: choices[0] ?? "", options: choices, target: { nodeId: target.value, field: "attributes.class" } }
               : { id, name: label, kind: "text", default: doc.nodes[target.value]?.props?.text ?? "", target: { nodeId: target.value, field: "text" } };
-          return [{ type: "set-props", nodeId: selected.id, set: { properties: [...(component.props.properties ?? []), property] } }];
+          // A component from before schema 2 gets its name with its first property.
+          return [{ type: "set-props", nodeId: selected.id, set: { name: typeof component.props.name === "string" && component.props.name !== "" ? component.props.name : "Component", properties: [...(component.props.properties ?? []), property] } }];
         }, `Add property ${name.value.trim()}`));
         parts.push(
           el("p", {}, `${(selected.props.properties ?? []).length} propert${(selected.props.properties ?? []).length === 1 ? "y" : "ies"}: ${(selected.props.properties ?? []).map((property) => property.name).join(", ") || "none yet"}.`),
@@ -804,6 +824,7 @@ function openComponentsDialog() {
       body.replaceChildren(...parts);
     };
     draw();
+    redrawComponents = draw;
     return [error, body, el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close"))];
   });
 }
@@ -1599,6 +1620,7 @@ function applyChange(event) {
   state.revision = event.revision;
   // The Tokens dialog shows the document as it now is, whoever changed it.
   if (redrawTokens !== null && redrawTokens() === false) redrawTokens = null;
+  if (redrawComponents !== null && redrawComponents() === false) redrawComponents = null;
   if (!state.seen.has(event.transactionId)) {
     state.seen.add(event.transactionId);
     const { operations: _operations, ...summary } = event;

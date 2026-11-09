@@ -56,7 +56,8 @@ test("make a component, place an instance, change the component and the instance
     assert.deepEqual(await frameText(page, `[data-ninerr-id="${instanceId}"]`), ["Welcome"]);
 
     // Give the component a text property on its title, then set it on the instance.
-    const componentId = placed.nodes.card.parentId;
+    const componentId = Object.values(placed.nodes).find((node) => node.type === "component-definition").id;
+    assert.equal(Object.hasOwn(placed.nodes, "card"), false, "the component took the card's place");
     await page.locator(`#layers [role=treeitem][data-node-id="${componentId}"] > .row`).click();
     await page.locator("#action-components").click();
     await page.locator("#property-name").fill("Title");
