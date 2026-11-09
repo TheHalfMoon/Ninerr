@@ -160,6 +160,21 @@ These independently licensed projects were studied only. No code from them is in
   - `paper-design/liquid-logo` (PolyForm Shield 1.0.0, not open source; nothing from it may be copied at all);
   - `paper-design/agent-plugins`, `paper-design/google-fonts-scripts` and `paper-design/webmcp-agent-example` (no license observed).
 
+## Component sources named in the editor
+
+The editor's component-source catalog (`packages/studio-web/src/ui-sources.mjs`) names these projects so a person can find them. None of their files are in this repository or in a release. An item a person imports goes into their own project under the item's license, which `docs/UI_COMPONENT_SOURCES.md` records for each source.
+
+- `mui/base-ui` (MIT, Copyright (c) 2019 Material-UI SAS)
+- `radix-ui/primitives` (MIT, Copyright (c) 2022 WorkOS)
+- `emilkowalski/sonner` and `emilkowalski/vaul` (MIT, Copyright (c) 2023 Emil Kowalski)
+- `dip/cmdk` (MIT, Copyright (c) 2022 Paco Coursey)
+- `barvian/number-flow` (MIT, Copyright (c) 2024 Maxwell Barvian)
+- `magicuidesign/magicui` (MIT, Copyright (c) Magic UI)
+- `Codewithswappy/RareUI` (MIT, Copyright (c) 2025 Swapnil Kalambe (RareUI))
+- `swamimalode07/rare-ui` (MIT with the Commons Clause and an attribution condition, Copyright (c) 2026 Swami Malode): its components may not be sold or redistributed themselves, and a project that ships one shows a visible link to https://rareui.com.
+
+shadcn/ui is listed under the projects Ninerr was dogfooded on.
+
 ## Optional runtime components
 
 Ninerr can invoke these when the user has installed them. Ninerr does not ship them.

@@ -8,6 +8,7 @@ import { mountCanvas, insertNode, removeNodes, setStyle, setText } from "/packag
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
 import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
+import { UI_COMPONENT_SOURCE_GROUPS, searchUiComponentSources } from "/packages/studio-web/src/ui-sources.mjs";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attributes = {}, ...children) => {
@@ -518,6 +519,66 @@ function openResearchDialog() {
       status,
       results,
       detail,
+      el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close")),
+    ];
+  });
+}
+
+// ---------- curated UI component sources ----------
+
+// What each import policy lets a person do with a source's items, in the catalog's words.
+const IMPORT_POLICY_TEXT = {
+  "allowed": "Its items may be imported into your own project, keeping their license notice.",
+  "allowed-with-attribution": "Its items may be imported into your own project, which must then show the credit link its license requires.",
+  "free-items-only": "Only its free items may be imported. Pro items need your own license and are never offered by Ninerr.",
+  "permission-required": "Ninerr imports nothing from it: its terms need the publisher's written permission.",
+};
+
+// Discovery is local-only. Selecting a source does not fetch or execute code or
+// grant any redistribution rights. Each chosen component still needs review.
+function openComponentSourcesDialog() {
+  showDialog("Component sources", (close) => {
+    const query = el("input", {
+      id: "component-source-query", name: "query", maxlength: "200",
+      autocomplete: "off", placeholder: "Search libraries and capabilities",
+    });
+    const group = el("select", { id: "component-source-group", name: "group" },
+      ...UI_COMPONENT_SOURCE_GROUPS.map((name) => el("option", { value: name }, name)));
+    const count = el("p", { id: "component-source-count", role: "status", "aria-live": "polite" });
+    const results = el("ul", { id: "component-source-results", class: "project-list" });
+    const detail = el("section", { id: "component-source-detail", "aria-label": "Selected source" });
+    const field = (label, value) => el("label", {}, label,
+      el("textarea", { readonly: true, rows: 2, spellcheck: "false" }, value));
+    const show = (source) => {
+      detail.replaceChildren(
+        el("h3", {}, source.name),
+        el("p", {}, source.purpose),
+        el("p", {}, source.usage),
+        el("p", {}, "License: " + source.license),
+        el("p", { "data-import-policy": source.importPolicy }, IMPORT_POLICY_TEXT[source.importPolicy]),
+        el("p", {}, "Rights: " + source.rights),
+        el("p", {}, "Review gate: " + source.gate),
+        field("Official website", source.website),
+        field("Source or documentation", source.source),
+        field("Setup example (run only in a compatible, reviewed React project)", source.install),
+      );
+    };
+    const search = () => {
+      const entries = searchUiComponentSources({ query: query.value, group: group.value });
+      results.replaceChildren(...entries.map((source) =>
+        el("li", {}, el("button", { type: "button", "data-source-id": source.id, onclick: () => show(source) }, source.name + " — " + source.group))));
+      count.textContent = entries.length === 0
+        ? "No matching source." : entries.length + " source" + (entries.length === 1 ? "" : "s") + ".";
+      detail.replaceChildren();
+    };
+    query.addEventListener("input", search);
+    group.addEventListener("change", search);
+    search();
+    return [
+      el("p", {}, "Curated React component sources. This catalog works offline; no source is installed, fetched, or redistributed automatically."),
+      el("label", { for: "component-source-query" }, "Find source", query),
+      el("label", { for: "component-source-group" }, "Category", group),
+      count, results, detail,
       el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close")),
     ];
   });
@@ -2133,6 +2194,7 @@ async function main() {
   $("action-import").addEventListener("click", openImportDialog);
   $("action-code").addEventListener("click", openCodeDialog);
   $("action-research").addEventListener("click", openResearchDialog);
+  $("action-component-sources").addEventListener("click", openComponentSourcesDialog);
   $("action-agents").addEventListener("click", openAgentsDialog);
   $("layers").addEventListener("keydown", onLayersKey);
   $("layers").addEventListener("click", onLayersClick);

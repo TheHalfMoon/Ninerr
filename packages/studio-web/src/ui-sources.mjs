@@ -1,0 +1,180 @@
+// Curated, read-only discovery of component libraries requested for Ninerr.
+// This is metadata, never component source. No network access, package installation,
+// generated script execution, or permission to redistribute is implied.
+const SOURCES = [
+  {
+    id: "shadcn", name: "shadcn/ui", group: "Foundation",
+    purpose: "Copy-owned, customizable components and registry format.",
+    website: "https://ui.shadcn.com", source: "https://github.com/shadcn-ui/ui",
+    usage: "In a React project, initialize shadcn with one primitive base, then add selected components.",
+    install: "npx shadcn@latest init",
+    license: "MIT", importPolicy: "allowed",
+    registry: "https://ui.shadcn.com/r/styles/{style}/{name}.json",
+    rights: "MIT, “Copyright (c) 2023 shadcn”. Third-party registries listed by shadcn keep their own terms.",
+    gate: "manual-install",
+  },
+  {
+    id: "base-ui", name: "Base UI", group: "Foundation",
+    purpose: "Accessible, unstyled React primitives. Preferred base for new shadcn projects.",
+    website: "https://base-ui.com", source: "https://github.com/mui/base-ui",
+    usage: "Use as the default underlying primitive set for new React output, never alongside Radix for the same component.",
+    install: "npm install @base-ui/react",
+    license: "MIT", importPolicy: "allowed",
+    registry: null,
+    rights: "MIT, “Copyright (c) 2019 Material-UI SAS”. The package is @base-ui/react; @base-ui-components/react is its deprecated name.",
+    gate: "manual-install",
+  },
+  {
+    id: "radix-ui", name: "Radix UI", group: "Foundation",
+    purpose: "Accessible React primitives and an alternative shadcn base.",
+    website: "https://www.radix-ui.com/primitives", source: "https://github.com/radix-ui/primitives",
+    usage: "Preserve for imported or existing Radix projects; avoid automatically migrating them to Base UI.",
+    install: "npx shadcn@latest init -b radix",
+    license: "MIT", importPolicy: "allowed",
+    registry: null,
+    rights: "MIT, “Copyright (c) 2022 WorkOS”.",
+    gate: "manual-install",
+  },
+  {
+    id: "sonner", name: "Sonner", group: "Specialist",
+    purpose: "Accessible notification toasts and stacked feedback.",
+    website: "https://sonner.emilkowal.ski", source: "https://github.com/emilkowalski/sonner",
+    usage: "Toast feedback for exported React interfaces.",
+    install: "npm install sonner",
+    license: "MIT", importPolicy: "allowed",
+    registry: null,
+    rights: "MIT, “Copyright (c) 2023 Emil Kowalski”.",
+    gate: "manual-install",
+  },
+  {
+    id: "vaul", name: "Vaul", group: "Specialist",
+    purpose: "Gesture-driven drawers and mobile sheets.",
+    website: "https://vaul.emilkowal.ski", source: "https://github.com/emilkowalski/vaul",
+    usage: "Use for project components that require Vaul-style drag physics, not every drawer.",
+    install: "npm install vaul",
+    license: "MIT", importPolicy: "allowed",
+    registry: null,
+    rights: "MIT, “Copyright (c) 2023 Emil Kowalski”.",
+    gate: "manual-install",
+  },
+  {
+    id: "cmdk", name: "cmdk", group: "Specialist",
+    purpose: "Keyboard-friendly searchable command palettes.",
+    website: "https://github.com/dip/cmdk", source: "https://github.com/dip/cmdk",
+    usage: "Command menu for exported React apps; shadcn Command may already use cmdk.",
+    install: "npm install cmdk",
+    license: "MIT", importPolicy: "allowed",
+    registry: null,
+    rights: "MIT, “Copyright (c) 2022 Paco Coursey”.",
+    gate: "manual-install",
+  },
+  {
+    id: "numberflow", name: "NumberFlow", group: "Specialist",
+    purpose: "Accessible, localized animated numerical values.",
+    website: "https://number-flow.barvian.me", source: "https://github.com/barvian/number-flow",
+    usage: "Counters, values, dashboards and metrics that visibly update.",
+    install: "npm install @number-flow/react",
+    license: "MIT", importPolicy: "allowed",
+    registry: null,
+    rights: "MIT, “Copyright (c) 2024 Maxwell Barvian”.",
+    gate: "manual-install",
+  },
+  {
+    id: "beautiful-ui", name: "Beautiful UI (Turbo)", group: "Gallery",
+    purpose: "Agent-oriented AI interfaces: approvals, tool calls, reasoning and diff tables.",
+    website: "https://www.beautifului.dev", source: "https://www.beautifului.dev",
+    usage: "Copy selected components with a source-specific check; not the unrelated beautiful-ui.dev Notchset registry.",
+    install: "Open https://www.beautifului.dev and copy a selected component from its source page.",
+    license: "MIT", importPolicy: "allowed",
+    registry: "https://www.beautifului.dev/r/{name}.json",
+    rights: "MIT, “Copyright (c) 2026 Shane Levine” (www.beautifului.dev/license). Keep the copyright and licence notice.",
+    gate: "manual-source-review",
+  },
+  {
+    id: "rareui", name: "RareUI (Swappy)", group: "Gallery",
+    purpose: "Expressive buttons, text effects and motion components.",
+    website: "https://rareui.in", source: "https://github.com/Codewithswappy/RareUI",
+    usage: "Use individual animated elements with reduced-motion support. Not the separate rareui.com library.",
+    install: "npx rareui add liquid-metal",
+    license: "MIT", importPolicy: "allowed",
+    registry: "https://rareui.in/r/{name}.json",
+    rights: "MIT, “Copyright (c) 2025 Swapnil Kalambe (RareUI)”. The separate rareui.com project has other terms.",
+    gate: "manual-source-review",
+  },
+  {
+    id: "beautiful-ui-notchset", name: "Beautiful UI (Notchset)", group: "Gallery",
+    purpose: "150 components and charts, including AI interface patterns, with Base UI and Radix variants.",
+    website: "https://beautiful-ui.dev", source: "https://beautiful-ui.dev/docs",
+    usage: "Alternative Beautiful UI project; evaluate free Notchset components and explicit Base/Radix registry variants.",
+    install: "npx shadcn@latest add https://beautiful-ui.dev/r/button.json",
+    license: "MIT (free items); commercial (Pro items)", importPolicy: "free-items-only",
+    registry: "https://beautiful-ui.dev/r/{name}.json",
+    rights: "Free items are MIT. Pro items are licensed per seat and may not be offered through a registry, package, API or code generator to anyone outside the licence.",
+    gate: "per-item-review",
+  },
+  {
+    id: "rareui-swami", name: "Rare UI (Swami)", group: "Gallery",
+    purpose: "Animated React components from an alternative Rare UI registry.",
+    website: "https://rareui.com", source: "https://github.com/swamimalode07/rare-ui",
+    usage: "Separate from rareui.in. Catalog for evaluation, not a blanket grant for component-kit redistribution.",
+    install: "npx shadcn@latest add swamimalode07/rare-ui/fluid-orb",
+    license: "MIT + Commons Clause + Attribution", importPolicy: "allowed-with-attribution",
+    registry: "https://raw.githubusercontent.com/swamimalode07/rare-ui/main/public/r/{name}.json",
+    rights: "MIT with Commons Clause and an attribution condition, “Copyright (c) 2026 Swami Malode”: the components may not be sold or redistributed themselves, and a project that ships them shows a visible link to https://rareui.com.",
+    gate: "manual-source-review",
+  },
+  {
+    id: "magic-ui", name: "Magic UI", group: "Gallery",
+    purpose: "Motion-rich copy-owned sections and interaction patterns.",
+    website: "https://magicui.design", source: "https://github.com/magicuidesign/magicui",
+    usage: "Install selected free registry components; treat Pro as separate licensing.",
+    install: "npx shadcn@latest add @magicui/marquee",
+    license: "MIT", importPolicy: "allowed",
+    registry: "https://magicui.design/r/{name}.json",
+    rights: "MIT, “Copyright (c) Magic UI” for the open-source components. Magic UI Pro is licensed separately.",
+    gate: "manual-source-review",
+  },
+  {
+    id: "aceternity", name: "Aceternity UI", group: "Gallery",
+    purpose: "High-impact landing-page effects, bento layouts and interactive cards.",
+    website: "https://ui.aceternity.com", source: "https://ui.aceternity.com/installation",
+    usage: "Use explicitly selected components from the official shadcn-compatible registry.",
+    install: "npx shadcn@latest add @aceternity/bento-grid",
+    license: "Site terms; no open-source licence", importPolicy: "permission-required",
+    registry: null,
+    rights: "No open-source licence: the site terms reserve all rights and forbid reproducing or redistributing its material, and Pro is a commercial licence. Ninerr imports nothing from it without written permission from Aceternity.",
+    gate: "manual-source-review",
+  },
+  {
+    id: "21st", name: "21st.dev", group: "Marketplace",
+    purpose: "Discover community-built React components, templates, themes and interactions.",
+    website: "https://21st.dev", source: "https://github.com/21st-dev",
+    usage: "Review the individual author, code, license and dependencies before importing an item.",
+    install: "Browse https://21st.dev and select an individual component.",
+    license: "Terms of Service", importPolicy: "permission-required",
+    registry: null,
+    rights: "The 21st.dev terms forbid automated collection and redistribution without written consent, and its registry requires sign-in. Ninerr imports nothing from it without an agreement with 21st Labs.",
+    gate: "per-item-review",
+  },
+];
+
+// What Ninerr may do with a source's items, from its licence (docs/UI_COMPONENT_SOURCES.md has
+// the evidence): import them into a person's own project, import them only with a visible credit,
+// import only free items, or nothing without the publisher's written permission. Nothing here
+// is ever bundled with Ninerr.
+export const UI_IMPORT_POLICIES = Object.freeze(["allowed", "allowed-with-attribution", "free-items-only", "permission-required"]);
+
+// Copies rather than a live provider integration. Keep source identity unambiguous.
+export const UI_COMPONENT_SOURCES = Object.freeze(SOURCES.map((source) => Object.freeze({ ...source })));
+export const UI_COMPONENT_SOURCE_GROUPS = Object.freeze(["All", "Foundation", "Specialist", "Gallery", "Marketplace"]);
+
+export function searchUiComponentSources({ query = "", group = "All" } = {}) {
+  if (typeof query !== "string" || query.length > 200) throw new TypeError("query must be a string of at most 200 characters");
+  if (!UI_COMPONENT_SOURCE_GROUPS.includes(group)) throw new TypeError("unknown component-source group");
+  const words = query.trim().toLowerCase().split(/\s+/u).filter(Boolean);
+  return UI_COMPONENT_SOURCES.filter((source) =>
+    (group === "All" || source.group === group) &&
+    words.every((word) =>
+      [source.name, source.purpose, source.usage, source.group].join(" ").toLowerCase().includes(word)),
+  );
+}
