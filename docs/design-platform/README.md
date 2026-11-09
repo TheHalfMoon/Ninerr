@@ -1,6 +1,6 @@
 # Design platform: proposed extension
 
-**Status: proposal. Not approved.** This folder holds the plan to grow Ninerr into a professional, AI-native visual design editor.
+**Status: proposal, except ADR-0003, ADR-0004 and ADR-0005, which the founder accepted on 2026-11-09 (`docs/provenance/FOUNDER_DECISION_2026-11-09_SCHEMA_V2.md`).** This folder holds the plan to grow Ninerr into a professional, AI-native visual design editor.
 
 - **Basis:** it rests on the dated study records in [`docs/research/rea-design-platforms/`](../research/rea-design-platforms/INDEX_2026-10-18.md).
 - **What it does not change:** the approved program in [`docs/MASTER_PLAN.md`](../MASTER_PLAN.md). P09, P10 and the release gate, with their criteria, come first and stay as they are.

@@ -53,6 +53,9 @@ const state = {
 };
 let canvas = null;
 
+/** The roots the Layers panel lists and new layers go into: the design system is not a layer. */
+const layerRoots = (doc) => doc.rootIds.filter((id) => doc.nodes[id] && doc.nodes[id].type !== "design-system");
+
 // ---------- status and dialogs ----------
 
 function setStatus(message) {
@@ -1590,7 +1593,7 @@ function insert(kind) {
   let parentId = null;
   const selected = state.selection.length === 1 ? doc.nodes[state.selection[0]] : null;
   if (selected && selected.type !== "text") parentId = selected.id;
-  else if (doc.rootIds.length > 0) parentId = doc.rootIds[0];
+  else if (layerRoots(doc).length > 0) parentId = layerRoots(doc)[0];
   else {
     // An empty project gets a page to hold its first layer.
     const pageId = newId("page");
@@ -1662,7 +1665,7 @@ function visibleLayers() {
       if (node.children.length > 0 && !state.collapsed.has(id)) walk(node.children, level + 1, id);
     }
   };
-  walk(doc.rootIds, 1, null);
+  walk(layerRoots(doc), 1, null);
   return out;
 }
 
@@ -1691,14 +1694,14 @@ function renderLayers() {
   const hadFocus = tree.contains(document.activeElement);
   const doc = state.document;
   const visible = visibleLayers();
-  $("layers-empty").hidden = doc === null || doc.rootIds.length > 0;
+  $("layers-empty").hidden = doc === null || layerRoots(doc).length > 0;
   if (doc === null) {
     tree.replaceChildren();
     return;
   }
   if (!visible.some((layer) => layer.id === state.focusedLayer)) state.focusedLayer = state.selection.find((id) => visible.some((layer) => layer.id === id)) ?? visible[0]?.id ?? null;
   const selected = new Set(state.selection);
-  tree.replaceChildren(...doc.rootIds.filter((id) => doc.nodes[id]).map((id) => buildLayerItem(id, 1, selected)));
+  tree.replaceChildren(...layerRoots(doc).map((id) => buildLayerItem(id, 1, selected)));
   if (hadFocus && state.focusedLayer !== null) $(`layer-${state.focusedLayer}`)?.focus();
 }
 
@@ -1761,8 +1764,8 @@ function patchLayers(affectedNodeIds, rootTouched, previousSelection) {
     }
     reconcileLayerList(group, node.children.filter((child) => doc.nodes[child]), Number(item.getAttribute("aria-level")) + 1);
   }
-  if (rootTouched) reconcileLayerList(tree, doc.rootIds.filter((id) => doc.nodes[id]), 1);
-  $("layers-empty").hidden = doc.rootIds.length > 0;
+  if (rootTouched) reconcileLayerList(tree, layerRoots(doc), 1);
+  $("layers-empty").hidden = layerRoots(doc).length > 0;
   for (const id of new Set([...previousSelection, ...state.selection])) {
     document.getElementById(`layer-${id}`)?.setAttribute("aria-selected", state.selection.includes(id) ? "true" : "false");
   }
@@ -1942,7 +1945,7 @@ function groupSelection() {
       else walk(doc.nodes[id].children);
     }
   };
-  walk(doc.rootIds);
+  walk(layerRoots(doc));
   if (order.length === 0) {
     setStatus("Select the layers to group.");
     return Promise.resolve(null);

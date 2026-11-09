@@ -1,6 +1,6 @@
 # ADR-0003: Document schema v2 adds `design-system` and `component-instance`
 
-- **Status:** proposed, 2026-10-18.
+- **Status:** accepted by the founder, 2026-11-09 (`docs/provenance/FOUNDER_DECISION_2026-11-09_SCHEMA_V2.md`); proposed 2026-10-18.
 - **Context:** components, instances and tokens have no node types today. `component-definition` and `token-reference` are reserved and unused.
 - **Decision:**
   - `NODE_TYPES` gains `component-instance` and `design-system`. `component-definition` gets its props (ARCHITECTURE.md §2.2).

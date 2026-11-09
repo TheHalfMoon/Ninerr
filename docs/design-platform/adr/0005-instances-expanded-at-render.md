@@ -1,6 +1,6 @@
 # ADR-0005: Component instances are expanded when drawn, never stored expanded
 
-- **Status:** proposed, 2026-10-18.
+- **Status:** accepted by the founder, 2026-11-09 (`docs/provenance/FOUNDER_DECISION_2026-11-09_SCHEMA_V2.md`); proposed 2026-10-18.
 - **Context:**
   - One studied product duplicates instead of instancing (E-PD-11).
   - Figma has components, instances, variants, typed properties and overrides (E-FG-02). Observed: instance children have path-derived IDs (`I1:11;1:10`); overrides are per field; structure inside an instance is locked; reset keeps property values; combining variants renames property keys (E-FG-13).

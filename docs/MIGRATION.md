@@ -49,8 +49,14 @@ There are three version boundaries. Each is checked on open, before anything is 
 | Boundary | Current | Unknown or newer data |
 | --- | --- | --- |
 | Project manifest | `PROJECT_SCHEMA_VERSION` = 3 | Newer: refused. Older: migrated through the built-in steps or a host step, or refused. Not a non-negative integer: refused. |
-| Document schema | `DOCUMENT_SCHEMA_VERSION` = 1 | Any `schemaVersion` other than the integer 1, or a document or node field outside `DOCUMENT_FIELDS`/`NODE_FIELDS`: refused. |
+| Document schema | `DOCUMENT_SCHEMA_VERSION` = 2; schemas 1 and 2 are read | A `schemaVersion` other than 1 or 2, a document or node field outside `DOCUMENT_FIELDS`/`NODE_FIELDS`, or a version that does not match the nodes (below): refused. |
 | Journal format | 1 | A transaction, operation or node field outside format 1, or an unknown operation type, in any entry (including entries the snapshot already covers): refused. |
+
+**Document schema 2 (ADR-0003, accepted 2026-11-09)** adds the `design-system` and `component-instance` node types, and props for `component-definition`. A document is schema 2 exactly when it holds one of those nodes:
+- A project stays schema 1, and builds from before schema 2 keep opening it, until the transaction that adds its first such node. That transaction makes it schema 2.
+- Undoing that node, or removing the last one, makes it schema 1 again.
+- A build from before schema 2 refuses a schema 2 project, with "is document schema 2, newer than supported schema 1".
+- Schema 1 documents, journals and snapshots replay unchanged: schema 2 only adds node types and props.
 
 Every refusal above is a `PersistenceVersionError`. Its message names the boundary and, for the journal, the entry and field.
 
@@ -132,7 +138,7 @@ The migrated manifest is written back atomically once the open succeeds. Documen
 - **`PersistenceVersionError` saying "legacy project from before Ninerr".** Migrate it with `migrateLegacyProject` (the studio host does this when the project is opened).
 - **`PersistenceVersionError` saying "newer than supported" or "written by a newer Ninerr".** The project was written by a later release; open it with that release.
 - **`PersistenceVersionError` saying "no migration from project schema N".** The manifest predates every known schema. Supply a migration step as above.
-- **`PersistenceVersionError` saying "no migration from document schema N", or "has field X" or "has node field X, which document schema 1 does not have".** The document is from another schema, or carries fields schema 1 lacks. Only the release that wrote it can read it, because documents are not migrated.
+- **`PersistenceVersionError` saying "no migration from document schema N", or "has field X" or "has node field X, which document schema N does not have".** The document is from another schema, or carries fields schema 1 lacks. Only the release that wrote it can read it, because documents are not migrated.
 - **`PersistenceCorruptionError`.** The files are damaged. Restore `.ninerr` from a backup or version control. Ninerr does not guess at repairs beyond the torn tail.
 - **`PersistenceValidationError` on open.** The project is refused without reading further. Examples:
   - a project file that is a symbolic link;

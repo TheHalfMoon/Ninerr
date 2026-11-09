@@ -136,10 +136,10 @@
       "name": "future-document-schema",
       "category": "future",
       "from": "v3-basic",
-      "what": "a document of document schema 2",
+      "what": "a document of document schema 3",
       "expect": {
         "refused": "project-version",
-        "pattern": "is document schema 2, newer than supported schema 1"
+        "pattern": "is document schema 3, newer than supported schema 2"
       }
     },
     {
@@ -243,5 +243,5 @@
       }
     }
   ],
-  "treeSha256": "ee9ef3d9a89c6aa3dce40b0390756263fbc2813b598cf13312276635f96f2d62"
+  "treeSha256": "eb576f4cc4398dc709b07c1c4dc3a7a389dd43582d23625bd87a57fd6a9de415"
 }

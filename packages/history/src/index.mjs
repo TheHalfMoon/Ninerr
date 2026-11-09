@@ -1,6 +1,9 @@
 import {
   cloneDocument,
   changedPartIsValid,
+  isV2Type,
+  requiresSchemaV2,
+  schemaVersionFor,
   cloneValidated,
   createNode,
   getNode,
@@ -471,15 +474,24 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
     inverseOperations.unshift(inverse);
   }
   working.revision = document.revision + 1;
+  // The schema version follows the nodes (ADR-0003): a change that adds the first node needing
+  // schema 2 makes the document schema 2, and one that removes the last (an undo, a removed
+  // subtree) makes it schema 1 again. A change that touches no design system or component part,
+  // directly or inside a removed or moved subtree, changes neither the version nor anything the
+  // schema 2 checks read, and keeps the fast check of the changed part (#252).
+  const v2Involved = propsOnly
+    ? [...affectedNodeIds].some((id) => working.nodes[id]?.type === "component-definition")
+    : !structural || involvesV2(document, working, changed, moved, inverseOperations);
+  if (v2Involved) working.schemaVersion = schemaVersionFor(working.nodes);
   let normalizedDocument;
   if (propsOnly) {
     normalizedDocument = working;
-    validateNodes(normalizedDocument, affectedNodeIds);
+    validateNodes(normalizedDocument, affectedNodeIds, document);
   } else if (structural) {
     // Sorted only if keys were added; checked in the part it changed, or, when that check is
     // not sure, whole, which then decides with its own message.
     normalizedDocument = keysAdded ? withAddedNodesSorted(working, changed) : working;
-    if (!changedPartIsValid(normalizedDocument, changed, moved, { added: keysAdded })) validateDocument(normalizedDocument);
+    if (v2Involved || !changedPartIsValid(normalizedDocument, changed, moved, { added: keysAdded })) validateDocument(normalizedDocument);
   } else {
     normalizedDocument = withSortedNodes(working);
     validateDocument(normalizedDocument);
@@ -524,6 +536,39 @@ function asJournaled(operation) {
   return { ...operation, nodeId: String(operation.nodeId) };
 }
 
+/**
+ * Whether a structural change touches a design system or a component part: a changed record, a
+ * node inside a removed subtree (its inverse's snapshot), or a moved subtree that holds a
+ * component part or leaves or enters a component.
+ */
+function involvesV2(before, after, changed, moved, inverseOperations) {
+  for (const id of changed) {
+    if (isV2Type(after.nodes[id]?.type) || isV2Type(before.nodes[id]?.type)) return true;
+  }
+  for (const operation of inverseOperations) {
+    if (operation.type === "restore-subtree" && operation.nodes.some((node) => isV2Type(node.type))) return true;
+  }
+  const insideComponent = (nodes, id) => {
+    let node = nodes[id];
+    for (let steps = 0; node && steps <= 1_100; steps += 1) {
+      if (node.type === "component-definition") return true;
+      node = node.parentId === null ? undefined : nodes[node.parentId];
+    }
+    return false;
+  };
+  for (const id of moved) {
+    if (insideComponent(before.nodes, id) || insideComponent(after.nodes, id)) return true;
+    const stack = [id];
+    while (stack.length > 0) {
+      const node = after.nodes[stack.pop()];
+      if (!node) continue;
+      if (isV2Type(node.type)) return true;
+      stack.push(...node.children);
+    }
+  }
+  return false;
+}
+
 export function replayTransactions(document, transactions) {
   validateDocument(document);
   const working = cloneValidated(document);
@@ -541,6 +586,8 @@ export function replayTransactions(document, transactions) {
     }
     working.revision += 1;
   }
+  // The version follows the nodes the journal left (ADR-0003), as each commit set it.
+  working.schemaVersion = schemaVersionFor(working.nodes);
   const result = withSortedNodes(working);
   validateDocument(result);
   return result;
@@ -564,10 +611,15 @@ export function applyCommittedTransaction(document, transaction) {
     throw new TransactionError("a document history returned is a shared value; apply a transaction to it with applyTransaction");
   }
   const affectedNodeIds = new Set();
+  let versionMayChange = false;
   for (const operation of transaction.operations) {
     collectAffectedNodeIds(document, operation, affectedNodeIds);
+    // Only a structural change in a schema 2 document, a node that needs schema 2 coming in, or a
+    // component-definition's props can change the version.
+    if (operation?.type !== "set-props" ? document.schemaVersion !== 1 || [operation?.node, ...(operation?.nodes ?? [])].some((node) => requiresSchemaV2(node)) : document.nodes[operation.nodeId]?.type === "component-definition") versionMayChange = true;
     applyOperation(document, operation);
   }
+  if (versionMayChange) document.schemaVersion = schemaVersionFor(document.nodes);
   document.revision += 1;
   return { document, affectedNodeIds: [...affectedNodeIds].sort() };
 }
