@@ -11,6 +11,7 @@ import { HostError, connect, forgetToken } from "/packages/studio-web/src/client
 import { UI_COMPONENT_SOURCE_GROUPS, searchUiComponentSources } from "/packages/component-sources/src/catalog.mjs";
 import { TOKEN_TYPES } from "/packages/document-model/src/schema-v2.mjs";
 import { addMode, addToken, createDesignSystem, deleteToken, designSystemOf, renameToken, setToken, tokenUses } from "/packages/document-model/src/tokens.mjs";
+import { componentsOf, createComponent, detachInstance, insertInstance } from "/packages/canvas/src/components.mjs";
 
 // While the Tokens dialog is open, how it shows the document again after any change (an Undo, an
 // agent's edit); it answers false once the dialog is gone.
@@ -675,6 +676,135 @@ function openTokensDialog() {
       error, body,
       el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close")),
     ];
+  });
+}
+
+// ---------- components and instances (ADR-0005) ----------
+
+// Make a layer a component, place instances of it, give a component its properties and an
+// instance its values, and detach an instance. Every change is one undoable transaction; an
+// instance is drawn from its component, so a change to the component reaches every instance.
+function openComponentsDialog() {
+  showDialog("Components", (close) => {
+    const error = el("p", { id: "components-error", role: "alert" });
+    const body = el("div", { id: "components-body" });
+    const run = (build, intent, select = null) => {
+      error.textContent = "";
+      let operations;
+      try {
+        operations = build(state.document);
+      } catch (failure) {
+        error.textContent = failure.message;
+        return;
+      }
+      commit(operations, intent).then((event) => {
+        if (!event) {
+          error.textContent = $("status").textContent || "That change was not made.";
+          return;
+        }
+        if (select !== null) selectLayers([select]);
+        draw();
+      });
+    };
+    const draw = () => {
+      const document = state.document;
+      const selected = state.selection.length === 1 ? document.nodes[state.selection[0]] : undefined;
+      const parts = [];
+      // The selected layer: make it a component, or, for an instance, its values and Detach.
+      if (selected?.type === "component-instance") {
+        const component = document.nodes[selected.props.componentId];
+        parts.push(el("h3", {}, `Instance of ${component?.props?.name ?? "a missing component"}`));
+        for (const property of component?.props?.properties ?? []) {
+          const current = selected.props.propertyValues?.[property.id] ?? property.default;
+          const label = `${property.name} of this instance`;
+          let control;
+          if (property.kind === "boolean") control = el("input", { type: "checkbox", checked: current === true, "aria-label": label, "data-property": property.id });
+          else if (property.kind === "variant") control = el("select", { "aria-label": label, "data-property": property.id }, ...property.options.map((option) => el("option", { value: option, selected: option === current }, option)));
+          else control = el("input", { value: String(current), "aria-label": label, "data-property": property.id });
+          control.addEventListener("change", () => {
+            const value = property.kind === "boolean" ? control.checked : control.value;
+            run(() => [{ type: "set-props", nodeId: selected.id, set: { propertyValues: { ...(selected.props.propertyValues ?? {}), [property.id]: value } } }], `Set ${property.name}`);
+          });
+          parts.push(el("label", {}, property.name, control));
+        }
+        const detach = el("button", { type: "button", id: "components-detach" }, "Detach instance");
+        detach.addEventListener("click", () => {
+          let detached;
+          try {
+            detached = detachInstance(state.document, selected.id, () => newId("layer"));
+          } catch (failure) {
+            error.textContent = failure.message;
+            return;
+          }
+          run(() => detached.operations, "Detach instance", detached.rootId);
+        });
+        parts.push(el("div", { class: "actions" }, detach));
+      } else if (selected?.type === "component-definition") {
+        parts.push(el("h3", {}, `Component ${selected.props.name}`));
+        const layers = [];
+        const walk = (id, depth) => {
+          const node = document.nodes[id];
+          if (!node) return;
+          layers.push({ id, label: `${"  ".repeat(depth)}${node.props.name ?? node.props.tag ?? node.type}` });
+          for (const child of node.children) walk(child, depth + 1);
+        };
+        walk(selected.id, 0);
+        const name = el("input", { id: "property-name", placeholder: "Label" });
+        const kind = el("select", { id: "property-kind" }, el("option", { value: "text" }, "Text"), el("option", { value: "boolean" }, "Shown (true or false)"), el("option", { value: "variant" }, "Variant (a class)"));
+        const options = el("input", { id: "property-options", placeholder: "Variant options, comma-separated: sm, md, lg" });
+        const target = el("select", { id: "property-target" }, ...layers.map((layer) => el("option", { value: layer.id }, layer.label)));
+        const add = el("button", { type: "button", class: "primary", id: "property-add" }, "Add property");
+        add.addEventListener("click", () => run((doc) => {
+          const component = doc.nodes[selected.id];
+          const label = name.value.trim();
+          if (label === "") throw new Error("Name the property.");
+          const id = `p-${label.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "") || "property"}-${(component.props.properties ?? []).length + 1}`;
+          const choices = options.value.split(",").map((entry) => entry.trim()).filter(Boolean);
+          const property = kind.value === "boolean"
+            ? { id, name: label, kind: "boolean", default: true, target: { nodeId: target.value, field: "visible" } }
+            : kind.value === "variant"
+              ? { id, name: label, kind: "variant", default: choices[0] ?? "", options: choices, target: { nodeId: target.value, field: "attributes.class" } }
+              : { id, name: label, kind: "text", default: doc.nodes[target.value]?.props?.text ?? "", target: { nodeId: target.value, field: "text" } };
+          return [{ type: "set-props", nodeId: selected.id, set: { properties: [...(component.props.properties ?? []), property] } }];
+        }, `Add property ${name.value.trim()}`));
+        parts.push(
+          el("p", {}, `${(selected.props.properties ?? []).length} propert${(selected.props.properties ?? []).length === 1 ? "y" : "ies"}: ${(selected.props.properties ?? []).map((property) => property.name).join(", ") || "none yet"}.`),
+          el("div", { class: "token-form" },
+            el("label", { for: "property-name" }, "Name", name),
+            el("label", { for: "property-kind" }, "Kind", kind),
+            el("label", { for: "property-options" }, "Options", options),
+            el("label", { for: "property-target" }, "Layer it sets", target),
+            add),
+        );
+      } else if (selected) {
+        const name = el("input", { id: "component-name", value: selected.props.name ?? "", placeholder: "Component name" });
+        const make = el("button", { type: "button", class: "primary", id: "component-create" }, "Make it a component");
+        make.addEventListener("click", () => {
+          const id = newId("component");
+          run((doc) => createComponent(doc, selected.id, { id, name: name.value }), `Make ${name.value.trim() || "a component"}`, id);
+        });
+        parts.push(el("h3", {}, "The selected layer"), el("label", { for: "component-name" }, "Name", name), el("div", { class: "actions" }, make));
+      } else {
+        parts.push(el("p", {}, "Select a layer to make it a component, a component to give it properties, or an instance to set its values."));
+      }
+      // Every component: place an instance after the selection.
+      const components = componentsOf(document);
+      parts.push(el("h3", {}, "Components"));
+      if (components.length === 0) parts.push(el("p", {}, "None yet."));
+      else {
+        parts.push(el("ul", { class: "project-list", id: "components-list" }, components.map((component) => {
+          const insert = el("button", { type: "button", "aria-label": `Insert an instance of ${component.name}` }, "Insert instance");
+          insert.addEventListener("click", () => {
+            const id = newId("instance");
+            run((doc) => insertInstance(doc, component.id, { id, afterId: state.selection[0] ?? null }), `Insert ${component.name}`, id);
+          });
+          return el("li", { class: "codebase-row" }, el("span", {}, el("strong", {}, component.name)), insert);
+        })));
+      }
+      body.replaceChildren(...parts);
+    };
+    draw();
+    return [error, body, el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close"))];
   });
 }
 
@@ -2390,6 +2520,7 @@ function renderToolbar() {
   $("action-code").disabled = !open;
   $("action-research").disabled = !open;
   $("action-tokens").disabled = !open;
+  $("action-components").disabled = !open;
   $("zoom-level").textContent = `${Math.round(canvas.viewport.zoom * 100)}%`;
   $("revision").textContent = open ? `Revision ${state.revision}` : "";
   document.title = state.project ? `${state.project} — Ninerr` : "Ninerr";
@@ -2493,6 +2624,7 @@ async function main() {
   $("action-code").addEventListener("click", openCodeDialog);
   $("action-research").addEventListener("click", openResearchDialog);
   $("action-tokens").addEventListener("click", openTokensDialog);
+  $("action-components").addEventListener("click", openComponentsDialog);
   $("action-component-sources").addEventListener("click", openComponentSourcesDialog);
   $("action-agents").addEventListener("click", openAgentsDialog);
   $("layers").addEventListener("keydown", onLayersKey);

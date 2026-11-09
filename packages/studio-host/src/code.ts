@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
-import { DRAWN_ID, planElement } from "@ninerr/renderer";
+import { DRAWN_ID, planElement, withInstancesExpanded } from "@ninerr/renderer";
 import { compileTokens, designSystemOf, isCodePart, modeAttribute, styleValuesOf, tokenReferences } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
 import { importedStyle, styleOutOfWrittenOrder, styleProperties } from "./imports.ts";
@@ -120,6 +120,9 @@ function tokensUsedUnder(document: any, nodeId: string): string | null {
 
 export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; stylesheet: string | null; tokens: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
+  // Instances export as the layers they draw (ADR-0005), as the canvas shows them.
+  const stored = document;
+  document = withInstancesExpanded(document, nodeId);
   // The page imported code was placed in, as import made it, exports as the component inside
   // it, under the page's name. Wrapping it instead would nest one more element each time the
   // export is brought in again (#398). A page the person has styled exports as itself.
@@ -251,7 +254,7 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   const componentName = pascal(typeof named.props?.name === "string" ? named.props.name : "", "Layer");
   const design: DesignDoc = { componentName, root: convert(nodeId, 1) };
   try {
-    return { componentName, code: designToCode(design), layers, codeParts, stylesheet: appliedStylesheet(document, nodeId), tokens: tokensUsedUnder(document, nodeId) };
+    return { componentName, code: designToCode(design), layers, codeParts, stylesheet: appliedStylesheet(document, nodeId), tokens: tokensUsedUnder(stored, nodeId) };
   } catch (error) {
     throw new StudioError(422, "export-refused", error instanceof Error ? error.message.slice(0, 300) : "this layer cannot be exported");
   }
