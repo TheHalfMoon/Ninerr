@@ -25,6 +25,23 @@ const CLASSES = Object.freeze({
   move_layers: "write",
   duplicate_layers: "write",
   delete_layers: "consequential",
+  // Design tokens and components (ADR-0004 and ADR-0005, accepted 2026-11-09), in the order the
+  // server lists them.
+  design_tokens: "read",
+  set_token: "write",
+  add_token_mode: "write",
+  rename_token: "write",
+  delete_token: "consequential",
+  set_layer_modes: "write",
+  list_components: "read",
+  create_component: "write",
+  add_component_property: "write",
+  insert_instance: "write",
+  instance_layers: "read",
+  set_instance_values: "write",
+  set_instance_override: "write",
+  reset_instance: "write",
+  detach_instance: "write",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

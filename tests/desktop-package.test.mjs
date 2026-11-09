@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,6 +72,27 @@ test("the runtime's notice is classified, and an unreviewed copyleft component i
     assert.ok(result.components > 500, `${result.components} components`);
     assert.deepEqual(result.unreviewed, []);
   }
+});
+
+test("every workspace import in the packages resolves as the packaged app resolves it", async () => {
+  // A packaged app has no node_modules links: each @ninerr/<name> resolves to its package's one
+  // entry, and a subpath (@ninerr/canvas/components) is refused there though a checkout allows it.
+  const { resolveWorkspaceEntry } = await import("../packages/desktop/src/resolve.mjs");
+  const appRoot = new URL("../", import.meta.url);
+  const specifiers = new Set();
+  const walk = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(path);
+      } else if (/\.(?:mjs|ts|cjs)$/u.test(entry.name)) {
+        for (const [, specifier] of readFileSync(path, "utf8").matchAll(/(?:from|import)\s*\(?\s*["'](@ninerr\/[^"']+)["']/gu)) specifiers.add(specifier);
+      }
+    }
+  };
+  walk(join(ROOT, "packages"));
+  assert.ok(specifiers.size > 10, `found ${specifiers.size} workspace imports`);
+  for (const specifier of specifiers) assert.doesNotThrow(() => resolveWorkspaceEntry(specifier, appRoot), specifier);
 });
 
 test("the host serves the browser packages the editor imports, and the package holds the same ones", () => {

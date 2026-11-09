@@ -23,16 +23,16 @@ The server identifies itself as `ninerr` and tells the agent to call `guide` fir
 
 ## Tools
 
-`MCP_TOOL_NAMES` is the catalog: the 18 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
+`MCP_TOOL_NAMES` is the catalog: the 33 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
 
 | Class | Tools | Capability required |
 | --- | --- | --- |
-| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task` | `read` |
-| write | `create_frame`, `set_text`, `rename_layers`, `set_styles`, `move_layers`, `duplicate_layers` | `document-write` |
-| consequential | `delete_layers` | `document-write` plus a confirmation |
+| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task`, `design_tokens`, `list_components`, `instance_layers` | `read` |
+| write | `create_frame`, `set_text`, `rename_layers`, `set_styles`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance` | `document-write` |
+| consequential | `delete_layers`, `delete_token` | `document-write` plus a confirmation |
 | unknown | any other name | denied without consulting a policy |
 
-So the 11 read-only tools need only `read`.
+So the 14 read-only tools need only `read`.
 
 - **Reading.**
   - `guide`: how Ninerr documents, layers and edits work; the server asks the agent to call it first.
@@ -41,6 +41,8 @@ So the 11 read-only tools need only `read`.
   - `find_layers`: search by name or text.
   - `selection`: what the person has selected in the editor.
   - `layer_code`: a layer as a JSX component.
+  - `design_tokens`: the design system's collections, modes and tokens, with how many layer values use each (ADR-0004).
+  - `list_components` and `instance_layers`: the components with their properties and instance counts, and the layers an instance draws, with the path and node each override takes (ADR-0005).
   - `search_design_references` and `get_design_reference`: the local reference pack the person has read into the open project. They return public references with their rights, never file bytes. They take no directory, URL or token, and with no pack read the answer says so; nothing is fetched instead.
 - **Editing.** Every write is one history transaction, attributed to the agent. The person sees it live on the canvas and can undo it with **Undo agent change**, next to Undo (Ctrl+Alt+Z; Cmd+Option+Z on a Mac): it reverts the agent's latest change in this session, and then the one before. `finish_task` changes nothing; it tells Ninerr the agent is done with some layers.
 - **Only the project the agent has read.** Tools act on the project open in Ninerr. An agent may write or delete only in the project it last connected to (`initialize`) or read with `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection` or `layer_code` (#260). Otherwise the call is refused, before the person is asked anything, and the agent is told to call `project_info` first. Two cases are refused this way:
@@ -48,7 +50,9 @@ So the 11 read-only tools need only `read`.
   - Ninerr has no record of the agent, for example after a restart or for a client that never sent `initialize`.
 
   Connecting again counts as reading, so an agent that reconnects can change whatever project is open. The record is kept per agent, so clients that share one agent credential share it.
-- **Deleting.** `delete_layers` asks the person to approve the call in the editor. The call waits up to 50 seconds for an answer (`CONFIRMATION_WAIT_MS`). If no answer comes, the agent is told to call again with the same arguments, and an approval stays usable for that exact call for 5 minutes.
+- **Design tokens.** `set_token` adds a token or changes its values (creating the design system with the first), `add_token_mode` adds a mode, `rename_token` renames a token and every use in one change, and `set_layer_modes` gives layers a mode. A layer uses a token as `var(--name)` through `set_styles`. `delete_token` is consequential: the person approves it, seeing how many values on how many layers use the token, which tokens alias it and what replaces it, and a token in use needs its replacement. The approval holds only while the token, its uses and its aliases stay as they were: if any of them changes, the person is asked again.
+- **Components.** `create_component` makes a layer a component, `add_component_property` gives it a text, shown or variant property, `insert_instance` places an instance, `set_instance_values` and `set_instance_override` change one instance (the component never), `reset_instance` takes its overrides off, and `detach_instance` writes it, overrides and all, as real layers that no longer follow the component. Each is one change; the person reverts an agent's changes latest first.
+- **Deleting.** `delete_layers` and `delete_token` ask the person to approve the call in the editor. The call waits up to 50 seconds for an answer (`CONFIRMATION_WAIT_MS`). If no answer comes, the agent is told to call again with the same arguments, and an approval stays usable for that exact call for 5 minutes.
 
 ## Authorizing a call
 
