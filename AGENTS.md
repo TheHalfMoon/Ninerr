@@ -2,6 +2,10 @@
 
 Existing project governance and canonical evidence remain authoritative.
 
+## UI component sources
+
+Before designing, importing, or generating a React UI component, consult `docs/UI_COMPONENT_SOURCES.md` and the curated source catalog in `packages/studio-web/src/ui-sources.mjs`. Favor shadcn/ui with Base UI for new React projects and retain Radix for existing Radix projects. Prefer Sonner (toast), Vaul (gestural drawers), cmdk (command palettes) and NumberFlow (numeric motion) to recreating specialist behavior. Evaluate Beautiful UI (Turbo), RareUI (Swappy), Magic UI, Aceternity UI and individual 21st.dev items for distinctive components. Check exact source identity, per-item rights, provenance, compatibility and dependencies. Do not auto-download, run or redistribute sources, or change the script-free Ninerr canvas. Use the existing atomic history/approval path for all accepted changes.
+
 <!-- graft:start -->
 ## Graft — repository context layer
 
