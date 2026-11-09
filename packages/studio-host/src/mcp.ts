@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
-import { TOKEN_NAME, TOKEN_TYPES, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
+import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { styleDeclarationProblem } from "@ninerr/renderer";
 import { componentsOf, createComponent, detachInstance, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas/components";
 import { exportJsx } from "./code.ts";
@@ -240,7 +240,8 @@ const TOOLS: Tool[] = [
         "Read with project_info, layer_tree, layer_children, layer_details, find_layers and selection; layer_code gives a layer as JSX.",
         "Edit with create_frame, set_text, rename_layers, set_styles, move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
-        "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), reset_instance and detach_instance undo that. An instance's layers are its component's: change the component itself to change every instance.",
+        "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
+        "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
@@ -455,7 +456,12 @@ const TOOLS: Tool[] = [
     inputSchema: object({ collection: { type: "string", maxLength: 128 }, name: { type: "string", maxLength: 200 }, id: { type: "string", maxLength: 128 } }, ["collection", "name"]),
     run: ({ session, edit }, args) => {
       if (typeof args.name !== "string" || args.name.trim() === "") throw new ToolError("give the mode a name");
-      const id = typeof args.id === "string" ? args.id : args.name.toLowerCase().replace(/[^a-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "") || "mode";
+      let id = typeof args.id === "string" ? args.id : args.name.toLowerCase().replace(/[^a-z0-9_.-]+/gu, "-").replace(/^-+|-+$/gu, "") || "mode";
+      if (typeof args.id !== "string") {
+        const modes = designSystemOf(session.document)?.props.collections.find((entry: any) => entry.id === args.collection)?.modes ?? [];
+        const stem = id;
+        for (let at = 2; modes.some((mode: any) => mode.id === id); at += 1) id = `${stem}-${at}`;
+      }
       return edit(tokenOperation(() => addMode(session.document, args.collection, { id, name: args.name.trim() })), `Add mode ${args.name.trim()}`);
     },
   },
@@ -532,7 +538,9 @@ const TOOLS: Tool[] = [
       const stem = `p-${args.name.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "") || "property"}`;
       let id = stem;
       for (let at = 2; properties.some((property: any) => property.id === id); at += 1) id = `${stem}-${at}`;
+      if (!["text", "boolean", "variant"].includes(args.kind)) throw new ToolError("kind is text, boolean or variant");
       const options = Array.isArray(args.options) ? [...new Set(args.options as string[])] : [];
+      if (args.kind === "variant" && options.length === 0) throw new ToolError("a variant property needs its options");
       const property = args.kind === "boolean"
         ? { id, name: args.name.trim(), kind: "boolean", default: typeof args.default === "boolean" ? args.default : true, target: { nodeId: target.id, field: "visible" } }
         : args.kind === "variant"
@@ -548,6 +556,7 @@ const TOOLS: Tool[] = [
     inputSchema: object({ componentId: { type: "string" }, afterId: { type: "string" } }, ["componentId"]),
     run: ({ session, edit }, args) => {
       const id = `instance-${randomUUID()}`;
+      if (args.afterId !== undefined) nodeOf(session, args.afterId);
       return { instanceId: id, ...(edit(tokenOperation(() => insertInstance(session.document, args.componentId, { id, afterId: typeof args.afterId === "string" ? args.afterId : null })), "Place an instance") as object) };
     },
   },
@@ -649,6 +658,10 @@ export interface PendingConfirmation {
 type Decision = { outcome: "approved"; confirmedAt: string } | { outcome: "denied" | "timeout" | "busy" };
 
 interface ConfirmationState extends PendingConfirmation {
+  // A digest of what the call would affect, read from the document when the person was asked
+  // (for delete_token: the token, its uses and its aliases): an approval holds only while that is
+  // unchanged, so a name moved to another token is not deleted on an approval for the first.
+  subjectSha256?: string;
   expires: number;
   decision: "pending" | "approved" | "denied";
   confirmedAt?: string;
@@ -670,14 +683,14 @@ export class ConfirmationBroker {
 
   pending(): PendingConfirmation[] {
     this.#prune();
-    return [...this.#items.values()].filter((item) => item.decision === "pending").map(({ expires: _e, decision: _d, confirmedAt: _c, waiters: _w, ...rest }) => rest);
+    return [...this.#items.values()].filter((item) => item.decision === "pending").map(({ expires: _e, decision: _d, confirmedAt: _c, waiters: _w, subjectSha256: _s, ...rest }) => rest);
   }
 
   /** An approval for exactly this call, consumed; or null. */
-  takeApproval(key: { agentId: string; toolName: string; documentId: string; argumentsSha256: string }): string | null {
+  takeApproval(key: { agentId: string; toolName: string; documentId: string; argumentsSha256: string; subjectSha256?: string }): string | null {
     this.#prune();
     for (const [id, item] of this.#items) {
-      if (item.decision === "approved" && item.agentId === key.agentId && item.toolName === key.toolName && item.documentId === key.documentId && item.argumentsSha256 === key.argumentsSha256) {
+      if (item.decision === "approved" && item.agentId === key.agentId && item.toolName === key.toolName && item.documentId === key.documentId && item.argumentsSha256 === key.argumentsSha256 && item.subjectSha256 === key.subjectSha256) {
         this.#items.delete(id);
         return item.confirmedAt!;
       }
@@ -690,9 +703,9 @@ export class ConfirmationBroker {
    * approval carries its time), "timeout", or "busy" when too many requests are waiting:
    * at most 20 in all, 5 per agent, and 4 calls waiting on one request.
    */
-  request(input: Omit<PendingConfirmation, "id" | "requestedAt">, at: string, waitMs: number): Promise<Decision> {
+  request(input: Omit<PendingConfirmation, "id" | "requestedAt"> & { subjectSha256?: string }, at: string, waitMs: number): Promise<Decision> {
     this.#prune();
-    let item = [...this.#items.values()].find((candidate) => candidate.decision === "pending" && candidate.agentId === input.agentId && candidate.toolName === input.toolName && candidate.documentId === input.documentId && candidate.argumentsSha256 === input.argumentsSha256);
+    let item = [...this.#items.values()].find((candidate) => candidate.decision === "pending" && candidate.agentId === input.agentId && candidate.toolName === input.toolName && candidate.documentId === input.documentId && candidate.argumentsSha256 === input.argumentsSha256 && candidate.subjectSha256 === input.subjectSha256);
     if (item === undefined) {
       const pending = this.pending();
       if (pending.length >= 20 || pending.filter((other) => other.agentId === input.agentId).length >= 5) return Promise.resolve({ outcome: "busy" });
@@ -720,9 +733,10 @@ export class ConfirmationBroker {
   /**
    * The person's decision, made in the editor. An approval serves the calls waiting on the
    * request; if none is waiting (they timed out), it is kept for one identical retry.
-   * Identical waiting calls (at most 4) each run once: the only consequential tool,
-   * delete_layers, is idempotent, so the repeats find nothing left to delete. A consequential
-   * tool that is not idempotent must run once and share its result instead.
+   * Identical waiting calls (at most 4) each run once: the consequential tools, delete_layers
+   * and delete_token, find nothing left to delete on a repeat (a repeat of delete_token is told
+   * the token is gone). A consequential tool that is not idempotent must run once and share its
+   * result instead.
    */
   decide(id: unknown, approve: boolean, at: string): void {
     this.#prune();
@@ -779,7 +793,7 @@ export interface McpContext {
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
-const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code"]);
+const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers"]);
 
 const rpcError = (id: Json, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 const toolResult = (value: Json, isError = false) => ({
@@ -884,9 +898,24 @@ function refusal(error: unknown) {
 }
 
 /** The person's confirmation for this exact call, or the message to return instead. */
+/**
+ * What a delete_token call would affect, from the document: the token, every value that uses it,
+ * and every token that aliases it. Its digest binds the person's approval.
+ */
+function tokenSubject(document: any, name: unknown) {
+  const system = designSystemOf(document);
+  const token = typeof name === "string" ? system?.props.tokens.find((entry: any) => entry.name === name) ?? null : null;
+  const uses = token === null ? [] : tokenUses(document, token.name);
+  const aliases = token === null ? [] : system.props.tokens.filter((entry: any) => entry.name !== token.name && Object.values(entry.values).some((value) => tokenReferences(value).includes(token.name))).map((entry: any) => entry.name);
+  return { token, uses, aliases };
+}
+
+/** The person's confirmation for this exact call, or the message to return instead. */
 async function confirm(context: McpContext, session: StudioSession, actor: StudioActor, toolName: string, args: unknown, at: string) {
   const argumentsSha256 = mcpArgumentsSha256(args);
-  const key = { agentId: actor.actorId, toolName, documentId: session.documentId, argumentsSha256 };
+  const subjectOf = () => (toolName === "delete_token" ? createHash("sha256").update(JSON.stringify(tokenSubject(session.document, (args as any)?.name))).digest("hex") : undefined);
+  const subjectSha256 = subjectOf();
+  const key = { agentId: actor.actorId, toolName, documentId: session.documentId, argumentsSha256, subjectSha256 };
   const approvedAt = context.confirmations.takeApproval(key);
   if (approvedAt !== null) return { documentId: session.documentId, toolName, argumentsSha256, actorId: actor.ownerActorId!, confirmedAt: approvedAt };
   const ids = Array.isArray((args as any)?.nodeIds) ? [...new Set((args as any).nodeIds.filter((id: unknown) => typeof id === "string"))] as string[] : [];
@@ -911,13 +940,21 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
   const tokenSummary = () => {
     const name = (args as any)?.name;
     const shown = typeof name === "string" && TOKEN_NAME.test(name) ? name : "(not a token name)";
-    const uses = typeof name === "string" && TOKEN_NAME.test(name) ? tokenUses(document, name).length : 0;
+    const { token, uses, aliases } = tokenSubject(document, name);
+    const values = uses.reduce((total: number, use: any) => total + use.fields.length, 0);
     const replacement = (args as any)?.replacement;
-    const by = typeof replacement?.token === "string" && TOKEN_NAME.test(replacement.token) ? `replaced by ${replacement.token}` : replacement?.literal === true ? "replaced by its own value" : "with nothing in its place";
-    return `Delete token ${shown}, used by ${uses} layer value${uses === 1 ? "" : "s"}, ${by}`;
+    const collection = token === null ? null : designSystemOf(document)?.props.collections.find((entry: any) => entry.id === token.collection);
+    const literal = token === null || collection === null || collection === undefined ? "" : token.values[collection.defaultMode] ?? "";
+    const by = typeof replacement?.token === "string" && TOKEN_NAME.test(replacement.token)
+      ? `replaced by ${replacement.token}`
+      : replacement?.literal === true ? `replaced by its default-mode value ${literal.slice(0, 60)} on layers (in every mode) and by its own value per mode in the tokens that alias it` : "with nothing in its place";
+    const aliased = aliases.length === 0 ? "" : `, aliased by ${aliases.slice(0, 5).join(", ")}${aliases.length > 5 ? ", …" : ""}`;
+    return `Delete token ${shown}, used by ${values} value${values === 1 ? "" : "s"} on ${uses.length} layer${uses.length === 1 ? "" : "s"}${aliased}, ${by}`;
   };
   const summary = toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`;
   const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
+  // What was approved must still be what runs: a token changed while the call waited is asked about again.
+  if (decision.outcome === "approved" && subjectOf() !== subjectSha256) return "What this would delete changed while it waited for the person; call again to ask them about it as it is now.";
   // A switch to another project drops the request: say so, rather than that the person declined.
   if (decision.outcome === "denied") return context.session() === session ? "The person declined this change." : "The open project changed while the call was waiting.";
   if (decision.outcome === "busy") return "Too many changes are already waiting for the person's approval. Wait for them to decide, then call again.";

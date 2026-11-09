@@ -172,6 +172,7 @@ export function designSystemProblem(props) {
   const collections = new Map();
   for (const collection of props.collections) {
     if (!isRecord(collection) || typeof collection.id !== "string" || !MODE_ID.test(collection.id)) return "a collection needs an id of letters, digits and . _ -";
+    if (collection.id in Object.prototype) return `${shown(collection.id)} is a name a collection cannot have`;
     if (collections.has(collection.id)) return `collection ${shown(collection.id)} is listed twice`;
     if (!text(collection.name, 200)) return `collection ${shown(collection.id)} needs a name`;
     if (!Array.isArray(collection.modes) || collection.modes.length === 0 || collection.modes.length > SCHEMA_V2_LIMITS.modesPerCollection) {
@@ -180,6 +181,7 @@ export function designSystemProblem(props) {
     const modes = new Set();
     for (const mode of collection.modes) {
       if (!isRecord(mode) || typeof mode.id !== "string" || !MODE_ID.test(mode.id)) return `a mode of ${shown(collection.id)} needs an id of letters, digits and . _ -`;
+      if (mode.id in Object.prototype) return `${shown(mode.id)} is a name a mode cannot have`;
       if (modes.has(mode.id)) return `mode ${shown(mode.id)} is listed twice in ${shown(collection.id)}`;
       if (!text(mode.name, 200)) return `mode ${shown(mode.id)} needs a name`;
       modes.add(mode.id);

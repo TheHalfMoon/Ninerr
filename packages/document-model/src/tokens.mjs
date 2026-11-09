@@ -286,9 +286,10 @@ export function compileTokens(document) {
   const system = designSystemOf(document);
   if (system === null || system.props.tokens.length === 0) return "";
   const collections = new Map(system.props.collections.map((collection) => [collection.id, collection]));
+  const own = (values, mode) => (Object.hasOwn(values, mode) ? values[mode] : undefined);
   const defaultValue = (token) => {
     const collection = collections.get(token.collection);
-    return collection ? token.values[collection.defaultMode] : undefined;
+    return collection ? own(token.values, collection.defaultMode) : undefined;
   };
   // Who refers to whom, by each token's default-mode value: the value it has wherever its own
   // collection is in its default mode.
@@ -309,14 +310,14 @@ export function compileTokens(document) {
       if (mode.id === collection.defaultMode) continue;
       const declared = new Map();
       for (const token of system.props.tokens) {
-        if (token.collection === collection.id && token.values[mode.id] !== undefined) declared.set(token.name, token.values[mode.id]);
+        if (token.collection === collection.id && own(token.values, mode.id) !== undefined) declared.set(token.name, own(token.values, mode.id));
       }
       // Every alias of a token this mode declares follows it into the mode.
       const queue = [...declared.keys()];
       while (queue.length > 0) {
         for (const dependent of dependents.get(queue.shift()) ?? []) {
           if (declared.has(dependent.name)) continue;
-          const value = dependent.collection === collection.id && dependent.values[mode.id] !== undefined ? dependent.values[mode.id] : defaultValue(dependent);
+          const value = dependent.collection === collection.id && own(dependent.values, mode.id) !== undefined ? own(dependent.values, mode.id) : defaultValue(dependent);
           if (value === undefined) continue;
           declared.set(dependent.name, value);
           queue.push(dependent.name);

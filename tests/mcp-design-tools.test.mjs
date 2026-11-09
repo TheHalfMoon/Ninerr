@@ -85,7 +85,7 @@ test("deleting a token needs the person's approval, and its uses get its replace
     const waiting = await tool("delete_token", { name: "--brand", replacement: { token: "--ink" } });
     assert.match(waiting.content[0].text, /Waiting for the person/u);
     const { pending } = (await owner("GET", "/api/confirmations")).json;
-    assert.equal(pending[0].summary, "Delete token --brand, used by 1 layer value, replaced by --ink");
+    assert.equal(pending[0].summary, "Delete token --brand, used by 1 value on 1 layer, replaced by --ink");
     await owner("POST", "/api/confirmations/decide", { id: pending[0].id, approve: true });
     await ok("delete_token", { name: "--brand", replacement: { token: "--ink" } });
     assert.equal(host.session.document.nodes[frame].props.style.color, "var(--ink)");
@@ -120,5 +120,59 @@ test("an agent makes a component, gives it a property, places and changes an ins
     assert.equal(Object.hasOwn(host.session.document.nodes, instanceId), false);
     // Each change is the agent's own transaction.
     assert.deepEqual(host.session.log.slice(-7).map((entry) => entry.tool), ["create_component", "add_component_property", "insert_instance", "set_instance_values", "set_instance_override", "reset_instance", "detach_instance"]);
+  });
+});
+
+test("an approval to delete a token holds only while that token, its uses and aliases stay as they were", async () => {
+  await withAgent(async ({ host, owner, tool, ok }) => {
+    await ok("set_token", { name: "--tmp", type: "color", values: { default: "#000" } });
+    await ok("set_token", { name: "--brand", type: "color", collection: "base", values: { default: "#2255ff" } });
+    await ok("set_token", { name: "--link", type: "color", collection: "base", values: { default: "var(--brand)" } });
+    const frame = (await ok("create_frame", { width: 100, height: 100 })).nodeId;
+    await ok("set_styles", { updates: [{ nodeId: frame, styles: { color: "var(--brand)" } }] });
+    const call = { name: "--tmp", replacement: { literal: true } };
+    // Declined: nothing changes.
+    const declining = tool("delete_token", call);
+    const ask = async () => {
+      for (let tries = 0; tries < 200; tries += 1) {
+        const { pending } = (await owner("GET", "/api/confirmations")).json;
+        if (pending.length > 0) return pending[0];
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error("no confirmation was requested");
+    };
+    const first = await ask();
+    assert.equal(first.summary, "Delete token --tmp, used by 0 values on 0 layers, replaced by its default-mode value #000 on layers (in every mode) and by its own value per mode in the tokens that alias it");
+    await owner("POST", "/api/confirmations/decide", { id: first.id, approve: false });
+    assert.match((await declining).content[0].text, /declined/u);
+    assert.equal((await ok("design_tokens")).tokens.length, 3);
+    // Approved for --tmp, which then moves away and --brand takes its name: the approval does not
+    // reach --brand, and the person is asked about it as it is now.
+    const waiting = await tool("delete_token", call);
+    assert.match(waiting.content[0].text, /Waiting for the person/u);
+    await owner("POST", "/api/confirmations/decide", { id: (await ask()).id, approve: true });
+    await ok("rename_token", { from: "--tmp", to: "--old" });
+    await ok("rename_token", { from: "--brand", to: "--tmp" });
+    const retried = tool("delete_token", call);
+    const again = await ask();
+    assert.match(again.summary, /^Delete token --tmp, used by 1 value on 1 layer, aliased by --link, /u, "the person sees what this name is now");
+    await owner("POST", "/api/confirmations/decide", { id: again.id, approve: false });
+    assert.match((await retried).content[0].text, /declined/u);
+    assert.equal(host.session.document.nodes[frame].props.style.color, "var(--tmp)", "nothing was deleted on the first approval");
+  });
+});
+
+test("bad input to the component and mode tools is refused, saying why", async () => {
+  await withAgent(async ({ tool, ok }) => {
+    await ok("set_token", { name: "--brand", type: "color", values: { default: "#2255ff" } });
+    await ok("add_token_mode", { collection: "base", name: "داكن" });
+    await ok("add_token_mode", { collection: "base", name: "ليلي" });
+    assert.deepEqual((await ok("design_tokens")).collections[0].modes.map((mode) => mode.id), ["default", "mode", "mode-2"], "a slug that is taken gets the next number");
+    assert.match(refusal(await tool("add_token_mode", { collection: "base", name: "Constructor" })), /a name a mode cannot have/u);
+    const card = (await ok("create_frame", { width: 100, height: 100, name: "Card" })).nodeId;
+    const { componentId } = await ok("create_component", { nodeId: card });
+    assert.match(refusal(await tool("add_component_property", { componentId, name: "Size", kind: "slider", targetNodeId: componentId })), /kind is text, boolean or variant/u);
+    assert.match(refusal(await tool("add_component_property", { componentId, name: "Size", kind: "variant", targetNodeId: componentId })), /needs its options/u);
+    assert.match(refusal(await tool("insert_instance", { componentId, afterId: "no-such-layer" })), /no node/u);
   });
 });
