@@ -76,6 +76,15 @@ const UNSAFE_STYLE = /url\s*\(|image-set|expression\s*\(|javascript:|vbscript:|@
 // The host takes a stylesheet of up to 2 MiB in UTF-8, which is at most this many characters.
 const MAX_STYLESHEET = 2 * 1024 * 1024;
 const UNSAFE_STYLESHEET = /url\s*\(|image-set\s*\(|image\s*\(|(?:^|[^-\w])src\(|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|<\/style/u;
+// A layer's modes, from props.modes ({ collection: mode }), as "collection:mode ..." or null.
+const MODE_PART = /^[A-Za-z0-9_.-]{1,128}$/u;
+function modeAttributeOf(props) {
+  const modes = props?.modes;
+  if (modes === null || typeof modes !== "object" || Array.isArray(modes)) return null;
+  const parts = Object.entries(modes).filter(([collection, mode]) => MODE_PART.test(collection) && typeof mode === "string" && MODE_PART.test(mode)).map(([collection, mode]) => `${collection}:${mode}`);
+  return parts.length === 0 ? null : parts.sort().join(" ");
+}
+
 function safeStylesheet(css) {
   if (typeof css !== "string" || css.length > MAX_STYLESHEET) return false;
   const decoded = css
@@ -626,8 +635,14 @@ export function createRenderer(root) {
 
   function apply(element, node, plan) {
     for (const attribute of [...element.attributes]) {
-      if (attribute.name !== "data-ninerr-id" && !Object.hasOwn(plan.attributes, attribute.name)) element.removeAttribute(attribute.name);
+      if (attribute.name !== "data-ninerr-id" && attribute.name !== "data-ninerr-mode" && !Object.hasOwn(plan.attributes, attribute.name)) element.removeAttribute(attribute.name);
     }
+    // The design-system modes this layer takes (ADR-0004): its props.modes, as the attribute the
+    // compiled token sheet selects on. tokens.mjs's modeAttribute reads them the same way; this
+    // module has no imports.
+    const modes = modeAttributeOf(node.props);
+    if (modes === null) element.removeAttribute("data-ninerr-mode");
+    else if (element.getAttribute("data-ninerr-mode") !== modes) element.setAttribute("data-ninerr-mode", modes);
     for (const [name, value] of Object.entries(plan.attributes)) {
       if (element.getAttribute(name) !== value) element.setAttribute(name, value);
     }
@@ -698,8 +713,36 @@ export function createRenderer(root) {
     }
   }
 
+  // The compiled design tokens (ADR-0004): one sheet, given whole by the canvas, which compiles it
+  // from the design-system node. It may hold only custom properties, on :root and on mode
+  // selectors; anything else, or a sheet that could fetch, is not drawn at all.
+  let tokenSheet = null;
+  function setTokens(css) {
+    if (typeof css !== "string" || css === "" || !safeStylesheet(css)) {
+      tokenSheet?.remove();
+      tokenSheet = null;
+      return;
+    }
+    if (tokenSheet !== null && tokenSheet.textContent === css) return;
+    if (tokenSheet === null) {
+      tokenSheet = doc.createElement("style");
+      tokenSheet.setAttribute("data-ninerr-tokens", "");
+      doc.head.prepend(tokenSheet);
+    }
+    tokenSheet.textContent = css;
+    const rules = [...(tokenSheet.sheet?.cssRules ?? [])];
+    const onlyTokens = rules.every((rule) => typeof rule.selectorText === "string"
+      && (rule.selectorText === ":root" || /^\[data-ninerr-mode~="[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"\]$/u.test(rule.selectorText))
+      && [...rule.style].every((property) => property.startsWith("--")));
+    if (!onlyTokens) {
+      tokenSheet.remove();
+      tokenSheet = null;
+    }
+  }
+
   return {
     stats,
+    setTokens,
     /** Render `document` from scratch. */
     render(document) {
       for (const element of elements.values()) element.remove();

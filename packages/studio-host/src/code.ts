@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
 import { DRAWN_ID, planElement } from "@ninerr/renderer";
-import { isCodePart } from "@ninerr/document-model";
+import { compileTokens, designSystemOf, isCodePart, modeAttribute, styleValuesOf, tokenReferences } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
 import { importedStyle, styleOutOfWrittenOrder, styleProperties } from "./imports.ts";
 
@@ -94,7 +94,31 @@ function isCodePage(document: any, node: any): boolean {
   return keys.length === Object.keys(CODE_PAGE_STYLE).length && keys.every((key) => style[key] === CODE_PAGE_STYLE[key]);
 }
 
-export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; stylesheet: string | null } {
+/**
+ * The compiled design tokens (ADR-0004) when the layers under `nodeId` use any of them, so the
+ * code carries the custom properties its var() values need; otherwise null.
+ */
+function tokensUsedUnder(document: any, nodeId: string): string | null {
+  const system = designSystemOf(document);
+  if (system === null || system.props.tokens.length === 0) return null;
+  const names = new Set(system.props.tokens.map((token: any) => token.name));
+  const stack = [nodeId];
+  const seen = new Set<string>();
+  while (stack.length > 0) {
+    const id = stack.pop() as string;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const node = document.nodes[id];
+    if (!node) continue;
+    // Its style, stylesheet and overrides; and, for an instance, its component's layers, which it draws.
+    if (styleValuesOf(node).some(({ value }: { value: string }) => tokenReferences(value).some((name: string) => names.has(name)))) return compileTokens(document);
+    stack.push(...node.children);
+    if (node.type === "component-instance" && typeof node.props.componentId === "string") stack.push(node.props.componentId);
+  }
+  return null;
+}
+
+export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; stylesheet: string | null; tokens: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   // The page imported code was placed in, as import made it, exports as the component inside
   // it, under the page's name. Wrapping it instead would nest one more element each time the
@@ -189,6 +213,9 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
       else if (name === "for") props.htmlFor = value;
       else if (/^[A-Za-z_][A-Za-z0-9_:.-]*$/u.test(name) && !/[\r\n]/u.test(value)) props[name] = value;
     }
+    // The design-system modes it takes (ADR-0004), which the exported token CSS selects on.
+    const modes = modeAttribute(node.props);
+    if (modes !== null) props["data-ninerr-mode"] = modes;
     if (exportedId.has(id)) props.id = exportedId.get(id)!;
     if (labelTarget.has(id)) props.htmlFor = labelTarget.get(id)!;
     else if (props.htmlFor !== undefined) delete props.htmlFor; // names nothing in this export
@@ -224,7 +251,7 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   const componentName = pascal(typeof named.props?.name === "string" ? named.props.name : "", "Layer");
   const design: DesignDoc = { componentName, root: convert(nodeId, 1) };
   try {
-    return { componentName, code: designToCode(design), layers, codeParts, stylesheet: appliedStylesheet(document, nodeId) };
+    return { componentName, code: designToCode(design), layers, codeParts, stylesheet: appliedStylesheet(document, nodeId), tokens: tokensUsedUnder(document, nodeId) };
   } catch (error) {
     throw new StudioError(422, "export-refused", error instanceof Error ? error.message.slice(0, 300) : "this layer cannot be exported");
   }

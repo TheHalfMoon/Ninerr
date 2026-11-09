@@ -899,3 +899,34 @@ test("the inspector's Text field is reached, edited and sized by the keyboard, a
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the Tokens dialog audits clean, with no design system and with tokens in two modes", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-tokens-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("tokens");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    await page.locator("#action-tokens").click();
+    await page.locator("#tokens-create").waitFor();
+    await audit(page, "the Tokens dialog with no design system");
+    await page.locator("#tokens-create").click();
+    await waitRevision(page, 1);
+    await page.locator("#token-new-name").fill("--brand");
+    await page.locator("#token-new-value").fill("#2255ff");
+    await page.locator("#token-add").click();
+    await waitRevision(page, 2);
+    await page.locator('input[aria-label="New mode for Base"]').fill("Dark");
+    await page.locator('section[aria-label="Base"] button', { hasText: "Add mode" }).click();
+    await waitRevision(page, 3);
+    await page.locator('[data-token-row="--brand"]').waitFor();
+    await audit(page, "the Tokens dialog with a token in two modes");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

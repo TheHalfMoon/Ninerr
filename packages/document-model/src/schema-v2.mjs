@@ -32,6 +32,56 @@ export const SCHEMA_V2_LIMITS = Object.freeze({
 
 export const TOKEN_NAME = /^--[A-Za-z0-9_-]{1,127}$/u;
 const ID = /^[A-Za-z0-9_.:-]{1,128}$/u;
+// A collection's or mode's id is half of a "collection:mode" pair in a layer's data-ninerr-mode and
+// the compiled sheet's selectors, so it holds no colon.
+export const MODE_ID = /^[A-Za-z0-9_.-]{1,128}$/u;
+// The compiled token sheet must stay well under the renderer's 2 MiB stylesheet limit, aliases
+// re-emitted per mode included.
+const MAX_TOKEN_TEXT = 512 * 1024;
+
+/**
+ * `text` with every comment and string character, and every escaped character, replaced by a
+ * space (a string keeps its quotes), so the result has the same length and only code is left
+ * readable: references, brackets and declarations are found where the browser would find them.
+ */
+export function cssCode(text) {
+  const out = [];
+  let index = 0;
+  while (index < text.length) {
+    if (text.startsWith("/*", index)) {
+      const end = text.indexOf("*/", index + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      for (; index < stop; index += 1) out.push(" ");
+      continue;
+    }
+    const character = text[index];
+    if (character === '"' || character === "'") {
+      out.push(character);
+      index += 1;
+      while (index < text.length && text[index] !== character && text[index] !== "\n") {
+        const width = text[index] === "\\" ? 2 : 1;
+        for (let step = 0; step < width && index < text.length; step += 1, index += 1) out.push(" ");
+      }
+      if (index < text.length && text[index] === character) {
+        out.push(character);
+        index += 1;
+      }
+      continue;
+    }
+    if (character === "\\") {
+      out.push(" ");
+      index += 1;
+      if (index < text.length) {
+        out.push(" ");
+        index += 1;
+      }
+      continue;
+    }
+    out.push(character);
+    index += 1;
+  }
+  return out.join("");
+}
 
 /** Whether a node of this type takes part in schema v2's checks (design systems and components). */
 export const isV2Type = (type) => V2_TYPE_SET.has(type);
@@ -69,6 +119,8 @@ export function cssValueProblem(value) {
   if (/[\u0000-\u001f\u007f\\;{}<>@!]/u.test(value)) return "it holds a character a CSS value cannot";
   if (value.includes("/*") || value.includes("*/")) return "it holds a comment";
   if (LOADING_FUNCTION.test(value)) return "it loads or reads something from outside the value";
+  // Whatever the renderer's stylesheet check refuses, so one value never blanks the whole sheet.
+  if (/javascript:|vbscript:|behavior\s*:|-moz-binding/iu.test(value)) return "it holds a scheme or binding a stylesheet never may";
   let depth = 0;
   let quote = null;
   for (const character of value) {
@@ -95,11 +147,11 @@ export function cssValueProblem(value) {
 export function tokenReferences(value) {
   if (typeof value !== "string") return [];
   const names = [];
-  // A string's text is not a reference (a font named 'var(--x)'); var is matched in any case, as
-  // CSS matches it, and only as a whole word (not myvar()).
-  const outsideStrings = value.replace(/"[^"]*"|'[^']*'/gu, '""');
+  // Only code is read: a string's or a comment's text is not a reference (a font named
+  // 'var(--x)', a comment with an apostrophe); var is matched in any case, as CSS matches it,
+  // and only as a whole word (not myvar()).
   const pattern = /(?<![\w-])var\(\s*(--[A-Za-z0-9_-]{1,127})\s*[,)]/giu;
-  for (const match of outsideStrings.matchAll(pattern)) names.push(match[1]);
+  for (const match of cssCode(value).matchAll(pattern)) names.push(match[1]);
   return names;
 }
 
@@ -119,7 +171,7 @@ export function designSystemProblem(props) {
   }
   const collections = new Map();
   for (const collection of props.collections) {
-    if (!isRecord(collection) || typeof collection.id !== "string" || !ID.test(collection.id)) return "a collection needs an id of letters, digits and . _ : -";
+    if (!isRecord(collection) || typeof collection.id !== "string" || !MODE_ID.test(collection.id)) return "a collection needs an id of letters, digits and . _ -";
     if (collections.has(collection.id)) return `collection ${shown(collection.id)} is listed twice`;
     if (!text(collection.name, 200)) return `collection ${shown(collection.id)} needs a name`;
     if (!Array.isArray(collection.modes) || collection.modes.length === 0 || collection.modes.length > SCHEMA_V2_LIMITS.modesPerCollection) {
@@ -127,7 +179,7 @@ export function designSystemProblem(props) {
     }
     const modes = new Set();
     for (const mode of collection.modes) {
-      if (!isRecord(mode) || typeof mode.id !== "string" || !ID.test(mode.id)) return `a mode of ${shown(collection.id)} needs an id of letters, digits and . _ : -`;
+      if (!isRecord(mode) || typeof mode.id !== "string" || !MODE_ID.test(mode.id)) return `a mode of ${shown(collection.id)} needs an id of letters, digits and . _ -`;
       if (modes.has(mode.id)) return `mode ${shown(mode.id)} is listed twice in ${shown(collection.id)}`;
       if (!text(mode.name, 200)) return `mode ${shown(mode.id)} needs a name`;
       modes.add(mode.id);
@@ -137,6 +189,7 @@ export function designSystemProblem(props) {
   }
   if (!Array.isArray(props.tokens) || props.tokens.length > SCHEMA_V2_LIMITS.tokens) return `it may hold at most ${SCHEMA_V2_LIMITS.tokens} tokens`;
   const tokens = new Map();
+  let textSize = 0;
   for (const token of props.tokens) {
     if (!isRecord(token) || typeof token.name !== "string" || !TOKEN_NAME.test(token.name)) return "a token needs a CSS custom property name such as --brand-500";
     if (tokens.has(token.name)) return `token ${token.name} is defined twice`;
@@ -148,7 +201,9 @@ export function designSystemProblem(props) {
       if (!modes.has(mode)) return `token ${token.name} has a value for ${shown(mode)}, which is not a mode of its collection`;
       const problem = cssValueProblem(value);
       if (problem) return `token ${token.name} has a value that is not one CSS value: ${problem}`;
+      textSize += token.name.length + value.length + 8;
     }
+    if (textSize > MAX_TOKEN_TEXT) return `the tokens would compile to more than ${MAX_TOKEN_TEXT / 1024} KiB of CSS`;
     if (token.description !== undefined && (typeof token.description !== "string" || token.description.length > SCHEMA_V2_LIMITS.textLength)) {
       return `token ${token.name}'s description is too long`;
     }
