@@ -1,6 +1,6 @@
 // Components, instances and detaching (ADR-0005): the history operations the editor sends as one
 // transaction each. Pure functions over the document; the canvas draws the result.
-import { expandInstance } from "../../renderer/src/index.mjs";
+import { expandInstance, styleDeclarationProblem } from "../../renderer/src/index.mjs";
 
 const siblingsOf = (document, node) => (node.parentId === null ? document.rootIds : document.nodes[node.parentId].children);
 const ancestors = function* (document, node) {
@@ -118,4 +118,117 @@ export function detachInstance(document, instanceId, mint) {
   const rootId = add({ ...view, type: "frame" }, instance.parentId);
   const index = siblingsOf(document, instance).indexOf(instanceId);
   return { rootId, operations: [{ type: "remove-node", nodeId: instanceId }, { type: "restore-subtree", rootId, parentId: instance.parentId, index, nodes }] };
+}
+
+const samePath = (a, b) => Array.isArray(a) && a.length === b.length && a.every((id, index) => id === b[index]);
+
+/** The layers an instance draws, as targets with a label and depth, for picking one by keyboard. */
+export function instanceLayers(document, instanceId) {
+  const view = expandInstance(document, instanceId);
+  if (view === null) return [];
+  // Its root first: the component's root node, drawn as the instance itself.
+  const componentId = document.nodes[instanceId].props.componentId;
+  const rootNode = document.nodes[componentId];
+  const hidden = (props) => props.attributes?.hidden !== undefined;
+  const layers = [{ instanceId, path: [], nodeId: componentId, label: `${rootNode?.props?.name ?? "Component"} (its root)`, depth: 0, text: typeof view.props.text === "string" ? view.props.text : null, hidden: hidden(view.props) }];
+  const walk = (entry, depth) => {
+    for (const child of entry.children) {
+      const node = document.nodes[child.id];
+      const label = node?.props?.name ?? (typeof child.props.text === "string" && child.props.text !== "" ? child.props.text : child.props.tag ?? child.type);
+      layers.push({ instanceId, path: child.chain.slice(1), nodeId: child.id, label: String(label).slice(0, 60), depth, text: typeof child.props.text === "string" ? child.props.text : null, hidden: hidden(child.props) });
+      walk(child, depth + 1);
+    }
+  };
+  walk(view, 1);
+  return layers;
+}
+
+/** The instance's own override for one of its layers, or null. */
+export function overrideFor(document, instanceId, { path, nodeId }) {
+  const overrides = document.nodes[instanceId]?.props?.overrides ?? [];
+  return overrides.find((override) => override.nodeId === nodeId && samePath(override.path, path)) ?? null;
+}
+
+// Declarations split at the semicolons that end them: not one inside a string or brackets.
+function declarationsOf(text) {
+  const parts = [];
+  let current = "";
+  let quote = null;
+  let depth = 0;
+  for (const character of String(text)) {
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === "(") depth += 1;
+    else if (character === ")") depth = Math.max(0, depth - 1);
+    else if (character === ";" && depth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim()).filter((part) => part !== "");
+}
+
+/**
+ * A style written as CSS declarations ("color: red; padding: 4px; --brand: blue") as a record. A
+ * declaration the canvas would not draw is refused, saying why, so nothing is dropped silently;
+ * one that `kept` already holds with that value stands as it is (an agent's, say).
+ */
+export function parseDeclarations(text, kept = {}) {
+  const style = {};
+  for (const declaration of declarationsOf(text)) {
+    const colon = declaration.indexOf(":");
+    const raw = colon === -1 ? "" : declaration.slice(0, colon).trim();
+    const name = raw.startsWith("--") ? raw : raw.toLowerCase();
+    const value = colon === -1 ? "" : declaration.slice(colon + 1).trim();
+    if (colon === -1 || name === "" || value === "") throw new Error(`"${declaration.slice(0, 60)}" is not a CSS declaration`);
+    if (kept[name] !== value) {
+      const problem = styleDeclarationProblem(name, value);
+      if (problem !== null) throw new Error(`"${declaration.slice(0, 60)}": ${problem}`);
+    }
+    style[name] = value;
+  }
+  return style;
+}
+
+/**
+ * Set what an instance shows on one of its layers: text, a style (merged with what was set
+ * before; a property set to "" is taken off), or shown. One set-props on the instance; the
+ * component is untouched. Structure inside an instance stays locked: nothing is added or removed.
+ */
+export function setInstanceOverride(document, instanceId, { path, nodeId }, change) {
+  const instance = document.nodes[instanceId];
+  if (!instance || instance.type !== "component-instance") throw new Error("Select an instance.");
+  const overrides = Array.isArray(instance.props.overrides) ? instance.props.overrides : [];
+  const existing = overrides.find((override) => override.nodeId === nodeId && samePath(override.path, path));
+  const set = { ...(existing?.set ?? {}) };
+  if (change.text !== undefined) {
+    if (change.text === null) delete set.text;
+    else set.text = String(change.text);
+  }
+  if (change.style !== undefined) {
+    const style = { ...(set.style ?? {}), ...change.style };
+    for (const [name, value] of Object.entries(style)) if (value === "") delete style[name];
+    if (Object.keys(style).length === 0) delete set.style;
+    else set.style = style;
+  }
+  if (change.visible !== undefined) {
+    if (change.visible === null) delete set.visible;
+    else set.visible = change.visible === true;
+  }
+  const rest = overrides.filter((override) => override !== existing);
+  const next = Object.keys(set).length === 0 ? rest : [...rest, { path: [...path], nodeId, set }];
+  return [{ type: "set-props", nodeId: instanceId, set: { overrides: next } }];
+}
+
+/** Take off an instance's overrides: of one layer, or (with no target) all; property values stay. */
+export function resetInstance(document, instanceId, target = null) {
+  const instance = document.nodes[instanceId];
+  if (!instance || instance.type !== "component-instance") throw new Error("Select an instance.");
+  const overrides = Array.isArray(instance.props.overrides) ? instance.props.overrides : [];
+  const next = target === null ? [] : overrides.filter((override) => !(override.nodeId === target.nodeId && samePath(override.path, target.path)));
+  return [{ type: "set-props", nodeId: instanceId, set: { overrides: next } }];
 }

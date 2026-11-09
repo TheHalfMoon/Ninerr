@@ -11,7 +11,7 @@ import { HostError, connect, forgetToken } from "/packages/studio-web/src/client
 import { UI_COMPONENT_SOURCE_GROUPS, searchUiComponentSources } from "/packages/component-sources/src/catalog.mjs";
 import { TOKEN_TYPES } from "/packages/document-model/src/schema-v2.mjs";
 import { addMode, addToken, createDesignSystem, deleteToken, designSystemOf, renameToken, setToken, tokenUses } from "/packages/document-model/src/tokens.mjs";
-import { componentsOf, createComponent, detachInstance, insertInstance } from "/packages/canvas/src/components.mjs";
+import { componentsOf, createComponent, detachInstance, insertInstance, instanceLayers, overrideFor, parseDeclarations, resetInstance, setInstanceOverride } from "/packages/canvas/src/components.mjs";
 
 // While the Tokens dialog is open, how it shows the document again after any change (an Undo, an
 // agent's edit); it answers false once the dialog is gone.
@@ -752,7 +752,63 @@ function openComponentsDialog() {
           }
           run(() => detached.operations, "Detach instance", detached.rootId);
         });
-        parts.push(el("div", { class: "actions" }, detach));
+        // A layer inside it: picked on the canvas by double-click, or here; changed for this
+        // instance alone, as its override. Its structure stays the component's.
+        const layers = instanceLayers(document, selected.id);
+        const current = canvas.target !== null && canvas.target.instanceId === selected.id ? canvas.target : null;
+        const keyOf = (target) => JSON.stringify([target.path, target.nodeId]);
+        const pick = el("select", { id: "instance-layer", "aria-label": "Layer inside this instance" },
+          el("option", { value: "" }, "Choose a layer inside it"),
+          ...layers.map((layer) => el("option", { value: keyOf(layer), selected: current !== null && keyOf(current) === keyOf(layer) }, `${"  ".repeat(layer.depth)}${layer.label}`)));
+        pick.addEventListener("change", () => {
+          if (pick.value === "") canvas.setTarget(null);
+          else {
+            const [path, nodeId] = JSON.parse(pick.value);
+            canvas.setTarget({ instanceId: selected.id, path, nodeId });
+          }
+        });
+        parts.push(el("h3", {}, "A layer inside this instance"), el("label", { for: "instance-layer" }, "Layer", pick));
+        if (current !== null) {
+          const target = { path: current.path, nodeId: current.nodeId };
+          const layer = layers.find((entry) => keyOf(entry) === keyOf(current));
+          const set = overrideFor(document, selected.id, target)?.set ?? {};
+          const said = Object.entries(set.style ?? {}).map(([name, value]) => `${name}: ${value};`).join(" ");
+          const fields = [];
+          if (layer?.text !== null && layer?.text !== undefined) {
+            const text = el("input", { id: "instance-text", value: layer.text, "aria-label": "Its text in this instance" });
+            text.addEventListener("change", () => run((doc) => setInstanceOverride(doc, selected.id, target, { text: text.value }), "Change a layer's text in the instance"));
+            fields.push(el("label", { for: "instance-text" }, "Text", text));
+          }
+          const style = el("textarea", { id: "instance-style", rows: 2, spellcheck: "false", "aria-label": "Its style in this instance, as CSS declarations" }, said);
+          style.addEventListener("change", () => run((doc) => {
+            const wanted = parseDeclarations(style.value, overrideFor(doc, selected.id, target)?.set?.style ?? {});
+            // Each property set before and now gone is taken off.
+            const cleared = Object.fromEntries(Object.keys(overrideFor(doc, selected.id, target)?.set?.style ?? {}).filter((name) => !Object.hasOwn(wanted, name)).map((name) => [name, ""]));
+            return setInstanceOverride(doc, selected.id, target, { style: { ...cleared, ...wanted } });
+          }, "Change a layer's style in the instance"));
+          // As the instance draws it now (a variant or a property may have hidden it); the person's
+          // choice is the last word, so it can show what a variant hid.
+          const shown = el("input", { id: "instance-shown", type: "checkbox", checked: layer ? !layer.hidden : set.visible !== false });
+          shown.addEventListener("change", () => run((doc) => setInstanceOverride(doc, selected.id, target, { visible: shown.checked }), shown.checked ? "Show a layer in the instance" : "Hide a layer in the instance"));
+          const reset = el("button", { type: "button", id: "instance-reset-layer", disabled: Object.keys(set).length === 0 }, "Reset this layer");
+          reset.addEventListener("click", () => run((doc) => resetInstance(doc, selected.id, target), "Reset a layer in the instance"));
+          const main = el("button", { type: "button", id: "instance-edit-main" }, "Edit main component");
+          // The component's own layer, selected as a layer: what changes there reaches every instance.
+          main.addEventListener("click", () => {
+            canvas.setTarget(null);
+            selectLayers([current.nodeId]);
+            close();
+            setStatus("Editing the main component: changes reach every instance.");
+          });
+          fields.push(
+            el("label", { for: "instance-style" }, "Style (for example color: red; padding: 4px)", style),
+            el("label", { for: "instance-shown" }, shown, " Shown in this instance"),
+            el("div", { class: "actions" }, reset, main));
+          parts.push(...fields);
+        }
+        const resetAll = el("button", { type: "button", id: "instance-reset", disabled: (selected.props.overrides ?? []).length === 0 }, "Reset all its overrides");
+        resetAll.addEventListener("click", () => run((doc) => resetInstance(doc, selected.id), "Reset the instance's overrides"));
+        parts.push(el("div", { class: "actions" }, detach, resetAll));
       } else if (selected?.type === "component-definition") {
         parts.push(el("h3", {}, `Component ${selected.props.name ?? "Unnamed component"}`));
         const layers = [];
@@ -2612,6 +2668,11 @@ function onGlobalKey(event) {
 async function main() {
   canvas = await mountCanvas($("canvas"), {
     onCommit: (operations, intent, meta) => commit(operations, intent, meta?.revision),
+    // A layer inside the selected instance, picked by double-click: the Components dialog edits it.
+    onTarget: (target) => {
+      setStatus(target !== null ? "Editing a layer inside the instance: open Components to change it for this instance." : "");
+      if (redrawComponents !== null && redrawComponents() === false) redrawComponents = null;
+    },
     onSelect: (ids) => {
       // The canvas reports the selection after every update; redraw only when it changed,
       // and not while a change is being applied (applyChange updates the panels itself).

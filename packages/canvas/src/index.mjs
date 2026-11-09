@@ -174,7 +174,7 @@ const STAGE_STYLE = "position:relative;overflow:hidden;width:100%;height:100%;ou
  * document that has since changed is refused rather than misapplied, and later calls
  * `update(document, affectedNodeIds)`. `onSelect(ids)` reports selection changes.
  */
-export async function mountCanvas(container, { onCommit = () => {}, onSelect = () => {}, nudge = 1 } = {}) {
+export async function mountCanvas(container, { onCommit = () => {}, onSelect = () => {}, onTarget = () => {}, nudge = 1 } = {}) {
   const owner = container.ownerDocument;
   const stage = owner.createElement("div");
   stage.setAttribute("style", STAGE_STYLE);
@@ -217,26 +217,41 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     const rect = element.getBoundingClientRect();
     return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
   };
-  const hitTest = (screenPoint) => {
+  const elementAt = (screenPoint) => {
     const stageRect = stage.getBoundingClientRect();
     const point = screenToWorld(viewport, { x: screenPoint.x - stageRect.left, y: screenPoint.y - stageRect.top });
     // Rendered content is inert (no focus or input inside the canvas), and inert content is
     // invisible to elementFromPoint, so it is lifted for this one synchronous query.
     const root = frameDocument.querySelector("[data-ninerr-root]");
     root.inert = false;
-    let element;
     try {
-      element = frameDocument.elementFromPoint(point.x, point.y);
+      return frameDocument.elementFromPoint(point.x, point.y);
     } finally {
       root.inert = true;
     }
+  };
+  const hitTest = (screenPoint) => {
+    const element = elementAt(screenPoint);
     const id = renderer.nodeIdFor(element);
     return id !== null && Object.hasOwn(document?.nodes ?? {}, id) ? id : null;
   };
+  // A layer inside the selected instance, picked by double-click (ADR-0005): edited as the
+  // instance's override, never as a layer of its own.
+  let target = null;
+  const setTarget = (next) => {
+    target = next;
+    drawSelection();
+    onTarget(target === null ? null : { ...target, path: [...target.path] });
+  };
   const setSelection = (next) => {
     selection = document ? normalizeSelection(document, next) : [];
+    // The target goes with its instance's selection, and with its layer: one the instance no
+    // longer draws (an Undo, an agent's change to the component) is no target.
+    const lost = target !== null && (!(selection.length === 1 && selection[0] === target.instanceId) || renderer.elementForTarget(target) === null);
+    if (lost) target = null;
     drawSelection();
     onSelect([...selection]);
+    if (lost) onTarget(null);
   };
   function drawSelection() {
     overlay.replaceChildren();
@@ -255,6 +270,18 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
         box.appendChild(handle);
       }
       overlay.appendChild(box);
+    }
+    if (target !== null) {
+      const element = renderer.elementForTarget(target);
+      const rect = element ? worldRect(element) : null;
+      // A layer hidden in this instance has no box to outline.
+      if (element && rect.width > 0 && rect.height > 0) {
+        const topLeft = worldToScreen(viewport, rect);
+        const box = owner.createElement("div");
+        box.dataset.ninerrTarget = target.nodeId;
+        box.setAttribute("style", `position:absolute;left:${topLeft.x}px;top:${topLeft.y}px;width:${rect.width * viewport.zoom}px;height:${rect.height * viewport.zoom}px;outline:2px dashed #6d4aff;outline-offset:1px;`);
+        overlay.appendChild(box);
+      }
     }
   }
   // The size CSS width/height must hold for `element` to keep its current box, following its
@@ -318,6 +345,15 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       // Capture on the stage, which outlives every move: the overlay is redrawn as it goes.
       stage.setPointerCapture?.(event.pointerId);
     }
+  });
+  // Double-click inside an instance picks the layer drawn there (the instance stays selected).
+  // On the stage: a press captures the pointer there, so the click events arrive there.
+  stage.addEventListener("dblclick", (event) => {
+    if (document === null) return;
+    const picked = renderer.instanceTargetFor(elementAt({ x: event.clientX, y: event.clientY }));
+    if (picked === null || !Object.hasOwn(document.nodes, picked.instanceId)) return;
+    if (!(selection.length === 1 && selection[0] === picked.instanceId)) setSelection([picked.instanceId]);
+    setTarget(picked);
   });
   overlay.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || event.target?.dataset?.ninerrHandle !== "resize" || selection.length !== 1 || held !== null) return;
@@ -482,6 +518,11 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     setDocument(next) {
       releaseHeld();
       document = next;
+      // Another document (a project opened): no layer of the last one is a target.
+      if (target !== null) {
+        target = null;
+        onTarget(null);
+      }
       renderer.setTokens(compileTokens(next));
       renderer.render(next);
       sizeFrame();
@@ -501,6 +542,15 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     },
     get selection() {
       return [...selection];
+    },
+    /** The layer inside the selected instance being edited, or null. */
+    get target() {
+      return target === null ? null : { ...target, path: [...target.path] };
+    },
+    /** Pick (or with null, drop) a layer inside the selected instance. */
+    setTarget(next) {
+      if (next !== null && !(selection.length === 1 && selection[0] === next.instanceId)) return;
+      setTarget(next === null ? null : { instanceId: next.instanceId, path: [...next.path], nodeId: next.nodeId });
     },
     select(ids) {
       setSelection(ids);
