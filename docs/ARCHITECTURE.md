@@ -4,7 +4,7 @@ This document defines Ninerr's architectural boundaries.
 
 ## Packages today
 
-The repository has 26 packages under `packages/`: `agent-events`, `agent-runtime`, `agent-supervisor`, `agent-workspace`, `architecture`, `canvas`, `code-ir`, `collaboration`, `decision-assurance`, `decision-router`, `delivery-governance`, `design-assurance`, `design-components`, `design-method`, `desktop`, `document-model`, `history`, `import-stack`, `intake`, `mcp-protocol`, `network-policy`, `persistence`, `renderer`, `studio-host`, `studio-web`, `visual-git`. `README.md` describes the main subsystems, and the architecture catalog in `packages/architecture` records every one.
+The repository has 27 packages under `packages/`: `agent-events`, `agent-runtime`, `agent-supervisor`, `agent-workspace`, `architecture`, `canvas`, `code-ir`, `collaboration`, `component-sources`, `decision-assurance`, `decision-router`, `delivery-governance`, `design-assurance`, `design-components`, `design-method`, `desktop`, `document-model`, `history`, `import-stack`, `intake`, `mcp-protocol`, `network-policy`, `persistence`, `renderer`, `studio-host`, `studio-web`, `visual-git`. `README.md` describes the main subsystems, and the architecture catalog in `packages/architecture` records every one.
 
 ## Target layout
 

@@ -35,6 +35,7 @@ export const IMPLEMENTED_PACKAGES = [
   "@ninerr/renderer",
   "@ninerr/canvas",
   "@ninerr/desktop",
+  "@ninerr/component-sources",
 ] as const;
 
 export function sha256Text(value: string): string {

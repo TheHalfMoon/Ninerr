@@ -8,7 +8,7 @@ import { mountCanvas, insertNode, removeNodes, setStyle, setText } from "/packag
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
 import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
-import { UI_COMPONENT_SOURCE_GROUPS, searchUiComponentSources } from "/packages/studio-web/src/ui-sources.mjs";
+import { UI_COMPONENT_SOURCE_GROUPS, searchUiComponentSources } from "/packages/component-sources/src/catalog.mjs";
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, attributes = {}, ...children) => {

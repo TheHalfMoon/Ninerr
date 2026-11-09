@@ -24,7 +24,7 @@ import { NINERR_FUSES, writeFuses } from "./desktop/fuses.mjs";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const BUNDLE_ID = "io.github.thehalfmoon.ninerr";
 // The editor's browser-side packages, which the host serves as static files.
-const SERVED = ["studio-web", "document-model", "history", "renderer", "canvas"];
+const SERVED = ["studio-web", "document-model", "history", "renderer", "canvas", "component-sources"];
 
 const log = (line) => process.stdout.write(`${line}\n`);
 const run = (command, commandArgs, options = {}) => {

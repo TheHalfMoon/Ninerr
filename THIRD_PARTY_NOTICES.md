@@ -162,7 +162,7 @@ These independently licensed projects were studied only. No code from them is in
 
 ## Component sources named in the editor
 
-The editor's component-source catalog (`packages/studio-web/src/ui-sources.mjs`) names these projects so a person can find them. None of their files are in this repository or in a release. An item a person imports goes into their own project under the item's license, which `docs/UI_COMPONENT_SOURCES.md` records for each source.
+The editor's component-source catalog (`packages/component-sources/src/catalog.mjs`) names these projects so a person can find them. None of their files are in this repository or in a release. An item a person imports goes into their own project under the item's license, which `docs/UI_COMPONENT_SOURCES.md` records for each source.
 
 - `mui/base-ui` (MIT, Copyright (c) 2019 Material-UI SAS)
 - `radix-ui/primitives` (MIT, Copyright (c) 2022 WorkOS)

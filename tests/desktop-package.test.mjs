@@ -76,7 +76,7 @@ test("the runtime's notice is classified, and an unreviewed copyleft component i
 
 test("the package holds the packages the shell and the editor reach, and no others", () => {
   const packages = reachablePackages([join(ROOT, "packages", "desktop", "src", "bootstrap.mjs")]);
-  for (const name of ["desktop", "studio-host", "persistence", "history", "document-model", "collaboration", "mcp-protocol", "import-stack", "intake", "code-ir", "studio-web", "canvas", "renderer"]) {
+  for (const name of ["desktop", "studio-host", "persistence", "history", "document-model", "collaboration", "mcp-protocol", "import-stack", "intake", "code-ir", "studio-web", "canvas", "renderer", "component-sources"]) {
     assert.ok(packages.includes(name), `${name} is packaged`);
   }
   for (const name of ["agent-supervisor", "visual-git", "decision-router", "architecture"]) assert.ok(!packages.includes(name), `${name} is not`);

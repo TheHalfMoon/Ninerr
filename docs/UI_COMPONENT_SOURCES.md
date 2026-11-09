@@ -21,7 +21,7 @@ Status (2026-11-09): **Source catalog and in-editor offline discovery implemente
 | Gallery | Aceternity UI | Landing-page motion and visual layouts |
 | Marketplace | 21st.dev | Per-author React components, themes and templates |
 
-The live curated metadata lives in `packages/studio-web/src/ui-sources.mjs` and is accessible from the **Component sources** button in the Ninerr editor. Search and category filters run entirely in the browser with **no network access**. Selecting an entry shows its source, intent, usage, license review gate and a manual setup example. No components are downloaded, installed, copied, imported or executed by the catalog.
+The live curated metadata lives in `packages/component-sources/src/catalog.mjs` and is accessible from the **Component sources** button in the Ninerr editor. Search and category filters run entirely in the browser with **no network access**. Selecting an entry shows its source, intent, usage, license review gate and a manual setup example. No components are downloaded, installed, copied, imported or executed by the catalog.
 
 ### Licenses and what Ninerr may import
 
