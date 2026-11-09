@@ -9,6 +9,7 @@ import { AgentRegistry } from "./agents.ts";
 import { writeTrustedFile } from "./trusted-file.ts";
 import { StudioError } from "./errors.ts";
 import { exportJsx, importJsx } from "./code.ts";
+import { MAX_COMPONENT_REQUEST_BYTES, applyComponentImport, planComponentImport, publicPlan } from "./component-import.ts";
 import { CodebaseLinks, assertFolder, bringIn, keptFields, planWriteBack, removeTemporary, resolveWithFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 import { ImportDesk, MAX_IMPORT_HTML_BYTES } from "./imports.ts";
 import { ConfirmationBroker, handleMcpMessage } from "./mcp.ts";
@@ -238,6 +239,8 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     "POST /api/codebase/preview",
     "POST /api/codebase/write",
     "POST /api/codebase/resolve",
+    "POST /api/components/plan",
+    "POST /api/components/apply",
     "POST /api/references/load",
   ]);
   const assertMadeForOpenProject = (request: IncomingMessage): void => {
@@ -403,6 +406,16 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       }, keptFields(body?.keep));
       return { ...event, file: plan.file, written: plan.changes.length, matched: plan.matched.length };
     },
+    // A registry item the person chose, into the connected codebase (#405): a plan first, then
+    // new files only, exactly as planned. Only the person, through the editor's session.
+    "POST /api/components/plan": (body) => {
+      const current = requireSession();
+      return publicPlan(planComponentImport(connectedFolder(current.name), body));
+    },
+    "POST /api/components/apply": (body) => {
+      const current = requireSession();
+      return applyComponentImport(connectedFolder(current.name), body);
+    },
     "POST /api/import/discard": (body) => {
       imports.discard(body?.proposalId);
       return { discarded: true };
@@ -477,7 +490,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     if (route === undefined) throw new StudioError(404, "not-found", "not found");
     // An HTML import may be larger than other requests (the import stack's own limit).
     // JSON escaping can make HTML up to six times larger (control characters as \uXXXX).
-    let body = request.method === "POST" ? await readJson(request, url.pathname === "/api/import" ? MAX_IMPORT_HTML_BYTES * 6 + 64 * 1024 : MAX_BODY_BYTES) : undefined;
+    let body = request.method === "POST" ? await readJson(request, url.pathname === "/api/import" ? MAX_IMPORT_HTML_BYTES * 6 + 64 * 1024 : url.pathname.startsWith("/api/components/") ? MAX_COMPONENT_REQUEST_BYTES : MAX_BODY_BYTES) : undefined;
     if (reference) body = { id: referenceIdOf(url.pathname) };
     else if (key === "GET /api/references") body = referenceSearchOf(url.searchParams);
     if (PROJECT_SCOPED.has(key)) assertMadeForOpenProject(request);

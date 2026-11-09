@@ -579,9 +579,128 @@ function openComponentSourcesDialog() {
       el("label", { for: "component-source-query" }, "Find source", query),
       el("label", { for: "component-source-group" }, "Category", group),
       count, results, detail,
+      componentImportSection(close),
       el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close")),
     ];
   });
+}
+
+// A registry item the person chose, into the connected codebase (#405). The item is a file they
+// pick or text they paste: Ninerr fetches nothing. The host plans the import, the person reads
+// every file it would create, and only then are new files created; none is ever replaced.
+function componentImportSection(close) {
+  const section = el("section", { id: "component-import", "aria-labelledby": "component-import-title" },
+    el("h3", { id: "component-import-title" }, "Import a registry item"));
+  if (state.client === null || state.project === null) {
+    section.append(el("p", {}, "Open a project and connect its codebase in Code to import an item."));
+    return section;
+  }
+  const project = state.project;
+  const file = el("input", { id: "component-item-file", type: "file", accept: ".json,application/json" });
+  const text = el("textarea", { id: "component-item-text", rows: 4, spellcheck: "false", placeholder: "Or paste the item's JSON" });
+  const url = el("input", { id: "component-item-url", type: "url", maxlength: "2048", autocomplete: "off", placeholder: "https://… (where the item came from, optional)" });
+  const free = el("input", { id: "component-item-free", type: "checkbox" });
+  const review = el("button", { type: "button", id: "component-import-review" }, "Review import");
+  const error = el("p", { id: "component-import-error", role: "alert" });
+  const planView = el("div", { id: "component-import-plan", "aria-live": "polite" });
+  let fileName = null;
+  file.addEventListener("change", async () => {
+    const chosen = file.files?.[0];
+    if (!chosen) return;
+    fileName = chosen.name;
+    text.value = await chosen.text();
+  });
+  const request = () => ({
+    item: text.value,
+    origin: url.value.trim() !== "" ? { url: url.value.trim() } : fileName !== null ? { fileName } : undefined,
+    freeItemConfirmed: free.checked,
+  });
+  const list = (id, label, items) => items.length === 0 ? [] : [el("p", {}, label), el("ul", { id }, items.map((entry) => el("li", {}, entry)))];
+  const bringIn = (written) => el("ul", { class: "project-list", id: "component-import-components", "aria-label": "Components the import created" }, written.components.map(({ file: path, component }) => {
+    const bring = el("button", { type: "button", "aria-label": `Bring in ${component} from ${path}` }, "Bring in");
+    bring.addEventListener("click", () => {
+      bring.disabled = true;
+      enqueue(async () => {
+        try {
+          const result = await state.client.post("/api/codebase/import", { file: path, component }, { project });
+          close();
+          applyChange(result);
+          selectLayers([result.frameId]);
+          canvas.fit();
+          renderToolbar();
+          setStatus(`${result.intent}: ${result.layers} layers added.${styleLeftOutNote(result)}${styleOutOfOrderNote(result)}`);
+        } catch (failure) {
+          bring.disabled = false;
+          if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
+        }
+      });
+    });
+    return el("li", { class: "codebase-row" }, el("span", {}, el("strong", {}, component), ` ${path}`), bring);
+  }));
+  const show = (plan, body) => {
+    const install = plan.dependencies.missing.map(({ name, range }) => (range === null ? name : `${name}@${range}`));
+    const create = el("button", { type: "button", class: "primary", id: "component-import-apply", disabled: !plan.appliable },
+      `Create ${plan.files.filter((entry) => entry.status === "new").length} file${plan.files.filter((entry) => entry.status === "new").length === 1 ? "" : "s"}`);
+    create.addEventListener("click", () => {
+      create.disabled = true;
+      error.textContent = "";
+      enqueue(async () => {
+        try {
+          const written = await state.client.post("/api/components/apply", { ...body, token: plan.token }, { project });
+          planView.replaceChildren(
+            el("p", { id: "component-import-done" }, `Created ${written.written.length} file${written.written.length === 1 ? "" : "s"}: ${written.written.join(", ")}. Undo does not remove files; delete them yourself if you change your mind.`),
+            ...(written.components.length === 0 ? [] : [bringIn(written)]),
+          );
+          setStatus(`Imported ${plan.item.name} into the codebase.`);
+        } catch (failure) {
+          create.disabled = false;
+          if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
+        }
+      });
+    });
+    planView.replaceChildren(
+      el("h4", {}, plan.item.title ?? plan.item.name),
+      el("p", {}, `From ${plan.origin}.`),
+      el("p", { id: "component-import-decision" }, plan.decision.reason),
+      ...(plan.decision.attribution ? [el("p", {}, `Your project must show a visible link to ${plan.decision.attribution}.`)] : []),
+      el("p", {}, `Primitive family: ${plan.primitives.family}. Project: ${plan.project.family}. Folders from ${plan.project.layoutFrom}.`),
+      el("ul", { id: "component-import-files", "aria-label": "Files the import would create" }, plan.files.map((entry) => el("li", { "data-status": entry.status }, `${entry.path} (${entry.status === "new" ? "new" : entry.status === "same" ? "already there" : "exists with other content"})`))),
+      ...list("component-import-dependencies", "Packages to add with your package manager (Ninerr installs nothing):", install),
+      ...list("component-import-registry", "Other items it needs, to import the same way:", [...plan.registryDependencies]),
+      ...list("component-import-tokens", "Design tokens it defines (not written by this import):", [...new Set([...plan.tokens.theme, ...plan.tokens.light, ...plan.tokens.dark])].map((name) => `--${name}`)),
+      ...list("component-import-blockers", "This import cannot go ahead:", plan.blockers),
+      el("div", { class: "actions" }, create),
+    );
+  };
+  review.addEventListener("click", () => {
+    error.textContent = "";
+    planView.replaceChildren();
+    if (text.value.trim() === "") {
+      error.textContent = "Choose an item file or paste its JSON first.";
+      return;
+    }
+    review.disabled = true;
+    const body = request();
+    enqueue(async () => {
+      try {
+        show(await state.client.post("/api/components/plan", body, { project }), body);
+      } catch (failure) {
+        if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
+      } finally {
+        review.disabled = false;
+      }
+    });
+  });
+  section.append(
+    el("p", {}, "Choose a registry item (shadcn registry JSON) you saved from a source whose license allows it. Ninerr shows every file it would create in your connected codebase before writing, and never replaces a file."),
+    el("label", { for: "component-item-file" }, "Item file", file),
+    el("label", { for: "component-item-text" }, "Item JSON", text),
+    el("label", { for: "component-item-url" }, "Came from", url),
+    el("label", { for: "component-item-free" }, free, " It is a free item (for sources that license only their free items)"),
+    el("div", { class: "actions" }, review),
+    error, planView,
+  );
+  return section;
 }
 
 // ---------- importing ----------
