@@ -56,7 +56,9 @@ test("review a registry item, create its files and bring its component onto the 
 
     await page.locator("#component-import-apply").click();
     await page.locator("#component-import-done").waitFor();
-    assert.match(readFileSync(join(code, "components", "notice-card.tsx"), "utf8"), /^\/\/ Imported by Ninerr from https:\/\/ui\.shadcn\.com\/r\/styles\/base-nova\/notice-card\.json\.\n\/\/ shadcn\/ui: MIT\.\nexport function NoticeCard\(\)/u);
+    const created = readFileSync(join(code, "components", "notice-card.tsx"), "utf8");
+    assert.match(created, /^\/\/ Imported by Ninerr from https:\/\/ui\.shadcn\.com\/r\/styles\/base-nova\/notice-card\.json\.\n\/\/ shadcn\/ui: MIT\.\n\/\/ Copyright \(c\) 2023 shadcn\n\/\/ Permission is hereby granted/u);
+    assert.ok(created.endsWith(JSON.parse(ITEM).files[0].content), "the item's own text follows the notice unchanged");
 
     await page.locator("#component-import-components button", { hasText: "Bring in" }).click();
     await waitRevision(page, 1);
