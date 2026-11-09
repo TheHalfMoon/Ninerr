@@ -1,6 +1,8 @@
 import {
   cloneDocument,
   changedPartIsValid,
+  isV2Type,
+  schemaVersionFor,
   cloneValidated,
   createNode,
   getNode,
@@ -471,6 +473,12 @@ export function applyTransaction(document, transaction, { enforceBaseRevision = 
     inverseOperations.unshift(inverse);
   }
   working.revision = document.revision + 1;
+  // The schema version follows the nodes (ADR-0003): a change that adds the first schema v2 node
+  // makes the document schema 2, and one that removes the last (an undo, a removed subtree) makes
+  // it schema 1 again. Setting props changes no node's type.
+  if (!propsOnly && (document.schemaVersion !== 1 || !structural || [...changed].some((id) => isV2Type(working.nodes[id]?.type)))) {
+    working.schemaVersion = schemaVersionFor(working.nodes);
+  }
   let normalizedDocument;
   if (propsOnly) {
     normalizedDocument = working;

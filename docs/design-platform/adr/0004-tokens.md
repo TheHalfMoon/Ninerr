@@ -1,6 +1,6 @@
 # ADR-0004: Tokens live on the `design-system` node; a binding is a `var()` value
 
-- **Status:** proposed, 2026-10-18.
+- **Status:** accepted by the founder, 2026-11-09 (`docs/provenance/FOUNDER_DECISION_2026-11-09_SCHEMA_V2.md`); proposed 2026-10-18.
 - **Context:**
   - Tokens are typed CSS custom properties with aliases in one studied product (E-PD-10).
   - Variables have collections and modes in another (E-FG-02).

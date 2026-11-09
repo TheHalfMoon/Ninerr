@@ -223,6 +223,11 @@ const own = (record, key) => (isRecord(record) && Object.hasOwn(record, key) ? r
  * node is not rendered), its namespace, the attributes and styles that survive the
  * allowlists, its text, and how many values were dropped. Pure, so it can be tested in Node.
  */
+/** The roots the canvas draws: a design system holds tokens, and is never drawn (ADR-0004). */
+export function drawnRoots(document) {
+  return document.rootIds.filter((id) => document.nodes[id]?.type !== "design-system");
+}
+
 export function planElement(node) {
   const props = isRecord(node?.props) ? node.props : {};
   const requested = own(props, "tag");
@@ -702,7 +707,7 @@ export function createRenderer(root) {
       for (const sheet of sheets.values()) sheet.remove();
       sheets.clear();
       root.replaceChildren();
-      reconcileChildren(root, document.rootIds, document);
+      reconcileChildren(root, drawnRoots(document), document);
     },
     /**
      * Bring the DOM up to date after a change touching `affectedNodeIds` (as history reports
@@ -737,7 +742,7 @@ export function createRenderer(root) {
         }
       }
       // Roots are reconciled every time; it touches only the top level.
-      reconcileChildren(root, document.rootIds, document);
+      reconcileChildren(root, drawnRoots(document), document);
       for (const id of affectedNodeIds) {
         const node = document.nodes[id];
         const element = elements.get(id);

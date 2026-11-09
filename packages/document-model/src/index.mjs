@@ -1,4 +1,11 @@
-export const DOCUMENT_SCHEMA_VERSION = 1;
+import { isV2Type, schemaVersionFor, v2DocumentProblem, v2NodesProblem } from "./schema-v2.mjs";
+
+export { SCHEMA_V2_LIMITS, TOKEN_NAME, TOKEN_TYPES, V2_NODE_TYPES, PROPERTY_KINDS, PROPERTY_FIELDS, designSystemProblem, definitionProblem, instanceProblem, isV2Type, schemaVersionFor, tokenReferences } from "./schema-v2.mjs";
+
+// The newest schema this build reads and writes. A document is schema 2 exactly when it holds a
+// schema v2 node (ADR-0003): until then it stays schema 1, which older builds open.
+export const DOCUMENT_SCHEMA_VERSION = 2;
+export const SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 
 // Hard limits; documents beyond them are refused rather than processed slowly.
 // maxDocumentBytes matches persistence's object size limit.
@@ -23,6 +30,8 @@ export const NODE_TYPES = Object.freeze([
   "interaction",
   "asset-reference",
   "source-binding",
+  "design-system",
+  "component-instance",
 ]);
 
 const NODE_TYPE_SET = new Set(NODE_TYPES);
@@ -56,7 +65,7 @@ function assertPlainObject(value, label) {
   }
 }
 
-// Document schema 1 has exactly these fields on a document and on a node record.
+// Document schemas 1 and 2 have exactly these fields on a document and on a node record.
 export const DOCUMENT_FIELDS = Object.freeze(["schemaVersion", "id", "name", "revision", "rootIds", "nodes", "metadata"]);
 export const NODE_FIELDS = Object.freeze(["id", "type", "parentId", "children", "props", "metadata"]);
 const DOCUMENT_FIELD_SET = new Set(DOCUMENT_FIELDS);
@@ -354,7 +363,7 @@ export function createDocument({
     : [...rootIds];
 
   const document = {
-    schemaVersion: DOCUMENT_SCHEMA_VERSION,
+    schemaVersion: schemaVersionFor(record),
     id,
     name,
     revision,
@@ -562,6 +571,11 @@ export function validateNodes(document, ids) {
     const problem = jsonDataProblem(node, 2);
     if (problem !== null) throw new DocumentInvariantError(`document ${problem}`);
   }
+  // Schema v2 nodes among them: their props, references and component cycles (ADR-0003).
+  if (document.schemaVersion === 2) {
+    const problem = v2NodesProblem(document, ids);
+    if (problem !== null) throw new DocumentInvariantError(`document ${problem}`);
+  }
 }
 
 /**
@@ -574,6 +588,12 @@ export function validateNodes(document, ids) {
 export function changedPartIsValid(document, ids, moved = [], { added = true } = {}) {
   if (!Number.isSafeInteger(document.revision) || document.revision < 0) return false;
   const nodes = document.nodes;
+  // A change to a schema v2 node, or in a schema 2 document, is checked whole: its references
+  // and component cycles reach beyond the changed records.
+  if (document.schemaVersion !== 1) return false;
+  for (const id of ids) {
+    if (typeof id === "string" && Object.hasOwn(nodes, id) && isV2Type(nodes[id].type)) return false;
+  }
   const own = (id) => (typeof id === "string" && Object.hasOwn(nodes, id) ? nodes[id] : undefined);
   // Only adding nodes can pass the node limit.
   if (added && Object.keys(nodes).length > DOCUMENT_LIMITS.maxNodes) return false;
@@ -680,7 +700,7 @@ export function validateDocument(document) {
   // arrays, undefined, non-finite numbers...), so the field checks below read plain values.
   const dataProblem = jsonDataProblem(document);
   if (dataProblem !== null) throw new DocumentInvariantError(`document ${dataProblem}`);
-  if (document.schemaVersion !== DOCUMENT_SCHEMA_VERSION) {
+  if (!SUPPORTED_SCHEMA_VERSIONS.includes(document.schemaVersion)) {
     throw new DocumentInvariantError(
       `Unsupported document schema version ${String(document.schemaVersion)}`,
     );
@@ -789,6 +809,10 @@ export function validateDocument(document) {
     const more = unreachable.length > 10 ? ` (and ${unreachable.length - 10} more)` : "";
     throw new DocumentInvariantError(`Unreachable nodes: ${listed}${more}`);
   }
+
+  // Schema v2 (ADR-0003): the version the nodes need, and every v2 node and reference.
+  const v2Problem = v2DocumentProblem(document);
+  if (v2Problem !== null) throw new DocumentInvariantError(`document ${v2Problem}`);
 
   return true;
 }

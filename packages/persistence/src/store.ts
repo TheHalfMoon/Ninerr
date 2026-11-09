@@ -1,7 +1,7 @@
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { DOCUMENT_FIELDS, DOCUMENT_SCHEMA_VERSION, NODE_FIELDS, cloneDocument, normalizeDocument, validateDocument } from "@ninerr/document-model";
+import { DOCUMENT_FIELDS, DOCUMENT_SCHEMA_VERSION, NODE_FIELDS, SUPPORTED_SCHEMA_VERSIONS, cloneDocument, normalizeDocument, validateDocument } from "@ninerr/document-model";
 import { applyTransaction, createTransaction, replayTransactions } from "@ninerr/history";
 import { canonicalJson } from "./canonical.ts";
 import { PersistenceCorruptionError, PersistenceLockError, PersistenceValidationError, PersistenceVersionError } from "./errors.ts";
@@ -136,18 +136,19 @@ function documentVersionProblem(record: unknown): string | null {
   if (!isRecord(record)) return null; // validation reports the shape
   const version = record.schemaVersion;
   if (!Number.isSafeInteger(version) || (version as number) < 0) return "has a schemaVersion that is not a non-negative integer";
-  if (version !== DOCUMENT_SCHEMA_VERSION) {
+  // Schema 1 and 2 are both read as they are: v2 only adds node types (ADR-0003).
+  if (!SUPPORTED_SCHEMA_VERSIONS.includes(version as number)) {
     return (version as number) > DOCUMENT_SCHEMA_VERSION
       ? `is document schema ${version}, newer than supported schema ${DOCUMENT_SCHEMA_VERSION}`
       : `is document schema ${version}; no migration from document schema ${version}`;
   }
   const extra = (value: Record<string, unknown>, allowed: ReadonlySet<string>) => Object.keys(value).find((key) => !allowed.has(key));
   const field = extra(record, DOCUMENT_FIELD_SET);
-  if (field !== undefined) return `has field ${JSON.stringify(field).slice(0, 80)}, which document schema 1 does not have`;
+  if (field !== undefined) return `has field ${JSON.stringify(field).slice(0, 80)}, which document schema ${version} does not have`;
   if (!isRecord(record.nodes)) return null;
   for (const node of Object.values(record.nodes)) {
     const nodeField = isRecord(node) ? extra(node, NODE_FIELD_SET) : undefined;
-    if (nodeField !== undefined) return `has node field ${JSON.stringify(nodeField).slice(0, 80)}, which document schema 1 does not have`;
+    if (nodeField !== undefined) return `has node field ${JSON.stringify(nodeField).slice(0, 80)}, which document schema ${version} does not have`;
   }
   return null;
 }

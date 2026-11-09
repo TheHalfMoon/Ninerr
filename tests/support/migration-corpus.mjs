@@ -98,9 +98,9 @@ export const CASES = [
     name: "future-document-schema",
     category: "future",
     from: "v3-basic",
-    what: "a document of document schema 2",
-    change: (dir) => replaceDocumentObject(dir, Buffer.from(canonical({ ...JSON.parse(readFileSync(documentObject(dir).path, "utf8")), schemaVersion: 2 }), "utf8")),
-    expect: { refused: "project-version", pattern: "is document schema 2, newer than supported schema 1" },
+    what: "a document of document schema 3",
+    change: (dir) => replaceDocumentObject(dir, Buffer.from(canonical({ ...JSON.parse(readFileSync(documentObject(dir).path, "utf8")), schemaVersion: 3 }), "utf8")),
+    expect: { refused: "project-version", pattern: "is document schema 3, newer than supported schema 2" },
   },
   {
     name: "future-journal-operation",

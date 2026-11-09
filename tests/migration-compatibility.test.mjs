@@ -237,7 +237,7 @@ function replaceSnapshotDocument(root, edit) {
 
 test("a document object from another document schema is a version error, not corruption", () => {
   const cases = [
-    [(doc) => ({ ...doc, schemaVersion: 2 }), /is document schema 2, newer than supported schema 1/],
+    [(doc) => ({ ...doc, schemaVersion: 3 }), /is document schema 3, newer than supported schema 2/],
     [(doc) => ({ ...doc, schemaVersion: 0 }), /no migration from document schema 0/],
     [(doc) => ({ ...doc, schemaVersion: "1" }), /schemaVersion that is not a non-negative integer/],
     [(doc) => ({ ...doc, schemaVersion: 1.5 }), /schemaVersion that is not a non-negative integer/],
