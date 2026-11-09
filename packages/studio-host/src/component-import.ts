@@ -158,7 +158,7 @@ function aliasRoot(folder: string): string {
 /**
  * The folders an item's files go in. components.json's aliases are read when the connected folder
  * has one: `@/components` is the components folder under wherever `@/` points (tsconfig `paths`,
- * so `src/components` in a src project). An alias of any other form keeps the default folder, and
+ * so the src folder's components folder in a src project). An alias of any other form keeps the default folder, and
  * the plan says so: the plan always shows a path inside the codebase.
  */
 function projectLayout(folder: string): { layout: Record<string, string>; from: string } {
