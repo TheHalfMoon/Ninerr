@@ -1,6 +1,8 @@
-import { isV2Type, schemaVersionFor, v2DocumentProblem, v2NodesProblem } from "./schema-v2.mjs";
+import { isV2Type, v2DocumentProblem, v2NodesProblem } from "./schema-v2.mjs";
 
-export { SCHEMA_V2_LIMITS, TOKEN_NAME, TOKEN_TYPES, V2_NODE_TYPES, PROPERTY_KINDS, PROPERTY_FIELDS, designSystemProblem, definitionProblem, instanceProblem, isV2Type, schemaVersionFor, tokenReferences } from "./schema-v2.mjs";
+import { schemaVersionFor } from "./schema-v2.mjs";
+
+export { SCHEMA_V2_LIMITS, TOKEN_NAME, TOKEN_TYPES, V2_NODE_TYPES, PROPERTY_KINDS, PROPERTY_FIELDS, cssValueProblem, designSystemProblem, definitionProblem, instanceProblem, isV2Type, propertyRenameProblem, requiresSchemaV2, schemaVersionFor, tokenReferences } from "./schema-v2.mjs";
 
 // The newest schema this build reads and writes. A document is schema 2 exactly when it holds a
 // schema v2 node (ADR-0003): until then it stays schema 1, which older builds open.
@@ -558,7 +560,7 @@ function assertNodeRecord(nodes, id, node) {
  * structure as it was (its node keys, parents, children and roots), as setting props does
  * (#252). Anything else must go through validateDocument.
  */
-export function validateNodes(document, ids) {
+export function validateNodes(document, ids, before = null) {
   if (!Number.isSafeInteger(document.revision) || document.revision < 0) {
     throw new DocumentInvariantError("document.revision must be a non-negative safe integer");
   }
@@ -573,7 +575,7 @@ export function validateNodes(document, ids) {
   }
   // Schema v2 nodes among them: their props, references and component cycles (ADR-0003).
   if (document.schemaVersion === 2) {
-    const problem = v2NodesProblem(document, ids);
+    const problem = v2NodesProblem(document, ids, before);
     if (problem !== null) throw new DocumentInvariantError(`document ${problem}`);
   }
 }
@@ -588,9 +590,9 @@ export function validateNodes(document, ids) {
 export function changedPartIsValid(document, ids, moved = [], { added = true } = {}) {
   if (!Number.isSafeInteger(document.revision) || document.revision < 0) return false;
   const nodes = document.nodes;
-  // A change to a schema v2 node, or in a schema 2 document, is checked whole: its references
-  // and component cycles reach beyond the changed records.
-  if (document.schemaVersion !== 1) return false;
+  // A change to a design system or a component part is checked whole: its references and
+  // component cycles reach beyond the changed records. (The history also checks whole a change
+  // that removes or moves one inside a subtree.)
   for (const id of ids) {
     if (typeof id === "string" && Object.hasOwn(nodes, id) && isV2Type(nodes[id].type)) return false;
   }

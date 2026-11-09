@@ -32,17 +32,60 @@ export const SCHEMA_V2_LIMITS = Object.freeze({
 
 export const TOKEN_NAME = /^--[A-Za-z0-9_-]{1,127}$/u;
 const ID = /^[A-Za-z0-9_.:-]{1,128}$/u;
-// A token value is one CSS value: no rule, block, markup or escape may hide in it.
-const VALUE_REFUSED = /[;{}<>\\]|\/\*|@import|url\s*\(|expression\s*\(|javascript:/iu;
 
+/** Whether a node of this type takes part in schema v2's checks (design systems and components). */
 export const isV2Type = (type) => V2_TYPE_SET.has(type);
 
-/** The schema version a document's nodes need: 2 when any node is a v2 node, else 1. */
+// `component-definition` was already a schema 1 type, with props of any shape: one needs schema 2
+// only once it has schema 2's properties or variants, so a schema 1 project holding one opens as
+// it did.
+const hasV2Props = (props) => props !== null && typeof props === "object" && (Object.hasOwn(props, "properties") || Object.hasOwn(props, "variants"));
+
+/** Whether this node needs schema 2. */
+export function requiresSchemaV2(node) {
+  if (node?.type === "design-system" || node?.type === "component-instance") return true;
+  return node?.type === "component-definition" && hasV2Props(node.props);
+}
+
+/** The schema version a document's nodes need: 2 when any node needs it, else 1. */
 export function schemaVersionFor(nodes) {
   for (const id in nodes) {
-    if (Object.hasOwn(nodes, id) && V2_TYPE_SET.has(nodes[id]?.type)) return 2;
+    if (Object.hasOwn(nodes, id) && requiresSchemaV2(nodes[id])) return 2;
   }
   return 1;
+}
+
+// Functions that load or read something from outside the value: never in a token.
+const LOADING_FUNCTION = /(?:^|[^\w-])(?:url|src|image-set|-webkit-image-set|image|cross-fade|element|paint|expression|attr|env)\s*\(/iu;
+
+/**
+ * Why a value cannot be a token's, or null. A token value becomes one declaration in a compiled
+ * `:root` sheet, so it must be one balanced CSS value: no character that ends or opens a
+ * declaration, block, comment or rule, no escape, no function that loads or reads anything, and
+ * brackets and quotes that close, or the rest of the sheet would be swallowed.
+ */
+export function cssValueProblem(value) {
+  if (typeof value !== "string" || value.trim() === "" || value.length > SCHEMA_V2_LIMITS.valueLength) return "it is not one CSS value";
+  if (/[\u0000-\u001f\u007f\\;{}<>@!]/u.test(value)) return "it holds a character a CSS value cannot";
+  if (value.includes("/*") || value.includes("*/")) return "it holds a comment";
+  if (LOADING_FUNCTION.test(value)) return "it loads or reads something from outside the value";
+  let depth = 0;
+  let quote = null;
+  for (const character of value) {
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "'") quote = character;
+    else if (character === "(") depth += 1;
+    else if (character === ")") {
+      depth -= 1;
+      if (depth < 0) return "its brackets do not balance";
+    }
+  }
+  if (quote !== null) return "it has a string that does not close";
+  if (depth !== 0) return "its brackets do not balance";
+  return null;
 }
 
 /**
@@ -52,8 +95,11 @@ export function schemaVersionFor(nodes) {
 export function tokenReferences(value) {
   if (typeof value !== "string") return [];
   const names = [];
-  const pattern = /var\(\s*(--[A-Za-z0-9_-]{1,127})\s*[,)]/gu;
-  for (const match of value.matchAll(pattern)) names.push(match[1]);
+  // A string's text is not a reference (a font named 'var(--x)'); var is matched in any case, as
+  // CSS matches it, and only as a whole word (not myvar()).
+  const outsideStrings = value.replace(/"[^"]*"|'[^']*'/gu, '""');
+  const pattern = /(?<![\w-])var\(\s*(--[A-Za-z0-9_-]{1,127})\s*[,)]/giu;
+  for (const match of outsideStrings.matchAll(pattern)) names.push(match[1]);
   return names;
 }
 
@@ -100,9 +146,8 @@ export function designSystemProblem(props) {
     if (!isRecord(token.values) || Object.keys(token.values).length === 0) return `token ${token.name} has no values`;
     for (const [mode, value] of Object.entries(token.values)) {
       if (!modes.has(mode)) return `token ${token.name} has a value for ${shown(mode)}, which is not a mode of its collection`;
-      if (typeof value !== "string" || value.trim() === "" || value.length > SCHEMA_V2_LIMITS.valueLength || VALUE_REFUSED.test(value)) {
-        return `token ${token.name} has a value that is not one CSS value`;
-      }
+      const problem = cssValueProblem(value);
+      if (problem) return `token ${token.name} has a value that is not one CSS value: ${problem}`;
     }
     if (token.description !== undefined && (typeof token.description !== "string" || token.description.length > SCHEMA_V2_LIMITS.textLength)) {
       return `token ${token.name}'s description is too long`;
@@ -166,6 +211,8 @@ function overrideProblem(override) {
 /** Why a component-definition node's props are invalid, or null. */
 export function definitionProblem(props) {
   if (!isRecord(props)) return "its props are not an object";
+  // A schema 1 component-definition, with no schema 2 properties or variants, is kept as it was.
+  if (!hasV2Props(props)) return null;
   if (!text(props.name, 200)) return "it needs a name";
   const properties = props.properties ?? [];
   if (!Array.isArray(properties) || properties.length > SCHEMA_V2_LIMITS.propertiesPerDefinition) return `it may have at most ${SCHEMA_V2_LIMITS.propertiesPerDefinition} properties`;
@@ -303,13 +350,59 @@ export function v2DocumentProblem(document) {
     if (node.type === "design-system") designSystems += 1;
     if (node.type === "component-definition") definitions += 1;
     if (node.type === "component-instance") instances += 1;
-    const problem = v2NodeProblem(node) ?? referenceProblem(nodes, node);
+    const problem = v2NodeProblem(node) ?? referenceProblem(nodes, node) ?? targetProblem(nodes, node);
     if (problem) return `node ${shown(id)}: ${problem}`;
   }
   if (designSystems > 1) return "a document has at most one design system";
   if (definitions > SCHEMA_V2_LIMITS.definitions) return `a document has at most ${SCHEMA_V2_LIMITS.definitions} components`;
   if (instances > SCHEMA_V2_LIMITS.instances) return `a document has at most ${SCHEMA_V2_LIMITS.instances} instances`;
   return componentCycle(nodes);
+}
+
+/** Whether `id` is `ancestorId` or lies inside it. */
+function within(nodes, id, ancestorId) {
+  let current = Object.hasOwn(nodes, id) ? nodes[id] : undefined;
+  for (let steps = 0; current !== undefined && steps <= 1_100; steps += 1) {
+    if (current.id === ancestorId) return true;
+    current = current.parentId === null ? undefined : nodes[current.parentId];
+  }
+  return false;
+}
+
+/**
+ * A definition's properties and variant overrides name its own nodes. A target that no longer
+ * exists is stale, kept and reported elsewhere; one that exists outside the definition (a copy
+ * that still names the original's children) is refused.
+ */
+function targetProblem(nodes, node) {
+  if (node.type !== "component-definition" || !hasV2Props(node.props)) return null;
+  const inside = (id) => !Object.hasOwn(nodes, id) || within(nodes, id, node.id);
+  for (const property of node.props.properties ?? []) {
+    if (!inside(property.target.nodeId)) return `property ${shown(property.id)} targets ${shown(property.target.nodeId)}, which is not in this component`;
+  }
+  for (const variant of node.props.variants ?? []) {
+    for (const override of variant.overrides) {
+      if (override.path.length === 0 && !inside(override.nodeId)) return `a variant overrides ${shown(override.nodeId)}, which is not in this component`;
+    }
+  }
+  return null;
+}
+
+/**
+ * A property's id is minted once and never renamed (ADR-0005; Figma renames keys when it combines
+ * variants, E-FG-13): a property that keeps its name keeps its id. Removing one is allowed; the
+ * instances' values for it become stale.
+ */
+export function propertyRenameProblem(before, after) {
+  if (!hasV2Props(before) || !hasV2Props(after)) return null;
+  const afterIds = new Set((after.properties ?? []).map((property) => property.id));
+  const beforeIds = new Set((before.properties ?? []).map((property) => property.id));
+  for (const old of before.properties ?? []) {
+    if (afterIds.has(old.id)) continue;
+    const renamed = (after.properties ?? []).find((property) => property.name === old.name && !beforeIds.has(property.id));
+    if (renamed) return `property ${shown(old.name)}'s id cannot change (it was ${shown(old.id)}, now ${shown(renamed.id)})`;
+  }
+  return null;
 }
 
 /** An instance's component exists and is a component-definition. */
@@ -323,17 +416,18 @@ function referenceProblem(nodes, node) {
 
 /**
  * The v2 problems of the records `ids` in a document whose structure did not change (setting
- * props): their own props and references, and component cycles when a component or an instance
- * changed. Nothing else in the document can have become invalid.
+ * props), against `before`, the document they were set on: their own props and references, ids
+ * that must not change, and component cycles, which only an instance's new component can make.
  */
-export function v2NodesProblem(document, ids) {
-  let components = false;
+export function v2NodesProblem(document, ids, before = null) {
+  let cycles = before === null;
   for (const id of ids) {
     const node = document.nodes[id];
     if (!node || !V2_TYPE_SET.has(node.type)) continue;
-    const problem = v2NodeProblem(node) ?? referenceProblem(document.nodes, node);
+    const old = before !== null && Object.hasOwn(before.nodes, id) ? before.nodes[id] : null;
+    const problem = v2NodeProblem(node) ?? referenceProblem(document.nodes, node) ?? targetProblem(document.nodes, node) ?? (node.type === "component-definition" && old ? propertyRenameProblem(old.props, node.props) : null);
     if (problem) return `node ${shown(id)}: ${problem}`;
-    if (node.type !== "design-system") components = true;
+    if (node.type === "component-instance" && old?.props?.componentId !== node.props.componentId) cycles = true;
   }
-  return components ? componentCycle(document.nodes) : null;
+  return cycles ? componentCycle(document.nodes) : null;
 }

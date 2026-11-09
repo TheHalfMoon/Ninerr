@@ -10,7 +10,7 @@ import {
   tokenReferences,
   validateDocument,
 } from "../packages/document-model/src/index.mjs";
-import { applyTransaction, commitTransaction, createHistoryState, undo } from "../packages/history/src/index.mjs";
+import { applyCommittedTransaction, applyTransaction, commitTransaction, createHistoryState, replayTransactions, undo } from "../packages/history/src/index.mjs";
 import { drawnRoots } from "../packages/renderer/src/index.mjs";
 
 // ADR-0003, ADR-0004 and ADR-0005, accepted 2026-11-09: schema v2 adds `design-system` and
@@ -49,7 +49,7 @@ test("a document stays schema 1 until its first schema v2 node, and goes back to
   assert.equal(state.document.schemaVersion, 1, "undoing it makes it schema 1 again");
 
   // Removing a subtree that holds the last v2 node makes it schema 1 too.
-  const withComponent = apply(document, [{ type: "insert-node", parentId: "frame", index: 0, node: { id: "def", type: "component-definition", props: { name: "Button" } } }]);
+  const withComponent = apply(document, [{ type: "insert-node", parentId: "frame", index: 0, node: { id: "def", type: "component-definition", props: { name: "Button", properties: [] } } }]);
   assert.equal(withComponent.schemaVersion, 2);
   assert.equal(apply(withComponent, [{ type: "remove-node", nodeId: "frame" }]).schemaVersion, 1);
 });
@@ -136,4 +136,73 @@ test("a token binding is any var(--name) in a value", () => {
   assert.deepEqual(tokenReferences("1px solid var(--line, var(--fallback))"), ["--line", "--fallback"]);
   assert.deepEqual(tokenReferences("#fff"), []);
   assert.deepEqual(tokenReferences(42), []);
+});
+
+test("a schema 1 component-definition, with no schema 2 props, keeps its project schema 1 until it gains them", () => {
+  const legacy = apply(base(), [{ type: "insert-node", parentId: "frame", index: 0, node: { id: "old", type: "component-definition", props: { anything: true } } }]);
+  assert.equal(legacy.schemaVersion, 1, "a schema 1 project holding one opens as it did");
+  validateDocument(legacy);
+  const upgraded = apply(legacy, [{ type: "set-props", nodeId: "old", set: { name: "Old", properties: [] } }]);
+  assert.equal(upgraded.schemaVersion, 2, "its first schema 2 prop makes the project schema 2, in that transaction");
+  assert.equal(apply(upgraded, [{ type: "set-props", nodeId: "old", unset: ["properties"] }]).schemaVersion, 1);
+});
+
+test("a token value is one balanced CSS value that loads nothing", () => {
+  const insert = (value) => apply(base(), [{ type: "insert-node", parentId: null, index: 1, node: designSystem([{ name: "--t", type: "fontFamily", collection: "color", values: { light: value } }]) }]);
+  for (const value of ["calc(1px", "calc(1px))", '"Inter', "'Inter, sans-serif", 'image-set("https://example.com/a.png" 1x)', "src(x)", "attr(data-x)", "env(safe-area-inset-top)", "red !important", "red\nblue", "a@b"]) {
+    refusedWith(() => insert(value), /not one CSS value/u);
+  }
+  assert.equal(insert('"Helvetica Neue", Inter, sans-serif').schemaVersion, 2, "quoted font names are fine");
+});
+
+test("bindings are read in any case, as whole words, outside strings; an alias cycle in capitals is still a cycle", () => {
+  assert.deepEqual(tokenReferences("VAR(--a) Var(--b)"), ["--a", "--b"]);
+  assert.deepEqual(tokenReferences("myvar(--x) xvar(--y)"), []);
+  assert.deepEqual(tokenReferences("'var(--x)', \"var(--y)\", var(--z)"), ["--z"]);
+  const token = (name, value) => ({ name, type: "color", collection: "color", values: { light: value } });
+  refusedWith(() => apply(base(), [{ type: "insert-node", parentId: null, index: 1, node: designSystem([token("--a", "VAR(--b)"), token("--b", "var(--a)")]) }]), /--a -> --b -> --a/u);
+});
+
+test("a property's id never changes, and a property targets its own component's nodes", () => {
+  const property = (id, name = "Label", target = "label") => ({ id, name, kind: "text", default: "Go", target: { nodeId: target, field: "text" } });
+  const document = apply(base(), [
+    { type: "insert-node", parentId: "frame", index: 0, node: { id: "btn", type: "component-definition", props: { name: "Button", properties: [property("p-label")] } } },
+    { type: "insert-node", parentId: "btn", index: 0, node: { id: "label", type: "text", props: { text: "Go" } } },
+  ]);
+  refusedWith(() => apply(document, [{ type: "set-props", nodeId: "btn", set: { properties: [property("label-2")] } }]), /property Label's id cannot change \(it was p-label, now label-2\)/u);
+  assert.equal(apply(document, [{ type: "set-props", nodeId: "btn", set: { properties: [] } }]).nodes.btn.props.properties.length, 0, "removing one is allowed");
+  // A copy that still names the original's children is refused; a target that is gone is stale and kept.
+  refusedWith(() => apply(document, [{ type: "insert-node", parentId: "frame", index: 1, node: { id: "copy", type: "component-definition", props: { name: "Copy", properties: [property("p-label")] } } }]), /targets label, which is not in this component/u);
+  assert.equal(apply(document, [{ type: "remove-node", nodeId: "label" }]).nodes.btn.props.properties[0].target.nodeId, "label");
+  // Moving a targeted node out of its component is checked too, though the move touches no v2 record.
+  refusedWith(() => apply(document, [{ type: "move-node", nodeId: "label", parentId: "frame", index: 0 }]), /targets label, which is not in this component/u);
+});
+
+test("the editor's mirror and journal replay follow the version", () => {
+  const document = base();
+  const mirror = structuredClone(document);
+  applyCommittedTransaction(mirror, { operations: [{ type: "insert-node", parentId: null, index: 1, node: designSystem() }] });
+  assert.equal(mirror.schemaVersion, 2);
+  applyCommittedTransaction(mirror, { operations: [{ type: "remove-node", nodeId: "ds" }] });
+  assert.equal(mirror.schemaVersion, 1);
+  const replayed = replayTransactions(document, [tx(document, [{ type: "insert-node", parentId: null, index: 1, node: designSystem() }])]);
+  assert.equal(replayed.schemaVersion, 2, "a journal that adds a design system replays to schema 2");
+  assert.equal(replayTransactions(replayed, [{ ...tx(replayed, [{ type: "remove-node", nodeId: "ds" }]) }]).schemaVersion, 1);
+});
+
+test("a schema 1 component-definition stays valid in a schema 2 document, and a node deep inside a component is checked when it moves", () => {
+  const withBoth = apply(base(), [
+    { type: "insert-node", parentId: null, index: 1, node: designSystem() },
+    { type: "insert-node", parentId: "frame", index: 0, node: { id: "old", type: "component-definition", props: { anything: true } } },
+  ]);
+  assert.equal(withBoth.schemaVersion, 2);
+  validateDocument(withBoth);
+  // A grandchild a property targets, moved out of the component: the move touches no
+  // component record directly, and is still checked.
+  const document = apply(base(), [
+    { type: "insert-node", parentId: "frame", index: 0, node: { id: "card", type: "component-definition", props: { name: "Card", properties: [{ id: "p-title", name: "Title", kind: "text", default: "Hi", target: { nodeId: "title", field: "text" } }] } } },
+    { type: "insert-node", parentId: "card", index: 0, node: { id: "header", type: "group" } },
+    { type: "insert-node", parentId: "header", index: 0, node: { id: "title", type: "text", props: { text: "Hi" } } },
+  ]);
+  refusedWith(() => apply(document, [{ type: "move-node", nodeId: "title", parentId: "frame", index: 0 }]), /targets title, which is not in this component/u);
 });

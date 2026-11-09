@@ -1665,7 +1665,7 @@ function visibleLayers() {
       if (node.children.length > 0 && !state.collapsed.has(id)) walk(node.children, level + 1, id);
     }
   };
-  walk(doc.rootIds, 1, null);
+  walk(layerRoots(doc), 1, null);
   return out;
 }
 
@@ -1945,7 +1945,7 @@ function groupSelection() {
       else walk(doc.nodes[id].children);
     }
   };
-  walk(doc.rootIds);
+  walk(layerRoots(doc));
   if (order.length === 0) {
     setStatus("Select the layers to group.");
     return Promise.resolve(null);
