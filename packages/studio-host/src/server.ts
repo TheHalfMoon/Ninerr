@@ -410,11 +410,17 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     // new files only, exactly as planned. Only the person, through the editor's session.
     "POST /api/components/plan": (body) => {
       const current = requireSession();
-      return publicPlan(planComponentImport(connectedFolder(current.name), body));
+      return publicPlan(planComponentImport(connectedFolder(current.name), body, current.document));
     },
     "POST /api/components/apply": (body) => {
       const current = requireSession();
-      return applyComponentImport(connectedFolder(current.name), body);
+      const { tokenOperations, ...applied } = applyComponentImport(connectedFolder(current.name), body, {}, current.document);
+      // The item's new tokens join the design system as one transaction, undone by Undo; the
+      // files are already written, and Undo does not remove them.
+      if (tokenOperations.length === 0) return applied;
+      const added = applied.plan.designTokens.filter((entry) => entry.status === "new").length;
+      const event = current.edit(owner, { baseRevision: current.revision, operations: tokenOperations, intent: `Add ${added} token${added === 1 ? "" : "s"} from ${applied.plan.item.name}`, tool: "ninerr:components" });
+      return { ...applied, tokens: event };
     },
     "POST /api/import/discard": (body) => {
       imports.discard(body?.proposalId);
