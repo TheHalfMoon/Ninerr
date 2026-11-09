@@ -260,3 +260,49 @@ test("a layer of a nested instance is overridden by its path, and the layer list
   assert.equal(drawn.props.text, "Deep");
   assert.equal(instanceLayers(p.document, "use").find((layer) => layer.nodeId === "title").hidden, true);
 });
+
+test("an instance-swap property chooses the component a nested instance draws; a slot draws one in a layer", () => {
+  const p = project();
+  // Two small components to choose from, and Card holding a nested instance of Icon and a slot.
+  p.run([
+    { type: "insert-node", parentId: "page", index: 1, node: { id: "icon", type: "component-definition", props: { name: "Icon", properties: [], text: "★" } } },
+    { type: "insert-node", parentId: "page", index: 2, node: { id: "dot", type: "component-definition", props: { name: "Dot", properties: [], text: "•" } } },
+    { type: "insert-node", parentId: "card", index: 2, node: { id: "card-icon", type: "component-instance", props: { componentId: "icon" } } },
+    { type: "insert-node", parentId: "card", index: 3, node: { id: "well", type: "frame", props: { name: "Well" } } },
+    { type: "insert-node", parentId: "well", index: 0, node: { id: "well-own", type: "text", props: { text: "own" } } },
+  ]);
+  p.run(createComponent(p.document, "card", { id: "comp", name: "Card" }));
+  p.run([{ type: "set-props", nodeId: "comp", set: { properties: [
+    { id: "p-icon", name: "Icon", kind: "instance-swap", default: "", target: { nodeId: "card-icon", field: "children" } },
+    { id: "p-well", name: "Content", kind: "slot", default: "", target: { nodeId: "well", field: "children" } },
+  ] } }]);
+  p.run(insertInstance(p.document, "comp", { id: "inst" }));
+  const drawn = (view) => [view.props.text, ...view.children.flatMap(drawn)].filter((text) => text !== undefined);
+  assert.deepEqual(drawn(expandInstance(p.document, "inst")), ["Hello", "New", "★", "own"], "the defaults: its own icon and the layer's own content");
+  p.run([{ type: "set-props", nodeId: "inst", set: { propertyValues: { "p-icon": "dot", "p-well": "icon" } } }]);
+  const view = expandInstance(p.document, "inst");
+  assert.deepEqual(drawn(view), ["Hello", "New", "•", "★"], "the swap draws Dot; the slot draws Icon in place of the layer's own");
+  const well = view.children.find((child) => child.id === "well");
+  assert.equal(well.children[0].id, "well/slot");
+  // An override reaches into what the slot draws, by its path.
+  p.run([{ type: "set-props", nodeId: "inst", set: { overrides: [{ path: ["well/slot"], nodeId: "icon", set: { text: "☆" } }] } }]);
+  assert.deepEqual(drawn(expandInstance(p.document, "inst")), ["Hello", "New", "•", "☆"]);
+  // A change to Dot or Icon redraws the instance that draws it only through its values.
+  assert.deepEqual(instancesDrawing(p.document, ["dot"]), ["inst"]);
+  assert.ok(instancesDrawing(p.document, ["icon"]).includes("inst"));
+});
+
+test("swap and slot rules: their targets, their defaults, and a value that would draw a component in itself", () => {
+  const p = project();
+  p.run(createComponent(p.document, "card", { id: "comp", name: "Card" }));
+  const property = (fields) => [{ type: "set-props", nodeId: "comp", set: { properties: [{ id: "p", name: "P", kind: "instance-swap", default: "", target: { nodeId: "title", field: "children" }, ...fields }] } }];
+  assert.throws(() => p.run(property({})), /targets title, which is not an instance/u);
+  assert.throws(() => p.run(property({ kind: "slot", target: { nodeId: "title", field: "text" } })), /sets its target's children/u);
+  assert.throws(() => p.run(property({ kind: "slot", default: "nowhere" })), /default is not a component/u);
+  p.run(property({ kind: "slot" }));
+  // A slot that would draw Card inside Card is drawn as nothing there, not forever.
+  p.run(insertInstance(p.document, "comp", { id: "inst" }));
+  p.run([{ type: "set-props", nodeId: "inst", set: { propertyValues: { p: "comp" } } }]);
+  const view = expandInstance(p.document, "inst");
+  assert.deepEqual(view.children.find((child) => child.id === "title").children, [], "the slot that would draw Card in Card is left empty");
+});

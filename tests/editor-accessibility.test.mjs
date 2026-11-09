@@ -953,9 +953,15 @@ test("the Components dialog audits clean, for a layer, a component and an instan
     await waitRevision(page, 2);
     await page.locator("#property-add").waitFor();
     await audit(page, "the Components dialog for a component");
-    await page.locator("#components-list button").first().click();
+    // A slot on the component's root: its instances then choose a component for it.
+    await page.locator("#property-name").fill("Content");
+    await page.locator("#property-kind").selectOption("slot");
+    await page.locator("#property-add").click();
     await waitRevision(page, 3);
+    await page.locator("#components-list button").first().click();
+    await waitRevision(page, 4);
     await page.locator("#components-detach").waitFor();
+    await page.locator('select[data-property]').waitFor();
     await audit(page, "the Components dialog for an instance");
     await page.locator("#instance-layer").selectOption({ index: 1 });
     await page.locator("#instance-style").waitFor();

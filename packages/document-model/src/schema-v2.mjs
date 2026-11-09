@@ -290,6 +290,9 @@ export function definitionProblem(props) {
     if (!isRecord(property.target) || typeof property.target.nodeId !== "string" || property.target.nodeId.length === 0 || !PROPERTY_FIELD_SET.has(property.target.field)) {
       return `property ${shown(property.id)} needs a target node and field`;
     }
+    // An instance swap chooses the component a nested instance draws; a slot, a component drawn in
+    // a layer in place of its own children. Both set what their target draws: its children.
+    if ((property.kind === "instance-swap" || property.kind === "slot") && property.target.field !== "children") return `${property.kind} property ${shown(property.id)} sets its target's children`;
     ids.add(property.id);
     names.add(property.name);
   }
@@ -436,6 +439,13 @@ function targetProblem(nodes, node) {
   const inside = (id) => !Object.hasOwn(nodes, id) || within(nodes, id, node.id);
   for (const property of node.props.properties ?? []) {
     if (!inside(property.target.nodeId)) return `property ${shown(property.id)} targets ${shown(property.target.nodeId)}, which is not in this component`;
+    const target = Object.hasOwn(nodes, property.target.nodeId) ? nodes[property.target.nodeId] : null;
+    if (property.kind === "instance-swap" && target !== null && target.type !== "component-instance") return `instance-swap property ${shown(property.id)} targets ${shown(target.id)}, which is not an instance`;
+    if (property.kind === "slot" && target !== null && target.type === "component-instance") return `slot property ${shown(property.id)} targets an instance; a slot is a layer that holds what is put in it`;
+    if ((property.kind === "instance-swap" || property.kind === "slot") && property.default !== "") {
+      const chosen = Object.hasOwn(nodes, property.default) ? nodes[property.default] : null;
+      if (chosen === null || chosen.type !== "component-definition") return `${property.kind} property ${shown(property.id)}'s default is not a component`;
+    }
   }
   for (const variant of node.props.variants ?? []) {
     for (const override of variant.overrides) {

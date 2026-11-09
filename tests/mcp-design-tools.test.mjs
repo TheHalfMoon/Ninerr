@@ -171,8 +171,29 @@ test("bad input to the component and mode tools is refused, saying why", async (
     assert.match(refusal(await tool("add_token_mode", { collection: "base", name: "Constructor" })), /a name a mode cannot have/u);
     const card = (await ok("create_frame", { width: 100, height: 100, name: "Card" })).nodeId;
     const { componentId } = await ok("create_component", { nodeId: card });
-    assert.match(refusal(await tool("add_component_property", { componentId, name: "Size", kind: "slider", targetNodeId: componentId })), /kind is text, boolean or variant/u);
+    assert.match(refusal(await tool("add_component_property", { componentId, name: "Size", kind: "slider", targetNodeId: componentId })), /kind is text, boolean, variant, instance-swap or slot/u);
     assert.match(refusal(await tool("add_component_property", { componentId, name: "Size", kind: "variant", targetNodeId: componentId })), /needs its options/u);
     assert.match(refusal(await tool("insert_instance", { componentId, afterId: "no-such-layer" })), /no node/u);
+  });
+});
+
+test("an agent adds a slot and fills an instance's slot with a component, never one that draws it", async () => {
+  await withAgent(async ({ tool, ok }) => {
+    const badge = (await ok("create_frame", { width: 40, height: 20, name: "Badge" })).nodeId;
+    await ok("set_text", { nodeId: badge, text: "New" });
+    const { componentId: badgeId } = await ok("create_component", { nodeId: badge, name: "Badge" });
+    const card = (await ok("create_frame", { width: 200, height: 80, name: "Card" })).nodeId;
+    const { componentId: cardId } = await ok("create_component", { nodeId: card, name: "Card" });
+    const { propertyId } = await ok("add_component_property", { componentId: cardId, name: "Content", kind: "slot", targetNodeId: cardId });
+    const { instanceId } = await ok("insert_instance", { componentId: cardId });
+    await ok("set_instance_values", { instanceId, values: { [propertyId]: badgeId } });
+    const layers = (await ok("instance_layers", { instanceId })).layers;
+    const filled = layers.find((layer) => layer.text === "New");
+    assert.deepEqual([filled.path, filled.nodeId], [[], `${cardId}/slot`], "the badge drawn in the slot is a layer of the instance");
+    await ok("set_instance_override", { instanceId, path: filled.path, nodeId: filled.nodeId, text: "Hot" });
+    assert.ok((await ok("instance_layers", { instanceId })).layers.some((layer) => layer.text === "Hot"), "and takes an override like one");
+    assert.match(refusal(await tool("set_instance_values", { instanceId, values: { [propertyId]: "nowhere" } })), /takes a component's id/u);
+    assert.match(refusal(await tool("set_instance_values", { instanceId, values: { [propertyId]: cardId } })), /draws this instance's component/u);
+    assert.match(refusal(await tool("add_component_property", { componentId: cardId, name: "Icon", kind: "instance-swap", targetNodeId: cardId })), /targets an instance inside the component/u);
   });
 });

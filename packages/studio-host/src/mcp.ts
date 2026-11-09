@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { styleDeclarationProblem } from "@ninerr/renderer";
-import { componentsOf, createComponent, detachInstance, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
+import { componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
 import { exportJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
@@ -527,8 +527,8 @@ const TOOLS: Tool[] = [
   {
     name: "add_component_property",
     title: "Add a component property",
-    description: "Give a component a property its instances set: text (a layer's text), boolean (whether a layer is shown) or variant (a class added to a layer, from options). targetNodeId is one of the component's own layers.",
-    inputSchema: object({ componentId: { type: "string" }, name: { type: "string", maxLength: 200 }, kind: { type: "string", enum: ["text", "boolean", "variant"] }, targetNodeId: { type: "string" }, options: { type: "array", items: { type: "string", maxLength: 200 }, maxItems: 64 }, default: { type: ["string", "boolean"] } }, ["componentId", "name", "kind", "targetNodeId"]),
+    description: "Give a component a property its instances set: text (a layer's text), boolean (whether a layer is shown), variant (a class added to a layer, from options), instance-swap (the component a nested instance draws; targetNodeId is that instance) or slot (a component drawn in a layer in place of its children). targetNodeId is one of the component's own layers.",
+    inputSchema: object({ componentId: { type: "string" }, name: { type: "string", maxLength: 200 }, kind: { type: "string", enum: ["text", "boolean", "variant", "instance-swap", "slot"] }, targetNodeId: { type: "string" }, options: { type: "array", items: { type: "string", maxLength: 200 }, maxItems: 64 }, default: { type: ["string", "boolean"] } }, ["componentId", "name", "kind", "targetNodeId"]),
     run: ({ session, edit }, args) => {
       const component = nodeOf(session, args.componentId);
       if (component.type !== "component-definition") throw new ToolError("componentId must name a component");
@@ -538,10 +538,14 @@ const TOOLS: Tool[] = [
       const stem = `p-${args.name.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "") || "property"}`;
       let id = stem;
       for (let at = 2; properties.some((property: any) => property.id === id); at += 1) id = `${stem}-${at}`;
-      if (!["text", "boolean", "variant"].includes(args.kind)) throw new ToolError("kind is text, boolean or variant");
+      if (!["text", "boolean", "variant", "instance-swap", "slot"].includes(args.kind)) throw new ToolError("kind is text, boolean, variant, instance-swap or slot");
+      if (args.kind === "instance-swap" && target.type !== "component-instance") throw new ToolError("an instance-swap property targets an instance inside the component");
+      if (args.kind === "slot" && target.type === "component-instance") throw new ToolError("a slot targets a layer that holds what is put in it, not an instance");
       const options = Array.isArray(args.options) ? [...new Set(args.options as string[])] : [];
       if (args.kind === "variant" && options.length === 0) throw new ToolError("a variant property needs its options");
-      const property = args.kind === "boolean"
+      const property = args.kind === "instance-swap" || args.kind === "slot"
+        ? { id, name: args.name.trim(), kind: args.kind, default: "", target: { nodeId: target.id, field: "children" } }
+        : args.kind === "boolean"
         ? { id, name: args.name.trim(), kind: "boolean", default: typeof args.default === "boolean" ? args.default : true, target: { nodeId: target.id, field: "visible" } }
         : args.kind === "variant"
           ? { id, name: args.name.trim(), kind: "variant", default: typeof args.default === "string" ? args.default : options[0], options, target: { nodeId: target.id, field: "attributes.class" } }
@@ -587,6 +591,13 @@ const TOOLS: Tool[] = [
         if (!property) throw new ToolError(`${id.slice(0, 80)} is not a property of its component`);
         if (property.kind === "boolean" ? typeof value !== "boolean" : typeof value !== "string") throw new ToolError(`${property.name} takes ${property.kind === "boolean" ? "true or false" : "text"}`);
         if (property.kind === "variant" && !property.options.includes(value)) throw new ToolError(`${property.name} is one of ${property.options.join(", ")}`);
+        // An instance swap or slot names a component ("" for the default); one that would draw
+        // this instance's own component inside itself is refused.
+        if ((property.kind === "instance-swap" || property.kind === "slot") && value !== "") {
+          const chosen = (session.document as any).nodes[value as string];
+          if (!chosen || chosen.type !== "component-definition") throw new ToolError(`${property.name} takes a component's id, or "" for its default`);
+          if (drawsComponent(session.document, value, instance.props.componentId)) throw new ToolError(`${chosen.props.name ?? "That component"} draws this instance's component, so it cannot go inside it`);
+        }
       }
       return edit([{ type: "set-props", nodeId: instance.id, set: { propertyValues: { ...(instance.props.propertyValues ?? {}), ...args.values } } }], "Set the instance's values");
     },

@@ -733,6 +733,12 @@ function openComponentsDialog() {
           let control;
           if (property.kind === "boolean") control = el("input", { type: "checkbox", checked: current === true, "aria-label": label, "data-property": property.id });
           else if (property.kind === "variant") control = el("select", { "aria-label": label, "data-property": property.id }, ...property.options.map((option) => el("option", { value: option, selected: option === current }, option)));
+          // An instance swap or a slot chooses a component: none of the ones it would draw itself in.
+          else if (property.kind === "instance-swap" || property.kind === "slot") {
+            control = el("select", { "aria-label": label, "data-property": property.id },
+              el("option", { value: "", selected: current === "" }, property.kind === "slot" ? "Its own content" : "The component it has"),
+              ...componentsOf(document).filter((entry) => entry.id !== selected.props.componentId).map((entry) => el("option", { value: entry.id, selected: entry.id === current }, entry.name)));
+          }
           else control = el("input", { value: String(current), "aria-label": label, "data-property": property.id });
           control.addEventListener("change", () => {
             const value = property.kind === "boolean" ? control.checked : control.value;
@@ -820,7 +826,7 @@ function openComponentsDialog() {
         };
         walk(selected.id, 0);
         const name = el("input", { id: "property-name", placeholder: "Label" });
-        const kind = el("select", { id: "property-kind" }, el("option", { value: "text" }, "Text"), el("option", { value: "boolean" }, "Shown (true or false)"), el("option", { value: "variant" }, "Variant (a class)"));
+        const kind = el("select", { id: "property-kind" }, el("option", { value: "text" }, "Text"), el("option", { value: "boolean" }, "Shown (true or false)"), el("option", { value: "variant" }, "Variant (a class)"), el("option", { value: "instance-swap" }, "Swap a nested instance's component"), el("option", { value: "slot" }, "Slot (a component put in a layer)"));
         const options = el("input", { id: "property-options", placeholder: "Variant options, comma-separated: sm, md, lg" });
         const target = el("select", { id: "property-target" }, ...layers.map((layer) => el("option", { value: layer.id }, layer.label)));
         const add = el("button", { type: "button", class: "primary", id: "property-add" }, "Add property");
@@ -835,7 +841,12 @@ function openComponentsDialog() {
           for (let at = 2; taken.has(id); at += 1) id = `${stem}-${at}`;
           const choices = [...new Set(options.value.split(",").map((entry) => entry.trim()).filter(Boolean))];
           if (kind.value === "variant" && choices.length === 0) throw new Error("Give the variant its options, for example: sm, md, lg.");
-          const property = kind.value === "boolean"
+          const chosen = doc.nodes[target.value];
+          if (kind.value === "instance-swap" && chosen?.type !== "component-instance") throw new Error("An instance swap targets an instance inside the component.");
+          if (kind.value === "slot" && chosen?.type === "component-instance") throw new Error("A slot is a layer that holds what is put in it, not an instance.");
+          const property = kind.value === "instance-swap" || kind.value === "slot"
+            ? { id, name: label, kind: kind.value, default: "", target: { nodeId: target.value, field: "children" } }
+            : kind.value === "boolean"
             ? { id, name: label, kind: "boolean", default: true, target: { nodeId: target.value, field: "visible" } }
             : kind.value === "variant"
               ? { id, name: label, kind: "variant", default: choices[0] ?? "", options: choices, target: { nodeId: target.value, field: "attributes.class" } }
