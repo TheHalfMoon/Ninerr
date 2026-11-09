@@ -74,6 +74,18 @@ test("the runtime's notice is classified, and an unreviewed copyleft component i
   }
 });
 
+test("the host serves the browser packages the editor imports, and the package holds the same ones", () => {
+  const listed = (path, pattern) => new Set([...pattern.exec(readFileSync(join(ROOT, path), "utf8"))[1].matchAll(/"([a-z-]+)"/gu)].map((match) => match[1]));
+  const served = listed("packages/studio-host/src/server.ts", /const BROWSER_PACKAGES = new Set\(\[([^\]]*)\]\)/u);
+  assert.deepEqual(listed("scripts/package-desktop.mjs", /const SERVED = \[([^\]]*)\]/u), served);
+  // Every package the editor's own files import by absolute path is one the host serves.
+  for (const file of ["app.mjs", "index.mjs", "client.mjs"]) {
+    for (const [, name] of readFileSync(join(ROOT, "packages", "studio-web", "src", file), "utf8").matchAll(/["']\/packages\/([a-z-]+)\/src\//gu)) {
+      assert.ok(served.has(name), `${file} imports ${name}, which the host serves`);
+    }
+  }
+});
+
 test("the package holds the packages the shell and the editor reach, and no others", () => {
   const packages = reachablePackages([join(ROOT, "packages", "desktop", "src", "bootstrap.mjs")]);
   for (const name of ["desktop", "studio-host", "persistence", "history", "document-model", "collaboration", "mcp-protocol", "import-stack", "intake", "code-ir", "studio-web", "canvas", "renderer", "component-sources"]) {
