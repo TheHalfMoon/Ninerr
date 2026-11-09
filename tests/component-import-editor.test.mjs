@@ -50,18 +50,20 @@ test("review a registry item, create its files and bring its component onto the 
     await page.locator("#component-import-files li").first().waitFor();
     assert.deepEqual(await page.locator("#component-import-files li").allTextContents(), ["components/notice-card.tsx (new)"]);
     assert.deepEqual(await page.locator("#component-import-dependencies li").allTextContents(), ["@base-ui/react@^1"]);
-    assert.deepEqual(await page.locator("#component-import-tokens li").allTextContents(), ["--notice"]);
+    assert.deepEqual(await page.locator("#component-import-tokens li").allTextContents(), ["--notice (color): new"]);
     assert.match(await page.locator("#component-import-decision").textContent(), /^shadcn\/ui: MIT\. Keep its license notice\.$/u);
     assert.equal(existsSync(join(code, "components")), false, "reviewing writes nothing");
 
     await page.locator("#component-import-apply").click();
+    // Its --notice variable joins the design system (new, so the project becomes schema 2).
+    await waitRevision(page, 1);
     await page.locator("#component-import-done").waitFor();
     const created = readFileSync(join(code, "components", "notice-card.tsx"), "utf8");
     assert.match(created, /^\/\/ Imported by Ninerr from https:\/\/ui\.shadcn\.com\/r\/styles\/base-nova\/notice-card\.json\.\n\/\/ shadcn\/ui: MIT\.\n\/\/ Copyright \(c\) 2023 shadcn\n\/\/ Permission is hereby granted/u);
     assert.ok(created.endsWith(JSON.parse(ITEM).files[0].content), "the item's own text follows the notice unchanged");
 
     await page.locator("#component-import-components button", { hasText: "Bring in" }).click();
-    await waitRevision(page, 1);
+    await waitRevision(page, 2);
     const heading = await page.evaluate(() => document.querySelector("iframe").contentDocument.querySelector("section.notice h2")?.textContent);
     assert.equal(heading, "Heads up");
     assert.match(await page.locator("#status").textContent(), /^Bring in NoticeCard from components\/notice-card\.tsx: \d+ layers added\./u);

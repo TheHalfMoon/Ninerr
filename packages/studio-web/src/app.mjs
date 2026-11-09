@@ -754,6 +754,8 @@ function componentImportSection(close) {
   const text = el("textarea", { id: "component-item-text", rows: 4, spellcheck: "false", placeholder: "Or paste the item's JSON" });
   const url = el("input", { id: "component-item-url", type: "url", maxlength: "2048", autocomplete: "off", placeholder: "https://… (where the item came from, optional)" });
   const free = el("input", { id: "component-item-free", type: "checkbox" });
+  // The item's CSS variables become design tokens unless the person says not to.
+  const addTokens = el("input", { id: "component-item-tokens", type: "checkbox", checked: true });
   const review = el("button", { type: "button", id: "component-import-review" }, "Review import");
   const error = el("p", { id: "component-import-error", role: "alert" });
   const planView = el("div", { id: "component-import-plan", "aria-live": "polite" });
@@ -763,11 +765,16 @@ function componentImportSection(close) {
     if (!chosen) return;
     fileName = chosen.name;
     text.value = await chosen.text();
+    planView.replaceChildren();
   });
+  // A plan is for the choices it was made with: changing one takes it down, to be reviewed again.
+  for (const control of [text, url, free, addTokens]) control.addEventListener("change", () => planView.replaceChildren());
+  text.addEventListener("input", () => planView.replaceChildren());
   const request = () => ({
     item: text.value,
     origin: url.value.trim() !== "" ? { url: url.value.trim() } : fileName !== null ? { fileName } : undefined,
     freeItemConfirmed: free.checked,
+    addTokens: addTokens.checked,
   });
   const list = (id, label, items) => items.length === 0 ? [] : [el("p", {}, label), el("ul", { id }, items.map((entry) => el("li", {}, entry)))];
   const bringIn = (written) => el("ul", { class: "project-list", id: "component-import-components", "aria-label": "Components the import created" }, written.components.map(({ file: path, component }) => {
@@ -793,19 +800,26 @@ function componentImportSection(close) {
   }));
   const show = (plan, body) => {
     const install = plan.dependencies.missing.map(({ name, range }) => (range === null ? name : `${name}@${range}`));
+    const newFiles = plan.files.filter((entry) => entry.status === "new").length;
+    const newTokens = plan.designTokens.filter((entry) => entry.status === "new").length;
     const create = el("button", { type: "button", class: "primary", id: "component-import-apply", disabled: !plan.appliable },
-      `Create ${plan.files.filter((entry) => entry.status === "new").length} file${plan.files.filter((entry) => entry.status === "new").length === 1 ? "" : "s"}`);
+      newFiles > 0 ? `Create ${newFiles} file${newFiles === 1 ? "" : "s"}${body.addTokens && newTokens > 0 ? ` and add ${newTokens} token${newTokens === 1 ? "" : "s"}` : ""}` : `Add ${newTokens} token${newTokens === 1 ? "" : "s"}`);
     create.addEventListener("click", () => {
       create.disabled = true;
       error.textContent = "";
       enqueue(async () => {
         try {
           const written = await state.client.post("/api/components/apply", { ...body, token: plan.token }, { project });
+          if (written.tokens) applyChange(written.tokens);
+          const filesSaid = written.written.length === 0 ? "No new files." : `Created ${written.written.length} file${written.written.length === 1 ? "" : "s"}: ${written.written.join(", ")}.`;
+          const tokensSaid = written.tokens
+            ? ` ${written.tokens.intent}: Undo takes the tokens back, but not the files; delete those yourself if you change your mind.`
+            : written.tokenError ? ` Its tokens were not added: ${written.tokenError}` : written.written.length > 0 ? " Undo does not remove files; delete them yourself if you change your mind." : "";
           planView.replaceChildren(
-            el("p", { id: "component-import-done" }, `Created ${written.written.length} file${written.written.length === 1 ? "" : "s"}: ${written.written.join(", ")}. Undo does not remove files; delete them yourself if you change your mind.`),
+            el("p", { id: "component-import-done", role: written.tokenError ? "alert" : null }, filesSaid + tokensSaid),
             ...(written.components.length === 0 ? [] : [bringIn(written)]),
           );
-          setStatus(`Imported ${plan.item.name} into the codebase.`);
+          setStatus(written.tokens ? `Imported ${plan.item.name}: ${written.tokens.intent}.` : `Imported ${plan.item.name} into the codebase.`);
         } catch (failure) {
           create.disabled = false;
           if (!handleSessionEnded(failure)) error.textContent = describeError(failure);
@@ -821,8 +835,9 @@ function componentImportSection(close) {
       el("ul", { id: "component-import-files", "aria-label": "Files the import would create" }, plan.files.map((entry) => el("li", { "data-status": entry.status }, `${entry.path} (${entry.status === "new" ? "new" : entry.status === "same" ? "already there" : "exists with other content"})`))),
       ...list("component-import-dependencies", "Packages to add with your package manager (Ninerr installs nothing):", install),
       ...list("component-import-registry", "Other items it needs, to import the same way:", [...plan.registryDependencies]),
-      ...list("component-import-tokens", "Design tokens it defines (not written by this import):", [...new Set([...plan.tokens.theme, ...plan.tokens.light, ...plan.tokens.dark])].map((name) => `--${name}`)),
+      ...list("component-import-tokens", "Design tokens it defines:", plan.designTokens.map((entry) => `${entry.name} (${entry.type}): ${entry.status === "new" ? "new" : entry.status === "same" ? "already in the design system" : entry.status === "extended" ? "already there; its missing modes are added" : entry.status === "conflict" ? "kept: the design system has another value" : `refused: ${entry.reason}`}`)),
       ...list("component-import-blockers", "This import cannot go ahead:", plan.blockers),
+      ...(plan.appliable || plan.blockers.length > 0 ? [] : [el("p", { id: "component-import-nothing" }, body.addTokens ? "Nothing new to import: its files and tokens are already there." : "Nothing new to import: its files are already there, and adding its tokens is off.")]),
       el("div", { class: "actions" }, create),
     );
   };
@@ -851,6 +866,7 @@ function componentImportSection(close) {
     el("label", { for: "component-item-text" }, "Item JSON", text),
     el("label", { for: "component-item-url" }, "Came from", url),
     el("label", { for: "component-item-free" }, free, " It is a free item (for sources that license only their free items)"),
+    el("label", { for: "component-item-tokens" }, addTokens, " Add its new design tokens to the project's design system"),
     el("div", { class: "actions" }, review),
     error, planView,
   );
