@@ -957,6 +957,9 @@ test("the Components dialog audits clean, for a layer, a component and an instan
     await waitRevision(page, 3);
     await page.locator("#components-detach").waitFor();
     await audit(page, "the Components dialog for an instance");
+    await page.locator("#instance-layer").selectOption({ index: 1 });
+    await page.locator("#instance-style").waitFor();
+    await audit(page, "the Components dialog editing a layer inside an instance");
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();

@@ -205,3 +205,32 @@ test("a component made from a code-bound layer, and a detached instance, carry n
   const detached = p.run(detachInstance(p.document, "inst", () => `d${counter += 1}`).operations);
   assert.equal(Object.values(detached.nodes).filter((node) => node.id.startsWith("d")).some((node) => node.props.codeSource !== undefined), false, "writing back a detached copy never reaches the component's source");
 });
+
+test("a layer inside an instance is changed as the instance's override: merged, cleared, reset, and never the component", async () => {
+  const { instanceLayers, overrideFor, parseDeclarations, resetInstance, setInstanceOverride } = await import("../packages/canvas/src/components.mjs");
+  const p = project();
+  p.run(createComponent(p.document, "card", { id: "comp", name: "Card" }));
+  p.run(insertInstance(p.document, "comp", { id: "inst" }));
+  assert.deepEqual(instanceLayers(p.document, "inst").map(({ nodeId, path, depth }) => [nodeId, path, depth]), [["comp", [], 0], ["title", [], 1], ["badge", [], 1]], "its root first, then its layers");
+  // The root takes an override like any layer: drawn on the instance itself.
+  p.run(setInstanceOverride(p.document, "inst", { path: [], nodeId: "comp" }, { style: { padding: "20px" } }));
+  assert.equal(expandInstance(p.document, "inst").props.style.padding, "20px");
+  p.run(resetInstance(p.document, "inst"));
+  const title = { path: [], nodeId: "title" };
+  p.run(setInstanceOverride(p.document, "inst", title, { text: "Pro" }));
+  p.run(setInstanceOverride(p.document, "inst", title, { style: parseDeclarations("color: red; padding: 4px") }));
+  assert.deepEqual(overrideFor(p.document, "inst", title).set, { text: "Pro", style: { color: "red", padding: "4px" } }, "changes to one layer merge");
+  p.run(setInstanceOverride(p.document, "inst", title, { style: { padding: "" }, visible: false }));
+  assert.deepEqual(overrideFor(p.document, "inst", title).set, { text: "Pro", style: { color: "red" }, visible: false }, "a property set to empty is taken off");
+  const [drawn] = expandInstance(p.document, "inst").children;
+  assert.equal(drawn.props.text, "Pro");
+  assert.equal(p.document.nodes.title.props.text, "Hello", "the component is untouched");
+  p.run([{ type: "set-props", nodeId: "inst", set: { propertyValues: { kept: true } } }]);
+  p.run(resetInstance(p.document, "inst", title));
+  assert.equal(overrideFor(p.document, "inst", title), null);
+  assert.deepEqual(p.document.nodes.inst.props.propertyValues, { kept: true }, "reset keeps property values");
+  p.run(setInstanceOverride(p.document, "inst", { path: [], nodeId: "badge" }, { text: "Hot" }));
+  p.run(resetInstance(p.document, "inst"));
+  assert.deepEqual(p.document.nodes.inst.props.overrides, []);
+  for (const bad of ["color red", "color: ", "x{}: 1", "color: red}"]) assert.throws(() => parseDeclarations(bad), /is not a CSS declaration/u, bad);
+});

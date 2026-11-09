@@ -76,7 +76,7 @@ const UNSAFE_STYLE = /url\s*\(|image-set|expression\s*\(|javascript:|vbscript:|@
 // The host takes a stylesheet of up to 2 MiB in UTF-8, which is at most this many characters.
 const MAX_STYLESHEET = 2 * 1024 * 1024;
 const UNSAFE_STYLESHEET = /url\s*\(|image-set\s*\(|image\s*\(|(?:^|[^-\w])src\(|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|<\/style/u;
-const RENDERER_ATTRIBUTES = new Set(["data-ninerr-id", "data-ninerr-mode", "data-ninerr-instance", "data-ninerr-stale"]);
+const RENDERER_ATTRIBUTES = new Set(["data-ninerr-id", "data-ninerr-mode", "data-ninerr-instance", "data-ninerr-stale", "data-ninerr-component"]);
 
 // A layer's modes, from props.modes ({ collection: mode }), as "collection:mode ..." or null.
 const MODE_PART = /^[A-Za-z0-9_.-]{1,128}$/u;
@@ -925,6 +925,8 @@ export function createRenderer(root) {
     }
     for (const child of [...target.children]) child.remove();
     target.removeAttribute("data-ninerr-stale");
+    // The component it draws, whose root it is: a layer an instance's root override names.
+    target.setAttribute("data-ninerr-component", node.props.componentId);
     apply(target, { ...view, id: node.id, type: node.type }, plan);
     for (const child of view.children) target.appendChild(drawView(child));
     return target;
@@ -1043,6 +1045,34 @@ export function createRenderer(root) {
       // Inside an instance, the instance itself: its drawn layers are not layers of their own.
       const element = target?.closest?.("[data-ninerr-id]:not([data-ninerr-instance])");
       return element ? element.getAttribute("data-ninerr-id") : null;
+    },
+    /**
+     * The layer inside an instance drawn at or above `target`: the outermost instance, the path of
+     * nested instances inside it, and the component node drawn there (ADR-0005). Null outside one.
+     */
+    instanceTargetFor(target) {
+      const element = target?.closest?.("[data-ninerr-instance]");
+      if (!element) return null;
+      let chain;
+      try {
+        chain = JSON.parse(element.getAttribute("data-ninerr-instance"));
+      } catch {
+        return null;
+      }
+      if (!Array.isArray(chain) || chain.length === 0 || chain.some((id) => typeof id !== "string")) return null;
+      return { instanceId: chain[0], path: chain.slice(1), nodeId: element.getAttribute("data-ninerr-id") };
+    },
+    /** The element drawn for an instance target, or null. */
+    elementForTarget({ instanceId, path, nodeId }) {
+      const holder = elements.get(instanceId);
+      if (!holder) return null;
+      // The instance's own root: its component's root node.
+      if (path.length === 0 && holder.getAttribute("data-ninerr-component") === nodeId) return holder;
+      const chain = JSON.stringify([instanceId, ...path]);
+      for (const element of holder.querySelectorAll("[data-ninerr-instance]")) {
+        if (element.getAttribute("data-ninerr-id") === nodeId && element.getAttribute("data-ninerr-instance") === chain) return element;
+      }
+      return null;
     },
     get size() {
       return elements.size;
