@@ -194,6 +194,8 @@ test("an agent adds a slot and fills an instance's slot with a component, never 
     assert.ok((await ok("instance_layers", { instanceId })).layers.some((layer) => layer.text === "Hot"), "and takes an override like one");
     assert.match(refusal(await tool("set_instance_values", { instanceId, values: { [propertyId]: "nowhere" } })), /takes a component's id/u);
     assert.match(refusal(await tool("set_instance_values", { instanceId, values: { [propertyId]: cardId } })), /draws this instance's component/u);
+    assert.ok(layers.every((layer) => layer.stale === false), "nothing it draws is stale");
+    assert.equal(layers[0].componentId, null, "an ordinary layer names no component it draws");
     assert.match(refusal(await tool("add_component_property", { componentId: cardId, name: "Icon", kind: "instance-swap", targetNodeId: cardId })), /targets an instance inside the component/u);
     // A slot's default is a component, never one that draws this one.
     assert.match(refusal(await tool("add_component_property", { componentId: cardId, name: "Other", kind: "slot", targetNodeId: cardId, default: "nowhere" })), /default takes a component's id/u);

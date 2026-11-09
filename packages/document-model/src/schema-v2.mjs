@@ -444,7 +444,7 @@ function targetProblem(nodes, node) {
     if (property.kind === "slot" && target !== null && target.type === "component-instance") return `slot property ${shown(property.id)} targets an instance; a slot is a layer that holds what is put in it`;
     if ((property.kind === "instance-swap" || property.kind === "slot") && property.default !== "") {
       const chosen = Object.hasOwn(nodes, property.default) ? nodes[property.default] : null;
-      if (chosen === null || chosen.type !== "component-definition") return `${property.kind} property ${shown(property.id)} of ${shown(node.props.name ?? node.id)} has a default component that is gone; choose another default or "" before deleting it`;
+      if (chosen === null || chosen.type !== "component-definition") return `${property.kind} property ${shown(property.id)} of ${shown(node.props.name ?? node.id)} has a default that is not a component (it is gone, or is another kind of layer); choose another default or ""`;
       if (chosen.id === node.id) return `${property.kind} property ${shown(property.id)}'s default is its own component, which cannot be drawn inside itself`;
     }
   }

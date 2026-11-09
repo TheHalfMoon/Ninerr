@@ -1,6 +1,6 @@
 // Components, instances and detaching (ADR-0005): the history operations the editor sends as one
 // transaction each. Pure functions over the document; the canvas draws the result.
-import { expandInstance, styleDeclarationProblem } from "../../renderer/src/index.mjs";
+import { chosenComponents, expandInstance, styleDeclarationProblem } from "../../renderer/src/index.mjs";
 
 const siblingsOf = (document, node) => (node.parentId === null ? document.rootIds : document.nodes[node.parentId].children);
 const ancestors = function* (document, node) {
@@ -49,30 +49,56 @@ export function createComponent(document, nodeId, { id, name }) {
   ];
 }
 
-/** Whether `componentId`, drawn, draws `targetId`: itself, or through the instances it holds. */
-export function drawsComponent(document, componentId, targetId) {
-  const seen = new Set();
+const isComponent = (document, id) => typeof id === "string" && Object.hasOwn(document.nodes, id) && document.nodes[id].type === "component-definition";
+
+/**
+ * Each component and the components it draws directly: its swap and slot defaults, and each
+ * instance inside it, with the components that instance's swap and slot values choose. One pass.
+ */
+export function componentGraph(document) {
+  const graph = new Map();
+  for (const node of Object.values(document.nodes)) {
+    if (node.type !== "component-definition") continue;
+    const draws = new Set();
+    for (const property of Array.isArray(node.props.properties) ? node.props.properties : []) if ((property.kind === "instance-swap" || property.kind === "slot") && isComponent(document, property.default)) draws.add(property.default);
+    graph.set(node.id, draws);
+  }
+  for (const node of Object.values(document.nodes)) {
+    if (node.type !== "component-instance") continue;
+    const inside = [...ancestors(document, node)].find((parent) => parent.type === "component-definition");
+    if (!inside) continue;
+    for (const id of [node.props.componentId, ...chosenComponents(document, node)]) if (isComponent(document, id)) graph.get(inside.id).add(id);
+  }
+  return graph;
+}
+
+/** Whether `componentId`, drawn, draws `targetId`: itself, or through any component it draws. */
+export function drawsComponent(document, componentId, targetId, graph = componentGraph(document)) {
+  const seen = new Set([componentId]);
   const queue = [componentId];
-  while (queue.length > 0) {
-    const id = queue.shift();
-    if (id === targetId) return true;
-    if (seen.has(id) || !document.nodes[id]) continue;
-    seen.add(id);
-    const component = (value) => typeof value === "string" && document.nodes[value]?.type === "component-definition";
-    // Its swap and slot defaults, and every instance inside it with its swap and slot values.
-    for (const property of document.nodes[id].props.properties ?? []) if ((property.kind === "instance-swap" || property.kind === "slot") && component(property.default)) queue.push(property.default);
-    const stack = [...document.nodes[id].children];
-    while (stack.length > 0) {
-      const node = document.nodes[stack.pop()];
-      if (!node) continue;
-      if (node.type === "component-instance") {
-        queue.push(node.props.componentId);
-        for (const value of Object.values(node.props.propertyValues ?? {})) if (component(value)) queue.push(value);
-      }
-      stack.push(...node.children);
-    }
+  for (let at = 0; at < queue.length; at += 1) {
+    if (queue[at] === targetId) return true;
+    for (const next of graph.get(queue[at]) ?? []) if (!seen.has(next)) queue.push(next) && seen.add(next);
   }
   return false;
+}
+
+/**
+ * The components an instance's swap or slot can choose: none that draws the instance's own
+ * component or a component the instance sits in, which would draw a component inside itself.
+ */
+export function componentsFor(document, instanceId) {
+  const instance = document.nodes[instanceId];
+  if (!instance || instance.type !== "component-instance") return [];
+  const graph = componentGraph(document);
+  // Every component that draws one of these, found by walking the graph backwards once.
+  const drawnBy = new Map();
+  for (const [id, draws] of graph) for (const next of draws) drawnBy.set(next, [...(drawnBy.get(next) ?? []), id]);
+  // (A component the instance sits in draws its component, so the walk reaches it too.)
+  const refused = new Set([instance.props.componentId]);
+  const queue = [...refused];
+  for (let at = 0; at < queue.length; at += 1) for (const id of drawnBy.get(queue[at]) ?? []) if (!refused.has(id)) queue.push(id) && refused.add(id);
+  return componentsOf(document).filter((entry) => !refused.has(entry.id));
 }
 
 /**
@@ -136,7 +162,7 @@ export function instanceLayers(document, instanceId) {
   const componentId = document.nodes[instanceId].props.componentId;
   const rootNode = document.nodes[componentId];
   const hidden = (props) => props.attributes?.hidden !== undefined;
-  const layers = [{ instanceId, path: [], nodeId: componentId, mainId: componentId, label: `${rootNode?.props?.name ?? "Component"} (its root)`, depth: 0, text: typeof view.props.text === "string" ? view.props.text : null, hidden: hidden(view.props), stale: false }];
+  const layers = [{ instanceId, path: [], nodeId: componentId, mainId: componentId, label: `${rootNode?.props?.name ?? "Component"} (its root)`, depth: 0, text: typeof view.props.text === "string" ? view.props.text : null, hidden: hidden(view.props), stale: view.stale === true }];
   const walk = (entry, depth) => {
     for (const child of entry.children) {
       const node = document.nodes[child.id];

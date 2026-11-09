@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createDocument, createNode } from "../packages/document-model/src/index.mjs";
 import { commitTransaction, createHistoryState, undo } from "../packages/history/src/index.mjs";
 import { definitionsAbove, expandInstance, instancesDrawing, slotIdOf, withInstancesExpanded } from "../packages/renderer/src/index.mjs";
-import { componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers } from "../packages/canvas/src/components.mjs";
+import { componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers } from "../packages/canvas/src/components.mjs";
 
 // ADR-0005: an instance stores only its component, property values and overrides, and is expanded
 // when drawn; nothing expanded is stored.
@@ -302,7 +302,7 @@ test("swap and slot rules: their targets, their defaults, and a value that would
   const property = (fields) => [{ type: "set-props", nodeId: "comp", set: { properties: [{ id: "p", name: "P", kind: "instance-swap", default: "", target: { nodeId: "title", field: "children" }, ...fields }] } }];
   assert.throws(() => p.run(property({})), /targets title, which is not an instance/u);
   assert.throws(() => p.run(property({ kind: "slot", target: { nodeId: "title", field: "text" } })), /sets its target's children/u);
-  assert.throws(() => p.run(property({ kind: "slot", default: "nowhere" })), /default component that is gone/u);
+  assert.throws(() => p.run(property({ kind: "slot", default: "nowhere" })), /default that is not a component/u);
   assert.throws(() => p.run(property({ kind: "slot", default: "comp" })), /default is its own component/u);
   p.run(property({ kind: "slot" }));
   // A slot that would draw Card inside Card is drawn as nothing there, not forever.
@@ -340,4 +340,40 @@ test("a slot on a text layer draws its component in place of the text; drawsComp
   const detached = Object.values(p.document.nodes).filter((node) => node.props.text === "★" && node.type !== "component-definition");
   assert.equal(detached.length, 1, "the icon the slot drew is now a layer of its own");
   assert.equal(Object.values(p.document.nodes).some((node) => node.id.includes("\u001f")), false, "no drawn id is stored");
+});
+
+test("a slot on the component's root that cannot draw marks the instance stale; an empty slot keeps its text", () => {
+  const p = project();
+  p.run([{ type: "set-props", nodeId: "card", set: { text: "Own" } }]);
+  p.run(createComponent(p.document, "card", { id: "comp", name: "Card" }));
+  p.run([{ type: "set-props", nodeId: "comp", set: { properties: [{ id: "p", name: "P", kind: "slot", default: "", target: { nodeId: "comp", field: "children" } }] } }]);
+  p.run(insertInstance(p.document, "comp", { id: "inst" }));
+  const empty = expandInstance(p.document, "inst");
+  assert.deepEqual([empty.props.text, empty.stale], ["Own", undefined], "with no value the layer keeps its own text and children");
+  p.run([{ type: "set-props", nodeId: "inst", set: { propertyValues: { p: "comp" } } }]);
+  const looped = expandInstance(p.document, "inst");
+  assert.deepEqual([looped.props.text, looped.children, looped.stale], [undefined, [], true]);
+  assert.equal(instanceLayers(p.document, "inst")[0].stale, true, "its root entry says so");
+});
+
+test("only swap and slot values are followed, and a choice may not draw the component an instance sits in", () => {
+  const p = project();
+  p.run([
+    { type: "insert-node", parentId: "page", index: 1, node: { id: "icon", type: "component-definition", props: { name: "Icon", properties: [], text: "★" } } },
+    { type: "insert-node", parentId: "page", index: 2, node: { id: "outer", type: "component-definition", props: { name: "Outer", properties: [] }, children: [] } },
+  ]);
+  p.run(createComponent(p.document, "card", { id: "comp", name: "Card" }));
+  p.run([{ type: "set-props", nodeId: "comp", set: { properties: [
+    { id: "t", name: "T", kind: "text", default: "", target: { nodeId: "title", field: "text" } },
+    { id: "s", name: "S", kind: "slot", default: "", target: { nodeId: "badge", field: "children" } },
+  ] } }]);
+  // An instance of Card inside Outer, whose text value happens to be Icon's id.
+  p.run([{ type: "insert-node", parentId: "outer", index: 0, node: { id: "in-outer", type: "component-instance", props: { componentId: "comp", propertyValues: { t: "icon" } } } }]);
+  assert.equal(drawsComponent(p.document, "outer", "icon"), false, "a text value is not a component to draw");
+  assert.deepEqual(instancesDrawing(p.document, ["icon"]), []);
+  // Its slot may not choose Outer (it sits in Outer) or Card (its own), but may choose Icon.
+  assert.deepEqual(componentsFor(p.document, "in-outer").map((entry) => entry.id), ["icon"]);
+  // Nor a component that draws Outer through a slot default.
+  p.run([{ type: "insert-node", parentId: "page", index: 3, node: { id: "wrap", type: "component-definition", props: { name: "Wrap", properties: [{ id: "w", name: "W", kind: "slot", default: "outer", target: { nodeId: "wrap", field: "children" } }] }, children: [] } }]);
+  assert.deepEqual(componentsFor(p.document, "in-outer").map((entry) => entry.id), ["icon"]);
 });

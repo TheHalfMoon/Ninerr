@@ -249,8 +249,21 @@ export function drawnRoots(document) {
 
 // ---------- component instances (ADR-0005) ----------
 
-/** The id of what a slot draws in a layer: the layer's id and a separator no stored id uses. */
+/** The id of what a slot draws in a layer: the layer's id and a unit separator, which ids made by the editor never hold. */
 export const slotIdOf = (layerId) => `${layerId}\u001fslot`;
+
+/**
+ * The component ids an instance's swap and slot values name: only values of its component's
+ * instance-swap and slot properties, whether or not that component still exists.
+ */
+export function chosenComponents(document, instance) {
+  const definition = Object.hasOwn(document.nodes, instance.props.componentId) ? document.nodes[instance.props.componentId] : undefined;
+  const values = isPlainRecord(instance.props.propertyValues) ? instance.props.propertyValues : {};
+  if (definition?.type !== "component-definition" || !Array.isArray(definition.props.properties)) return [];
+  return definition.props.properties
+    .filter((property) => (property.kind === "instance-swap" || property.kind === "slot") && Object.hasOwn(values, property.id) && typeof values[property.id] === "string" && values[property.id] !== "")
+    .map((property) => values[property.id]);
+}
 
 // An instance is expanded when it is drawn, and nothing expanded is ever stored: one change to
 // its component redraws every instance. Its drawn layers keep their component node's id as
@@ -360,13 +373,13 @@ function expand(document, instance, chain, outer, depth, budget, seen) {
       return { ...nested, props: withVisibility(merged.props, current.hidden), chain: here };
     }
     // A slot property with a component draws that component here, in place of the layer's own
-    // children: an instance the slot makes, whose id is the layer's with "/slot".
+    // children and text: an instance the slot makes, whose id is slotIdOf(the layer).
     const slot = properties.find((property) => property.kind === "slot" && property.target?.nodeId === node.id && typeof values[property.id] === "string" && values[property.id] !== "");
     if (slot) {
       const slotId = slotIdOf(node.id);
       const passed = [...variantOverrides, ...own].filter((override) => override.path?.[0] === slotId).map((override) => ({ ...override, path: override.path.slice(1) }));
       const filled = expand(document, { id: slotId, props: { componentId: values[slot.id] } }, here, passed, depth + 1, budget, inside);
-      // What is set on the slot's content itself (path [], node "<layer>/slot") is drawn on its
+      // What is set on the slot's content itself (path [], node slotIdOf(the layer)) is drawn on its
       // root, as on a nested instance's.
       let root = filled === null ? null : { props: filled.props, hidden: null };
       if (root !== null) for (const override of [...variantOverrides, ...own]) if (Array.isArray(override?.path) && override.path.length === 0 && override.nodeId === slotId) root = overridden(root, override.set);
@@ -382,7 +395,7 @@ function expand(document, instance, chain, outer, depth, budget, seen) {
   const style = { ...(isPlainRecord(root.props.style) ? root.props.style : {}), ...(isPlainRecord(instance.props.style) ? instance.props.style : {}) };
   const props = { ...root.props, style };
   if (isPlainRecord(instance.props.modes)) props.modes = instance.props.modes;
-  return { id: instanceId, type: "component-instance", componentId: definition.id, props, chain, children: root.children };
+  return { id: instanceId, type: "component-instance", componentId: definition.id, props, chain, children: root.children, ...(root.stale ? { stale: true } : {}) };
 }
 
 /**
@@ -433,8 +446,8 @@ export function instancesDrawing(document, definitionIds) {
       }
     }
     // The components it can draw: its own, and those its swap and slot values choose.
-    const chosen = Object.values(isPlainRecord(node.props.propertyValues) ? node.props.propertyValues : {}).filter((value) => typeof value === "string" && Object.hasOwn(document.nodes, value) && document.nodes[value].type === "component-definition");
-    instances.push({ id, componentId: node.props.componentId, draws: [node.props.componentId, ...chosen], inside });
+    // (A value naming a component that was just deleted still counts, so its instance is redrawn.)
+    instances.push({ id, componentId: node.props.componentId, draws: [node.props.componentId, ...chosenComponents(document, node)], inside });
   }
   // A component whose swap or slot defaults draw a touched one is touched too.
   const defaults = [];
@@ -975,7 +988,9 @@ export function createRenderer(root) {
       elements.set(node.id, target);
     }
     for (const child of [...target.children]) child.remove();
-    target.removeAttribute("data-ninerr-stale");
+    // A slot on the component's root that cannot draw its choice marks the instance itself.
+    if (view.stale) target.setAttribute("data-ninerr-stale", "");
+    else target.removeAttribute("data-ninerr-stale");
     // The component it draws, whose root it is: a layer an instance's root override names.
     target.setAttribute("data-ninerr-component", node.props.componentId);
     apply(target, { ...view, id: node.id, type: node.type }, plan);
@@ -1072,7 +1087,8 @@ export function createRenderer(root) {
       // Each instance the change touches, or that draws a component it touched (nested ones too),
       // is drawn again, once.
       const redraw = new Set(affectedNodeIds.filter((id) => document.nodes[id]?.type === "component-instance"));
-      for (const id of instancesDrawing(document, definitionsAbove(document, affectedNodeIds))) redraw.add(id);
+      const gone = affectedNodeIds.filter((id) => !Object.hasOwn(document.nodes, id));
+      for (const id of instancesDrawing(document, [...definitionsAbove(document, affectedNodeIds), ...gone])) redraw.add(id);
       for (const id of redraw) {
         const element = elements.get(id);
         if (element) expandInto(element, document.nodes[id], document);

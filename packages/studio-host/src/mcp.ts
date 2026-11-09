@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { styleDeclarationProblem } from "@ninerr/renderer";
-import { componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
+import { componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
 import { exportJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
@@ -578,7 +578,7 @@ const TOOLS: Tool[] = [
     run: ({ session }, args) => {
       const instance = nodeOf(session, args.instanceId);
       if (instance.type !== "component-instance") throw new ToolError("instanceId must name an instance");
-      return { layers: instanceLayers(session.document, instance.id).map((layer: any) => ({ path: layer.path, nodeId: layer.nodeId, componentId: layer.mainId, label: layer.label, text: layer.text, hidden: layer.hidden, stale: layer.stale, override: overrideFor(session.document, instance.id, layer)?.set ?? null })) };
+      return { layers: instanceLayers(session.document, instance.id).map((layer: any) => ({ path: layer.path, nodeId: layer.nodeId, componentId: layer.mainId !== layer.nodeId ? layer.mainId : null, label: layer.label, text: layer.text, hidden: layer.hidden, stale: layer.stale, override: overrideFor(session.document, instance.id, layer)?.set ?? null })) };
     },
   },
   {
@@ -601,8 +601,8 @@ const TOOLS: Tool[] = [
         // this instance's own component inside itself is refused.
         if ((property.kind === "instance-swap" || property.kind === "slot") && value !== "") {
           const chosen = (session.document as any).nodes[value as string];
-          if (!chosen || chosen.type !== "component-definition") throw new ToolError(`${property.name} takes a component's id, or "" for its default`);
-          if (drawsComponent(session.document, value, instance.props.componentId)) throw new ToolError(`${chosen.props.name ?? "That component"} draws this instance's component, so it cannot go inside it`);
+          if (!chosen || chosen.type !== "component-definition") throw new ToolError(`${property.name} takes a component's id, or "" for the layer's own content`);
+          if (!componentsFor(session.document, instance.id).some((entry: any) => entry.id === value)) throw new ToolError(`${chosen.props.name ?? "That component"} draws this instance's component or one it sits in, so it cannot go inside it`);
         }
       }
       return edit([{ type: "set-props", nodeId: instance.id, set: { propertyValues: { ...(instance.props.propertyValues ?? {}), ...args.values } } }], "Set the instance's values");

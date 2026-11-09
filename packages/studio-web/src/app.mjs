@@ -11,7 +11,7 @@ import { HostError, connect, forgetToken } from "/packages/studio-web/src/client
 import { UI_COMPONENT_SOURCE_GROUPS, searchUiComponentSources } from "/packages/component-sources/src/catalog.mjs";
 import { TOKEN_TYPES } from "/packages/document-model/src/schema-v2.mjs";
 import { addMode, addToken, createDesignSystem, deleteToken, designSystemOf, renameToken, setToken, tokenUses } from "/packages/document-model/src/tokens.mjs";
-import { componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, parseDeclarations, resetInstance, setInstanceOverride } from "/packages/canvas/src/components.mjs";
+import { componentsFor, componentsOf, createComponent, detachInstance, insertInstance, instanceLayers, overrideFor, parseDeclarations, resetInstance, setInstanceOverride } from "/packages/canvas/src/components.mjs";
 
 // While the Tokens dialog is open, how it shows the document again after any change (an Undo, an
 // agent's edit); it answers false once the dialog is gone.
@@ -735,12 +735,12 @@ function openComponentsDialog() {
           else if (property.kind === "variant") control = el("select", { "aria-label": label, "data-property": property.id }, ...property.options.map((option) => el("option", { value: option, selected: option === current }, option)));
           // An instance swap or a slot chooses a component: none of the ones it would draw itself in.
           else if (property.kind === "instance-swap" || property.kind === "slot") {
-            const fits = componentsOf(document).filter((entry) => !drawsComponent(document, entry.id, selected.props.componentId));
+            const fits = componentsFor(document, selected.id);
             const missing = current !== "" && !fits.some((entry) => entry.id === current);
             control = el("select", { "aria-label": label, "data-property": property.id },
               el("option", { value: "", selected: current === "" }, property.kind === "slot" ? "Its own content" : "The component it has"),
               ...(missing ? [el("option", { value: current, selected: true, disabled: true }, "A component that is gone, or would draw this one in itself")] : []),
-              ...fits.map((entry) => el("option", { value: entry.id, selected: entry.id === current }, entry.name)));
+              ...fits.map((entry) => el("option", { value: entry.id, selected: entry.id === current }, entry.id === property.default ? `${entry.name} (its default)` : entry.name)));
           }
           else control = el("input", { value: String(current), "aria-label": label, "data-property": property.id });
           control.addEventListener("change", () => {
