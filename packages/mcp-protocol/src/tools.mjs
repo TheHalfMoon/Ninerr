@@ -42,6 +42,9 @@ const CLASSES = Object.freeze({
   set_instance_override: "write",
   reset_instance: "write",
   detach_instance: "write",
+  // Component sources' records (Meta Astryx at a pinned commit): read only, from Ninerr itself.
+  search_components: "read",
+  get_component: "read",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

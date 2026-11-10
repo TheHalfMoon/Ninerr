@@ -176,3 +176,23 @@ test("bad input to the component and mode tools is refused, saying why", async (
     assert.match(refusal(await tool("insert_instance", { componentId, afterId: "no-such-layer" })), /no node/u);
   });
 });
+
+test("an agent finds a library component by purpose and reads its exact API and provenance, changing nothing", async () => {
+  await withAgent(async ({ host, tool, ok }) => {
+    const revision = host.session.document.revision;
+    const found = await ok("search_components", { query: "command palette" });
+    assert.equal(found.components[0].id, "astryx:CommandPalette");
+    assert.deepEqual(found.sources.map((source) => [source.id, source.commit]), [["astryx", "2309691dba9533635259113316a2cb14ec832933"]]);
+    const overlays = await ok("search_components", { category: "Overlay", limit: 50 });
+    assert.ok(overlays.components.length > 3 && overlays.components.every((entry) => entry.category === "Overlay"));
+    assert.equal((await ok("search_components", { query: "no such widget at all" })).components.length, 0);
+    const { component, provenance } = await ok("get_component", { id: "astryx:Button" });
+    assert.deepEqual(component.variants.find((variant) => variant.prop === "variant").values, ["primary", "secondary", "ghost", "destructive"]);
+    assert.equal(component.props.find((prop) => prop.name === "label").required, true);
+    assert.deepEqual([provenance.commit, provenance.license.spdx, provenance.importPolicy, provenance.doc.path], ["2309691dba9533635259113316a2cb14ec832933", "MIT", "allowed", "packages/core/src/Button/Button.doc.mjs"]);
+    assert.match(provenance.doc.sha256, /^[0-9a-f]{64}$/u);
+    for (const id of ["astryx:NoSuch", "shadcn:Button", "Button", "__proto__:x", "constructor:Button"]) assert.match(refusal(await tool("get_component", { id })), /take ids from search_components/u, id);
+    assert.match(refusal(await tool("search_components", { source: "shadcn" })), /source|enum|one of/u);
+    assert.equal(host.session.document.revision, revision, "reading records changes nothing");
+  });
+});
