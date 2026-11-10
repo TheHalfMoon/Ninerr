@@ -145,6 +145,19 @@ test("a project on Astryx is not given a shadcn item built on another family", a
   assert.equal((await ok(call("POST", "/api/components/plan", { item: plain }), "plain plan")).appliable, true);
 });
 
+test("a Base UI project is not given an Astryx item, and a project on two families takes no item", async (t) => {
+  const base = await setup(t, { manifest: { dependencies: { "@base-ui/react": "^1.0.0" } } });
+  const astryx = item({ dependencies: ["@astryxdesign/core@^0.7.12"], files: [{ path: "ui/save.tsx", type: "registry:ui", content: 'import { Button } from "@astryxdesign/core/Button";\nexport function Save() {\n  return <Button label="Save" />;\n}\n' }] });
+  const plan = await ok(base.call("POST", "/api/components/plan", { item: astryx }), "plan");
+  assert.equal(plan.primitives.family, "astryx");
+  assert.match(plan.blockers.join(" "), /The project builds on Base UI, and this item on Astryx\. Astryx brings its own components/u);
+  const both = await setup(t, { manifest: { dependencies: { "@astryxdesign/core": "^0.7.12", "radix-ui": "^1.4.0" } } });
+  const plain = item({ dependencies: [], files: [{ path: "lib/format.ts", type: "registry:lib", content: "export const format = (n) => String(n);\n" }] });
+  const mixed = await ok(both.call("POST", "/api/components/plan", { item: plain }), "mixed plan");
+  assert.equal(mixed.project.family, "mixed");
+  assert.match(mixed.blockers.join(" "), /already uses more than one primitive family/u);
+});
+
 test("each source's import policy decides, and an unknown registry URL is refused", async (t) => {
   const { app, call } = await setup(t);
   const aceternity = await ok(call("POST", "/api/components/plan", { item: item(), origin: { url: "https://ui.aceternity.com/registry/pill.json" } }), "aceternity");

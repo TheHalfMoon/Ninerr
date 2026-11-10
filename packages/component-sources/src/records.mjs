@@ -17,6 +17,7 @@ const RECORD_SETS = Object.freeze({
 
 export const RECORD_SOURCES = Object.freeze(Object.keys(RECORD_SETS));
 export const RENDERING = Object.freeze(["server-safe", "client"]);
+export const STATUSES = Object.freeze(["stable", "deprecated"]);
 export const COMPONENT_RECORD_FIELDS = Object.freeze([
   "id", "source", "name", "description", "category", "subComponentOf", "keywords", "framework", "styling",
   "importPath", "dependencies", "props", "variants", "accessibility", "guidance", "themes", "themingTargets",
@@ -42,17 +43,19 @@ export function componentRecordProblem(record, source) {
   for (const field of ["keywords", "themes", "themingTargets", "limitations", "sourceFiles", "tests"]) if (!isStrings(record[field])) return `${record.id}: ${field} is a list of text`;
   if (!isRecord(record.dependencies) || !Object.values(record.dependencies).every(isString)) return `${record.id}: dependencies map names to versions`;
   if (!RENDERING.includes(record.rendering)) return `${record.id}: rendering is ${RENDERING.join(" or ")}`;
+  if (!STATUSES.includes(record.status)) return `${record.id}: status is ${STATUSES.join(" or ")}`;
   if (!Array.isArray(record.props)) return `${record.id}: props is a list`;
   for (const prop of record.props) {
     if (!isRecord(prop) || !isString(prop.name) || !isString(prop.type) || typeof prop.required !== "boolean" || !isStringOrNull(prop.default) || !isString(prop.description)) return `${record.id}: a prop has name, type, required, default and description`;
     if (prop.values !== null && !isStrings(prop.values)) return `${record.id}: prop ${prop.name}'s values are a list of text or null`;
   }
-  if (!Array.isArray(record.variants) || !record.variants.every((variant) => isRecord(variant) && record.props.some((prop) => prop.name === variant.prop && prop.values !== null) && isStrings(variant.values))) return `${record.id}: each variant is a prop with listed values`;
-  if (!Array.isArray(record.accessibility) || !record.accessibility.every((item) => isRecord(item) && isString(item.name) && isString(item.description))) return `${record.id}: accessibility entries have a name and a description`;
+  if (!Array.isArray(record.variants) || !record.variants.every((variant) => isRecord(variant) && isStrings(variant.values) && record.props.some((prop) => prop.name === variant.prop && prop.values !== null && prop.values.join("\u0000") === variant.values.join("\u0000")))) return `${record.id}: each variant is a prop with listed values`;
+  if (!Array.isArray(record.accessibility) || !record.accessibility.every((item) => isRecord(item) && isString(item.name) && isString(item.description) && isStringOrNull(item.criterion) && isStringOrNull(item.requirement))) return `${record.id}: accessibility entries have a name and a description`;
   if (!Array.isArray(record.guidance) || !record.guidance.every((item) => isRecord(item) && typeof item.do === "boolean" && isString(item.text))) return `${record.id}: guidance entries say do or don't`;
   if (!Array.isArray(record.examples) || !record.examples.every((item) => isRecord(item) && isString(item.label) && isString(item.code))) return `${record.id}: examples have a label and code`;
   if (!isRecord(record.doc) || !isString(record.doc.path) || !SHA256.test(record.doc.sha256)) return `${record.id}: doc names its source file and its sha256`;
-  if (!record.sourceFiles.every((path) => !path.startsWith("/") && !path.split("/").includes(".."))) return `${record.id}: source files are paths inside the source`;
+  const inside = (path) => !path.startsWith("/") && !path.includes("\\") && !path.split("/").includes("..");
+  if (![...record.sourceFiles, ...record.tests, record.doc.path].every(inside)) return `${record.id}: source files are paths inside the source`;
   return null;
 }
 
@@ -60,7 +63,13 @@ const cache = new Map();
 /** The pinned snapshot of `sourceId`'s records: { source, repository, commit, package, license, components }. */
 export async function loadComponentRecords(sourceId) {
   if (!Object.hasOwn(RECORD_SETS, sourceId)) throw new Error(`No component records for ${String(sourceId)}`);
-  if (!cache.has(sourceId)) cache.set(sourceId, RECORD_SETS[sourceId]().then((module) => module.default));
+  if (!cache.has(sourceId)) {
+    // A load that failed is tried again next time.
+    cache.set(sourceId, RECORD_SETS[sourceId]().then((module) => module.default, (error) => {
+      cache.delete(sourceId);
+      throw error;
+    }));
+  }
   return cache.get(sourceId);
 }
 
@@ -92,5 +101,6 @@ export function searchComponents(records, { query = "", category = null, limit =
     if (terms.length === 0 || score > 0) scored.push({ record, score: terms.length === 0 ? 0 : score });
   }
   scored.sort((a, b) => b.score - a.score || (a.record.name < b.record.name ? -1 : a.record.name > b.record.name ? 1 : 0));
-  return scored.slice(0, Math.max(0, Math.min(limit, 200))).map((entry) => entry.record);
+  const bound = Number.isInteger(limit) ? Math.max(0, Math.min(limit, 200)) : 50;
+  return scored.slice(0, bound).map((entry) => entry.record);
 }

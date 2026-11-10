@@ -1002,7 +1002,7 @@ function openComponentSourcesDialog() {
     group.addEventListener("change", search);
     search();
     return [
-      el("p", {}, "Curated React component sources. This catalog works offline; no source is installed, fetched, or redistributed automatically."),
+      el("p", {}, "Curated React component sources. This catalog works offline: nothing is installed or fetched. Records of Astryx's components, at a pinned commit, come with Ninerr."),
       el("label", { for: "component-source-query" }, "Find source", query),
       el("label", { for: "component-source-group" }, "Category", group),
       count, results, detail,

@@ -20,15 +20,16 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const OUT = join(ROOT, "packages/component-sources/src/astryx-records.mjs");
 const checkout = process.argv[2];
 if (!checkout) throw new Error("usage: node scripts/component-sources/astryx-snapshot.mjs <astryx checkout>");
-const git = (...args) => execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8" }).trim();
-if (git("rev-parse", "HEAD") !== ASTRYX.commit) throw new Error(`the checkout is not at ${ASTRYX.commit}`);
-if (git("status", "--porcelain") !== "") throw new Error("the checkout has local changes");
-
-const read = (path) => readFileSync(join(checkout, path), "utf8");
+// Use a fresh clone: git honours the checkout's own .git/config.
+const git = (...args) => execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+if (git("rev-parse", "HEAD").trim() !== ASTRYX.commit) throw new Error(`the checkout is not at ${ASTRYX.commit}`);
+// Files are read from the commit itself, so line-ending settings cannot change their text or hash.
+const read = (path) => git("show", `${ASTRYX.commit}:${path}`);
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
-const tracked = git("ls-files", "packages/core/src").split("\n");
+const tracked = git("ls-tree", "-r", "--name-only", ASTRYX.commit, "packages/core/src").trim().split("\n");
 const core = JSON.parse(read("packages/core/package.json"));
-const themes = git("ls-files", "packages/themes/*/package.json").split("\n")
+const themes = git("ls-tree", "-r", "--name-only", ASTRYX.commit, "packages/themes").trim().split("\n")
+  .filter((path) => /^packages\/themes\/[^/]+\/package\.json$/u.test(path))
   .map((path) => JSON.parse(read(path)))
   .filter((pkg) => pkg.private !== true)
   .map((pkg) => pkg.name)
@@ -36,23 +37,28 @@ const themes = git("ls-files", "packages/themes/*/package.json").split("\n")
 
 let omitted = 0;
 // The literal value of an expression, or undefined (counted) for anything that is not a literal.
-const literal = (node) => {
+// A name refers to a top-level const of the same file whose value is a literal.
+const literal = (node, consts, seen = new Set()) => {
   switch (node?.type) {
     case "ObjectExpression": {
       const object = {};
       for (const property of node.properties) {
         const key = property.type === "ObjectProperty" && !property.computed ? (property.key.type === "Identifier" ? property.key.name : property.key.value) : undefined;
-        const value = typeof key === "string" ? literal(property.value) : undefined;
+        const value = typeof key === "string" ? literal(property.value, consts, seen) : undefined;
         if (typeof key !== "string") omitted += 1;
         else if (value !== undefined && key !== "__proto__") object[key] = value;
       }
       return object;
     }
-    case "ArrayExpression": return node.elements.map((element) => (element ? literal(element) : null)).filter((value) => value !== undefined);
+    case "ArrayExpression": return node.elements.map((element) => (element ? literal(element, consts, seen) : null)).filter((value) => value !== undefined);
     case "StringLiteral": case "NumericLiteral": case "BooleanLiteral": return node.value;
     case "NullLiteral": return null;
     case "TemplateLiteral":
       if (node.expressions.length === 0) return node.quasis.map((quasi) => quasi.value.cooked).join("");
+      omitted += 1;
+      return undefined;
+    case "Identifier":
+      if (consts.has(node.name) && !seen.has(node.name)) return literal(consts.get(node.name), consts, new Set(seen).add(node.name));
       omitted += 1;
       return undefined;
     default:
@@ -68,53 +74,79 @@ const unionValues = (type) => {
   const parts = String(type).split("|").map((part) => part.trim());
   return parts.length > 1 && parts.every((part) => /^'[^']*'$/u.test(part)) ? parts.map((part) => part.slice(1, -1)) : null;
 };
+const propsOf = (list) => (Array.isArray(list) ? list : []).filter((prop) => typeof prop?.name === "string").map((prop) => ({
+  name: prop.name,
+  type: text(prop.type, 400) ?? "unknown",
+  required: prop.required === true,
+  default: text(prop.default, 200),
+  description: text(prop.description, 600) ?? "",
+  values: unionValues(prop.type),
+}));
 
 const clientOnly = (code) => /^\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*['"]use client['"]/u.test(code);
+const isTest = (path) => /(\.test\.|\.spec\.|\/__tests__\/|\.stories\.|\.doc\.mjs$|test-violations)/u.test(path);
+// A component's own file: <name>.tsx in its doc's folder, else anywhere in core's source.
+const mainFileOf = (name, dir) => tracked.find((path) => path === `${dir}/${name}.tsx`) ?? tracked.find((path) => path.endsWith(`/${name}.tsx`) && !isTest(path)) ?? null;
+// It needs React on the client when its own file or its folder's entry says 'use client'; a
+// component whose file cannot be found is taken to need it.
+const needsClient = (main, dir) => {
+  if (main === null) return true;
+  const entries = [main, `${main.split("/").slice(0, -1).join("/")}/index.ts`, `${dir}/index.ts`].filter((path, at, all) => tracked.includes(path) && all.indexOf(path) === at);
+  return entries.some((path) => clientOnly(read(path)));
+};
 // What a person meets using it from Ninerr, beyond what its docs say.
-const limitationsOf = (client, doc) => [
+const limitationsOf = (client, deprecated) => [
   ...(client ? ["Needs React on the client for its behaviour. Ninerr's script-free canvas can show its markup and styles, not its interaction."] : []),
   "Copied (swizzled) source is StyleX: the project needs @astryxdesign/build or the StyleX compiler. Installing the package and its prebuilt astryx.css needs neither.",
-  ...(doc.deprecated ? [`Deprecated upstream: ${typeof doc.deprecated === "string" ? doc.deprecated : "see its docs"}`] : []),
+  ...(deprecated ? [`Deprecated upstream: ${typeof deprecated === "string" ? deprecated : "see its docs"}`] : []),
 ];
+// Components only: hooks (useX) and factory functions (createX) are not.
+const isComponentName = (name) => typeof name === "string" && /^[A-Z][A-Za-z0-9]*$/u.test(name);
 
-const records = [];
+// Each documented component: a doc's own entry, and the parts its `components` list documents.
+const entries = new Map();
 for (const docPath of tracked.filter((path) => path.endsWith(".doc.mjs"))) {
   const dir = docPath.split("/").slice(0, -1).join("/");
-  const folder = dir.split("/").at(-1);
   const source = read(docPath);
   const ast = parse(source, { sourceType: "module" });
-  const declaration = ast.program.body
-    .filter((statement) => statement.type === "ExportNamedDeclaration" && statement.declaration?.type === "VariableDeclaration")
-    .flatMap((statement) => statement.declaration.declarations)
-    .find((item) => item.id.type === "Identifier" && item.id.name === "docs");
-  const doc = declaration ? literal(declaration.init) : null;
-  // Components only: hooks (useX, with params and returns) and hidden entries are left out.
-  if (!doc || typeof doc.name !== "string" || /^use[A-Z]/u.test(doc.name) || doc.hidden === true || !Array.isArray(doc.props) && typeof doc.category !== "string" && typeof doc.subComponentOf !== "string") continue;
-  const files = tracked.filter((path) => path.startsWith(`${dir}/`));
-  const isTest = (path) => /(\.test\.|\.spec\.|\/__tests__\/|\.stories\.|\.doc\.mjs$|test-violations)/u.test(path);
-  const main = `${dir}/${doc.name}.tsx`;
+  const consts = new Map(ast.program.body
+    .flatMap((statement) => (statement.type === "VariableDeclaration" ? statement.declarations : statement.type === "ExportNamedDeclaration" && statement.declaration?.type === "VariableDeclaration" ? statement.declaration.declarations : []))
+    .filter((item) => item.id.type === "Identifier" && item.init)
+    .map((item) => [item.id.name, item.init]));
+  const doc = consts.has("docs") ? literal(consts.get("docs"), consts) : null;
+  if (!doc || !isComponentName(doc.name) || doc.hidden === true) continue;
+  const parts = (Array.isArray(doc.components) ? doc.components : []).filter((part) => isComponentName(part?.name));
+  const own = parts.find((part) => part.name === doc.name);
+  const at = { path: docPath, sha256: sha256(source) };
+  entries.set(doc.name, { doc, part: own ?? null, dir, at, partOf: typeof doc.subComponentOf === "string" ? doc.subComponentOf : null });
+  // A part documented only in this doc's list: a part of this component.
+  for (const part of parts) if (part.name !== doc.name && !entries.has(part.name)) entries.set(part.name, { doc: null, part, dir, at, partOf: typeof part.subComponentOf === "string" ? part.subComponentOf : doc.name, parent: doc });
+}
+// A part listed by a parent and also documented in its own doc keeps its own doc.
+for (const [name, entry] of entries) if (entry.doc === null && tracked.some((path) => path.endsWith(`/${name}.doc.mjs`))) entries.delete(name);
+
+const records = [];
+for (const [name, { doc, part, dir, at, partOf, parent }] of entries) {
+  const folder = dir.split("/").at(-1);
+  const main = mainFileOf(name, dir);
+  const client = needsClient(main, dir);
   const exportPath = `./${folder}`;
-  const props = (Array.isArray(doc.props) ? doc.props : []).filter((prop) => typeof prop?.name === "string").map((prop) => ({
-    name: prop.name,
-    type: text(prop.type, 400) ?? "unknown",
-    required: prop.required === true,
-    default: text(prop.default, 200),
-    description: text(prop.description, 600) ?? "",
-    values: unionValues(prop.type),
-  }));
-  const usage = doc.usage ?? {};
+  const props = propsOf(doc?.props ?? part?.props);
+  const usage = doc?.usage ?? {};
   const practices = Array.isArray(usage.bestPractices) ? usage.bestPractices : [];
+  const files = tracked.filter((path) => path.startsWith(`${dir}/`));
+  const deprecated = doc?.deprecated ?? part?.deprecated;
   records.push({
-    id: `${ASTRYX.id}:${doc.name}`,
+    id: `${ASTRYX.id}:${name}`,
     source: ASTRYX.id,
-    name: doc.name,
-    description: text(usage.description) ?? text(doc.description) ?? "",
-    category: typeof doc.category === "string" ? doc.category : null,
-    subComponentOf: typeof doc.subComponentOf === "string" ? doc.subComponentOf : null,
-    keywords: strings(doc.keywords).slice(0, 40),
+    name,
+    description: text(usage.description) ?? text(doc?.description) ?? text(part?.description) ?? "",
+    category: typeof (doc ?? parent)?.category === "string" ? (doc ?? parent).category : null,
+    subComponentOf: partOf,
+    keywords: strings(doc?.keywords).slice(0, 40),
     framework: `react ${core.peerDependencies.react}`,
     styling: "stylex",
-    importPath: typeof doc.importPath === "string" ? doc.importPath : Object.hasOwn(core.exports, exportPath) ? `${core.name}${exportPath.slice(1)}` : null,
+    importPath: typeof (doc ?? part)?.importPath === "string" ? (doc ?? part).importPath : Object.hasOwn(core.exports, exportPath) ? `${core.name}${exportPath.slice(1)}` : null,
     dependencies: Object.fromEntries(Object.entries({ ...core.dependencies, ...core.peerDependencies }).sort()),
     props,
     variants: props.filter((prop) => prop.values !== null).map((prop) => ({ prop: prop.name, values: prop.values, default: prop.default })),
@@ -123,16 +155,15 @@ for (const docPath of tracked.filter((path) => path.endsWith(".doc.mjs"))) {
     })),
     guidance: practices.filter((item) => typeof item?.description === "string").map((item) => ({ do: item.guidance !== false, text: text(item.description, 600) })),
     themes,
-    themingTargets: (Array.isArray(doc.theming?.targets) ? doc.theming.targets : []).map((target) => target?.className).filter((name) => typeof name === "string"),
-    examples: (Array.isArray(doc.examples) ? doc.examples : []).filter((item) => typeof item?.code === "string").slice(0, 3).map((item) => ({ label: text(item.label, 200) ?? "", code: item.code.trim().slice(0, 4000) })),
-    // A component whose main file starts with 'use client' needs React on the client to work.
-    limitations: limitationsOf(files.includes(main) && clientOnly(read(main)), doc),
-    rendering: files.includes(main) && clientOnly(read(main)) ? "client" : "server-safe",
+    themingTargets: (Array.isArray(doc?.theming?.targets) ? doc.theming.targets : []).map((target) => target?.className).filter((value) => typeof value === "string"),
+    examples: (Array.isArray(doc?.examples) ? doc.examples : []).filter((item) => typeof item?.code === "string").slice(0, 3).map((item) => ({ label: text(item.label, 200) ?? "", code: item.code.trim().slice(0, 4000) })),
+    limitations: limitationsOf(client, deprecated),
+    rendering: client ? "client" : "server-safe",
     // A part of another component shares its folder: the folder's files are listed on that component.
-    sourceFiles: typeof doc.subComponentOf === "string" ? files.filter((path) => path === main) : files.filter((path) => !isTest(path)),
-    tests: typeof doc.subComponentOf === "string" ? [] : files.filter((path) => isTest(path) && !path.endsWith(".doc.mjs")),
-    doc: { path: docPath, sha256: sha256(source) },
-    status: doc.deprecated ? "deprecated" : "stable",
+    sourceFiles: partOf !== null ? (main === null ? [] : [main]) : files.filter((path) => !isTest(path)),
+    tests: partOf !== null ? [] : files.filter((path) => isTest(path) && !path.endsWith(".doc.mjs")),
+    doc: at,
+    status: deprecated ? "deprecated" : "stable",
   });
 }
 records.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
