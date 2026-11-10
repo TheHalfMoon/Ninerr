@@ -232,11 +232,17 @@ function withNotice(path: string, content: string, origin: string, source: Compo
 
 // A registry item's CSS variable as a token type, by its name (shadcn names them so): what the
 // Tokens dialog lists it under. A colour is the default, as most of an item's variables are.
-function tokenTypeOf(name: string): string {
+export function tokenTypeOf(name: string): string {
   if (/radius/iu.test(name)) return "radius";
-  if (/font|family/iu.test(name)) return "fontFamily";
   if (/shadow/iu.test(name)) return "shadow";
   if (/opacity/iu.test(name)) return "opacity";
+  // Type-scale roles name their part last (Astryx's --text-body-size, --text-body-leading).
+  if (/font-?size|^text-.+-size$/iu.test(name)) return "fontSize";
+  if (/font-?weight|^text-.+-weight$/iu.test(name)) return "fontWeight";
+  if (/line-?height|leading/iu.test(name)) return "lineHeight";
+  if (/letter-?spacing|tracking/iu.test(name)) return "letterSpacing";
+  if (/font|family/iu.test(name)) return "fontFamily";
+  if (/breakpoint/iu.test(name)) return "breakpoint";
   if (/space|spacing|gap|padding|margin/iu.test(name)) return "spacing";
   return "color";
 }
