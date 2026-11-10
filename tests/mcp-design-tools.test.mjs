@@ -196,3 +196,17 @@ test("an agent finds a library component by purpose and reads its exact API and 
     assert.equal(host.session.document.revision, revision, "reading records changes nothing");
   });
 });
+
+test("the component record tools check their arguments and say what categories there are", async () => {
+  await withAgent(async ({ tool, ok }) => {
+    const found = await ok("search_components", { category: "overlay" });
+    assert.ok(found.components.length > 3 && found.components.every((entry) => entry.category === "Overlay"), "a category in any case");
+    assert.ok(found.categories.includes("Overlay") && found.categories.includes("Form Controls"));
+    assert.equal((await ok("search_components", { limit: 50 })).components.length, 50);
+    for (const limit of [0, -1, 51, 200, 2.5, "10"]) assert.match(refusal(await tool("search_components", { limit })), /limit is a whole number from 1 to 50/u, String(limit));
+    assert.match(refusal(await tool("search_components", { query: "x", extra: 1 })), /takes no argument "extra"/u);
+    assert.match(refusal(await tool("get_component", { id: "astryx:Button", source: "astryx" })), /takes no argument "source"/u);
+    assert.match(refusal(await tool("search_components", { query: 7 })), /query is text/u);
+    assert.match(refusal(await tool("get_component", { id: `astryx:${"x".repeat(400)}` })), /take ids from search_components/u);
+  });
+});

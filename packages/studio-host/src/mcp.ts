@@ -635,14 +635,20 @@ const TOOLS: Tool[] = [
   {
     name: "search_components",
     title: "Search library components",
-    description: "Find components of the component sources Ninerr has records of (Meta Astryx, at a pinned commit) by name or purpose, such as \"date picker\" or \"command palette\", optionally in one category. Gives each one's id for get_component.",
+    description: "Find components of the component sources Ninerr has records of (Meta Astryx, at a pinned commit) by name or purpose, such as \"date picker\" or \"command palette\", optionally in one category (the answer lists the categories). Gives each one's id for get_component.",
     inputSchema: object({ query: { type: "string", maxLength: 200 }, category: { type: "string", maxLength: 100 }, source: { type: "string", enum: [...RECORD_SOURCES] }, limit: { type: "integer", minimum: 1, maximum: 50 } }),
-    run: async (_context, args) => {
+    run: async (_context, given) => {
+      const args = onlyArguments(given, ["query", "category", "source", "limit"]);
+      if (args.query !== undefined && (typeof args.query !== "string" || args.query.length > 200)) throw new ToolError("query is text of at most 200 characters");
+      if (args.category !== undefined && (typeof args.category !== "string" || args.category.length > 100)) throw new ToolError("category is text");
+      if (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 50)) throw new ToolError("limit is a whole number from 1 to 50");
       const sources = args.source === undefined ? RECORD_SOURCES : [args.source];
       if (!sources.every((id: string) => RECORD_SOURCES.includes(id))) throw new ToolError(`source is one of ${RECORD_SOURCES.join(", ")}`);
       const snapshots = await Promise.all(sources.map((id: string) => loadComponentRecords(id)));
-      const found = searchComponents(snapshots.flatMap((snapshot: any) => snapshot.components), { query: typeof args.query === "string" ? args.query : "", category: typeof args.category === "string" ? args.category : null, limit: Number.isInteger(args.limit) ? args.limit : 20 });
+      const all = snapshots.flatMap((snapshot: any) => snapshot.components);
+      const found = searchComponents(all, { query: typeof args.query === "string" ? args.query : "", category: typeof args.category === "string" ? args.category : null, limit: Number.isInteger(args.limit) ? args.limit : 20 });
       return {
+        categories: [...new Set(all.map((record: any) => record.category).filter(Boolean))].sort(),
         sources: snapshots.map((snapshot: any) => ({ id: snapshot.source, repository: snapshot.repository, commit: snapshot.commit, package: snapshot.package })),
         components: found.map((record: any) => ({ id: record.id, name: record.name, category: record.category, partOf: record.subComponentOf, description: record.description.slice(0, 300), importPath: record.importPath, rendering: record.rendering })),
       };
@@ -653,8 +659,9 @@ const TOOLS: Tool[] = [
     title: "Library component",
     description: "One library component's record, by its id from search_components: its exact props and variants, accessibility criteria, guidance, examples, limitations, import path and dependencies, and where the record came from (repository, commit, doc file and its sha256, license, and what Ninerr may import from the source).",
     inputSchema: object({ id: { type: "string", maxLength: 300 } }, ["id"]),
-    run: async (_context, args) => {
-      const source = typeof args.id === "string" ? args.id.slice(0, args.id.indexOf(":")) : "";
+    run: async (_context, given) => {
+      const args = onlyArguments(given, ["id"]);
+      const source = typeof args.id === "string" && args.id.length <= 300 ? args.id.slice(0, args.id.indexOf(":")) : "";
       if (!RECORD_SOURCES.includes(source)) throw new ToolError("no such component; take ids from search_components");
       const snapshot: any = await loadComponentRecords(source);
       const record = snapshot.components.find((entry: any) => entry.id === args.id);
