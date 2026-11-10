@@ -72,6 +72,9 @@ test("hostile CSS is read in linear time or refused, never stalls or overflows",
   // Nested rules whose selectors would multiply are not read.
   const fan = tokensFromCss(`${"a,b,c,d{".repeat(6)}--x: 1;${"}".repeat(6)}`);
   assert.deepEqual(fan.theme, {});
+  // & keeps every combination a :root rule, so only the limit stops 2^20 selectors.
+  const doubling = tokensFromCss(`:root,:root{${"&,&{".repeat(20)}--y: 1;${"}".repeat(21)}`);
+  assert.deepEqual(doubling.theme, {}, "a rule whose selectors multiply past the limit is not read");
   assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
 });
 
