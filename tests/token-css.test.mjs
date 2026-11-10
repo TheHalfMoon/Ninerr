@@ -30,7 +30,49 @@ test("Astryx's token CSS: light-dark() splits into light and dark, motion and si
   assert.match(kept["--size-element-md"], /no size token type/u);
   assert.match(kept["--border-width"], /no border token type/u);
   assert.match(kept["--_chat-avatar-offset"], /private/u);
-  assert.equal(read.skipped, 2, "rules for other selectors are not tokens");
+  assert.equal(read.skipped, 2, "two rules for its own classes are not the page's tokens");
+});
+
+const THEME_CSS = readFileSync(new URL("./fixtures/astryx/theme-neutral.css", import.meta.url), "utf8");
+
+test("an Astryx theme's tokens are its @scope root's; coarse-pointer sizes and media surfaces are not the page's", () => {
+  const read = tokensFromCss(THEME_CSS);
+  assert.equal(read.source, "astryx");
+  assert.deepEqual([Object.keys(read.theme).length, Object.keys(read.light).length, Object.keys(read.dark).length, read.kept.length], [85, 101, 101, 20]);
+  assert.deepEqual([read.light["color-accent"], read.dark["color-accent"]], ["#1b1b1b", "#f1f1f1"]);
+  // Its @media (width < 1024px) and (pointer: coarse) sizes are for touch screens, not the page.
+  assert.equal(read.theme["font-size-base"], "0.875rem");
+  assert.ok(read.skipped >= 2, "the coarse-pointer and [data-astryx-media] rules are skipped");
+});
+
+test("only the page's rules count: other at-rules, other selectors and negated dark queries are skipped", () => {
+  const read = tokensFromCss(`
+    @media not (prefers-color-scheme: dark) { :root { --a: black; } }
+    @media (min-width: 900px) { .dark { --b: #123; } }
+    @supports (color: red) { :root { --c: red; } }
+    .x { :root { --d: red; } }
+    @media (prefers-color-scheme: dark) { :root { --e: #000; } }
+    @layer base { :root { --f: 1px; } }
+  `);
+  assert.deepEqual([read.theme, read.light, read.dark, read.skipped], [{ f: "1px" }, {}, { e: "#000" }, 4]);
+});
+
+test("nesting and the cascade: a parent keeps its own values, and a later value replaces an earlier one", () => {
+  assert.deepEqual(tokensFromCss(":root { --a: red; &.dark { --a: black; } --b: 1px; }"), { theme: { a: "red", b: "1px" }, light: {}, dark: { a: "black" }, kept: [], skipped: 0, source: null });
+  const later = tokensFromCss(":root { --a: light-dark(white, black); } :root { --a: red; } :root { --b: red; } :root { --b: light-dark(#fff, #000); }");
+  assert.deepEqual([later.theme, later.light, later.dark], [{ a: "red" }, { b: "#fff" }, { b: "#000" }]);
+});
+
+test("hostile CSS is read in linear time or refused, never stalls or overflows", () => {
+  const started = Date.now();
+  const nested = tokensFromCss(`${"@media x{".repeat(1000)}${":root{--a:b}".repeat(60_000)}${"}".repeat(1000)}`);
+  assert.deepEqual(nested.theme, {}, "nothing inside another media query is a page token");
+  const many = tokensFromCss(`:root{--a:${"light-dark(a,b) ".repeat(8000)}}`);
+  assert.equal(many.light.a.length, 15_999);
+  // Nested rules whose selectors would multiply are not read.
+  const fan = tokensFromCss(`${"a,b,c,d{".repeat(6)}--x: 1;${"}".repeat(6)}`);
+  assert.deepEqual(fan.theme, {});
+  assert.ok(Date.now() - started < 5000, `took ${Date.now() - started} ms`);
 });
 
 test("dark-scheme rules, comments, strings and !important are read as CSS reads them", () => {
@@ -69,7 +111,11 @@ test("token types follow the name: sizes, weights and line heights are their own
     "font-family-body": "fontFamily", "font-sans": "fontFamily", "font-size-base": "fontSize", "text-body-size": "fontSize",
     "font-weight-bold": "fontWeight", "text-heading-1-weight": "fontWeight", "text-body-leading": "lineHeight", "line-height-tight": "lineHeight",
     "letter-spacing-wide": "letterSpacing", "tracking-tight": "letterSpacing", "opacity-muted": "opacity", "breakpoint-md": "breakpoint",
+    // A colour named after what it colours, Tailwind's type scale, and an alpha.
+    "color-shadow": "color", "text-xs": "fontSize", "text-2xl": "fontSize", "astryx-press-alpha": "opacity", "sidebar-ring": "color", "chart-1": "color",
   };
+  // A layer's background is a colour, not a stacking order kept native.
+  assert.deepEqual(tokensFromCss(":root { --layer-bg: #fff; --z-modal: 50; }").theme, { "layer-bg": "#fff" });
   for (const [name, type] of Object.entries(cases)) assert.equal(tokenTypeOf(name), type, name);
 });
 
