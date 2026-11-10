@@ -686,6 +686,7 @@ function openTokensDialog() {
 // Tokens from a CSS file the person chooses, such as Astryx's astryx.css or a theme's theme.css:
 // its :root custom properties, light and dark, reviewed first, then added as one change. Values
 // Ninerr has no token type for are listed and stay the library's own CSS.
+const TOKENS_LISTED = 500;
 function tokenCssSection() {
   const section = el("section", { id: "token-css", "aria-labelledby": "token-css-title" }, el("h3", { id: "token-css-title" }, "Import tokens from a CSS file"));
   if (state.client === null || state.project === null) {
@@ -695,7 +696,7 @@ function tokenCssSection() {
   const file = el("input", { id: "token-css-file", type: "file", accept: ".css,text/css" });
   const review = el("button", { type: "button", id: "token-css-review" }, "Review tokens");
   const error = el("p", { id: "token-css-error", role: "alert" });
-  const planView = el("div", { id: "token-css-plan", "aria-live": "polite" });
+  const planView = el("div", { id: "token-css-plan" });
   let chosen = null;
   file.addEventListener("change", async () => {
     const picked = file.files?.[0];
@@ -733,8 +734,10 @@ function tokenCssSection() {
       }
     });
     planView.replaceChildren(
-      el("p", { id: "token-css-summary" }, `${plan.source === "astryx" ? "Astryx tokens" : "Tokens"} from ${plan.fileName ?? "the file"}: ${summary || "none"}.${plan.problem ? ` They cannot be added: ${plan.problem}` : ""}`),
-      el("ul", { id: "token-css-tokens" }, ...plan.tokens.slice(0, 500).map((token) => el("li", {}, `${token.name} (${token.type}): ${token.status}${token.reason ? ` — ${token.reason}` : ""}`))),
+      // Only the summary is announced; the lists are there to read.
+      el("p", { id: "token-css-summary", role: "status" }, `${plan.source === "astryx" ? "Astryx tokens" : "Tokens"} from ${plan.fileName ?? "the file"}: ${summary || "none"}.${plan.problem ? ` They cannot be added: ${plan.problem}` : ""}`),
+      el("ul", { id: "token-css-tokens" }, ...plan.tokens.slice(0, TOKENS_LISTED).map((token) => el("li", {}, `${token.name} (${token.type}): ${token.status}${token.reason ? ` — ${token.reason}` : ""}`))),
+      ...(plan.tokens.length > TOKENS_LISTED ? [el("p", { id: "token-css-more" }, `And ${plan.tokens.length - TOKENS_LISTED} more.`)] : []),
       ...(plan.kept.length === 0 ? [] : [
         el("h4", {}, "Kept as the library's CSS"),
         el("ul", { id: "token-css-kept" }, ...plan.kept.map((entry) => el("li", {}, `${entry.name}: ${entry.reason}`))),

@@ -12,7 +12,7 @@ export const MAX_TOKEN_CSS_REQUEST_BYTES = TOKEN_CSS_LIMITS.bytes * 6 + 64 * 102
 
 export interface TokenCssRequest { css?: unknown; fileName?: unknown; token?: unknown }
 
-const clean = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu, " ").trim().slice(0, 200);
+const clean = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, " ").trim().slice(0, 200);
 
 /** What adding the file's tokens would do, without changing anything, and the operations that do it. */
 export function planTokenCss(document: any, request: TokenCssRequest) {

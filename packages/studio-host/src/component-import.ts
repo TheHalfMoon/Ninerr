@@ -233,9 +233,13 @@ function withNotice(path: string, content: string, origin: string, source: Compo
 // A registry item's CSS variable as a token type, by its name (shadcn names them so): what the
 // Tokens dialog lists it under. A colour is the default, as most of an item's variables are.
 export function tokenTypeOf(name: string): string {
+  // A name that says it is a colour is one, whatever follows (--color-shadow).
+  if (/^colou?r-/iu.test(name)) return "color";
   if (/radius/iu.test(name)) return "radius";
   if (/shadow/iu.test(name)) return "shadow";
-  if (/opacity/iu.test(name)) return "opacity";
+  if (/opacity|alpha/iu.test(name)) return "opacity";
+  // Tailwind's type scale: --text-xs … --text-9xl.
+  if (/^text-(?:\d?xs|sm|base|lg|\d?xl)$/iu.test(name)) return "fontSize";
   // Type-scale roles name their part last (Astryx's --text-body-size, --text-body-leading).
   if (/font-?size|^text-.+-size$/iu.test(name)) return "fontSize";
   if (/font-?weight|^text-.+-weight$/iu.test(name)) return "fontWeight";
