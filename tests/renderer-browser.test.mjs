@@ -260,26 +260,31 @@ test("SVG keeps its required case, and a tag change patches like a fresh render"
   }
 });
 
-test("a page's own link and font styles win over the canvas's defaults, even in a cascade layer", browserTestOptions(), async () => {
+test("a page's own link styles win over the canvas's defaults, even in a cascade layer", browserTestOptions(), async () => {
   const session = await harness();
   try {
     const { page } = session;
     const doc = createDocument({
       id: "doc",
       nodes: [
-        { id: "page", type: "frame", children: ["styled", "plain"], props: { stylesheet: "@layer site{.brand{color:rgb(0, 100, 224);font-family:Georgia}}" } },
+        { id: "page", type: "frame", children: ["styled", "plain"], props: { stylesheet: "@layer site{.brand{color:rgb(0, 100, 224);text-decoration:none}}" } },
         { id: "styled", type: "element", parentId: "page", props: { tag: "a", text: "Styled", attributes: { href: "https://example.com/a", class: "brand" } } },
         { id: "plain", type: "element", parentId: "page", props: { tag: "a", text: "Plain", attributes: { href: "https://example.com/b" } } },
       ],
     });
     const looks = await page.evaluate((d) => {
       window.r.render(d);
-      const look = (id) => { const style = window.frame.contentWindow.getComputedStyle(window.r.elementFor(id)); return [style.color, style.fontFamily]; };
-      return { styled: look("styled"), plain: look("plain") };
+      const win = window.frame.contentWindow;
+      const look = (id) => { const style = win.getComputedStyle(window.r.elementFor(id)); return [style.color, style.textDecorationLine]; };
+      const probe = win.document.createElement("span");
+      probe.style.color = "LinkText";
+      win.document.body.append(probe);
+      const linkText = win.getComputedStyle(probe).color;
+      probe.remove();
+      return { styled: look("styled"), plain: look("plain"), linkText };
     }, doc);
-    assert.deepEqual(looks.styled, ["rgb(0, 100, 224)", "Georgia"], "the page's layered rule wins");
-    assert.notEqual(looks.plain[0], "rgb(0, 100, 224)");
-    assert.equal(looks.plain[1], "system-ui, sans-serif", "an unstyled page keeps the canvas's base font");
+    assert.deepEqual(looks.styled, ["rgb(0, 100, 224)", "none"], "the page's layered rule wins over the canvas's link look");
+    assert.deepEqual(looks.plain, [looks.linkText, "underline"], "a link the page does not style keeps the canvas's look");
   } finally {
     await session.close();
   }

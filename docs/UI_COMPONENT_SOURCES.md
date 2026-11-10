@@ -97,7 +97,7 @@ In **Tokens**, under *Import tokens from a CSS file*, the person chooses a CSS f
 - **Interactive preview.** A React component cannot run on the script-free canvas. A preview needs an isolated, permission-scoped runner with React available offline: a separate decision.
 - **Updating an imported item.** Today a changed upstream item conflicts with the created file. A three-way update against the imported version can reuse `threeWayMerge` from `@ninerr/code-ir`.
 - **Aceternity UI and 21st.dev.** Their terms grant no license to import; that needs the publishers' written permission.
-- **Astryx, further milestones** (`docs/provenance/ASTRYX_SOURCE_AUDIT.md`): a page Astryx's own renderer produced (`astryx experimental render`, run by the person) imports through HTML import and draws as Astryx draws it (milestone C, done); the base font of a page that sets none is the one difference left. Agents search and read component records with the MCP tools `search_components` and `get_component` (milestone E); importing source stays the person's.
+- **Astryx, further milestones** (`docs/provenance/ASTRYX_SOURCE_AUDIT.md`): a page Astryx's own renderer produced (`astryx experimental render`, run by the person) imports through HTML import, and its texts and card draw as Astryx draws them (milestone C, done); the base font of a page that sets none is the one difference left. Agents search and read component records with the MCP tools `search_components` and `get_component` (milestone E); importing source stays the person's.
 
 ### Default experience once the remaining integration is built
 

@@ -303,8 +303,15 @@ function selectors(prelude: string): string[] {
 // frame itself.
 const PAGE_ROOT = /^(\s*)(?:(?:html|:root)(?:\s*>\s*|\s+)body|html|:root|body)(?=$|[\s>+~.#[:,])/iu;
 // The same inside a leading :where() or :is() that names only the page, as CSS resets write it
-// (Astryx's :where(html) { line-height: 1.5 }): it keeps its own specificity.
-const PAGE_ROOT_GROUP = /^(\s*):(where|is)\(\s*(?:html|:root|body)(?:\s*,\s*(?:html|:root|body))*\s*\)(?=$|[\s>+~.#[:,])/iu;
+// (Astryx's :where(html) { line-height: 1.5 }), followed or not by body. :where() stays at no
+// specificity; :is(:scope) counts as a class, as :scope does for a bare html.
+const PAGE_ROOT_GROUP = /^(\s*):(where|is)\(\s*(?:html|:root|body)(?:\s*,\s*(?:html|:root|body))*\s*\)(?:(?:\s*>\s*|\s+)body)?(?=$|[\s>+~.#[:,])/iu;
+
+// A selector that names the body alone. In the frame, html and body are one element: a body
+// declaration of `inherit` meant html's value, which that element already has, so it is dropped
+// (a reset's :where(body) { line-height: inherit } would otherwise undo :where(html)'s 1.5).
+const BODY_ONLY = /^\s*(?::(?:where|is)\(\s*body\s*\)|(?:(?:html|:root)(?:\s*>\s*|\s+))?body)\s*$/iu;
+const INHERITED = /(^|;)\s*[-a-z]+\s*:\s*inherit\s*(?:!\s*important\s*)?(?=;|$)/giu;
 
 /** A rule list with each selector that names the page renamed to the frame (:scope). */
 function scopedRules(css: string, depth: number): string {
@@ -313,7 +320,9 @@ function scopedRules(css: string, depth: number): string {
     if (item.block === null) return item.prelude;
     const name = item.atRule;
     if (name !== null) return GROUP_RULES.has(name) ? `${item.prelude}{${scopedRules(item.block, depth + 1)}}` : `${item.prelude}{${item.block}}`;
-    return `${selectors(item.prelude).map((selector) => selector.replace(PAGE_ROOT_GROUP, "$1:$2(:scope)").replace(PAGE_ROOT, "$1:scope")).join(",")}{${item.block}}`;
+    const list = selectors(item.prelude);
+    const block = list.every((selector) => BODY_ONLY.test(selector)) ? item.block.replace(INHERITED, "") : item.block;
+    return `${list.map((selector) => selector.replace(PAGE_ROOT_GROUP, "$1:$2(:scope)").replace(PAGE_ROOT, "$1:scope")).join(",")}{${block}}`;
   }).join("");
 }
 

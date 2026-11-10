@@ -42,13 +42,20 @@ const MEASURE = (doc, texts, holders = null) => {
     const style = doc.defaultView.getComputedStyle(element);
     let painted = element;
     while (painted && doc.defaultView.getComputedStyle(painted).backgroundColor === "rgba(0, 0, 0, 0)") painted = painted.parentElement;
+    const card = element.closest(".astryx-card")?.getBoundingClientRect() ?? null;
     found[text] = {
       holder: element.getAttribute("class"),
+      // Where it sits in the card: a lost gap or padding moves it.
+      offset: card === null ? null : [Math.round(left - card.left), Math.round(top - card.top)],
       width: Math.round(box.width), height: Math.round(box.height),
       color: style.color, fontSize: style.fontSize, fontWeight: style.fontWeight, fontFamily: style.fontFamily,
       background: painted ? doc.defaultView.getComputedStyle(painted).backgroundColor : null,
     };
   }
+  // The card, and a container that sets no line height of its own: it inherits the page's.
+  const card = doc.querySelector(".astryx-card");
+  const box = card.getBoundingClientRect();
+  found.card = { width: Math.round(box.width), height: Math.round(box.height), lineHeight: doc.defaultView.getComputedStyle(card).lineHeight };
   return found;
 };
 const TEXTS = ["Welcome back", "Sign in to your account", "Login", "Login with Apple", "Email", "Or continue with", "Terms of Service"];
@@ -70,6 +77,7 @@ test("Astryx's rendered page imports as layers with its stylesheet, its source b
   const { document } = await ok(call("GET", "/api/document"), "document");
   const nodes = Object.values(document.nodes);
   for (const text of TEXTS) assert.ok(nodes.some((node) => node.props.text === text), text);
+  assert.deepEqual(review.counts.byKind, { element: 57, text: 17, vector: 3 }, "77 layers: its elements, texts and icons");
   assert.ok(nodes.some((node) => /\bastryx-link\b/u.test(node.props.attributes?.class ?? "")), "its stable classes stay");
   const sheet = document.nodes[event.frameId].props.stylesheet;
   assert.match(sheet, /--color-accent:light-dark\(/u, "its tokens come with it, scoped to the page frame");
@@ -94,7 +102,9 @@ test("the canvas draws Astryx's page as Astryx's own rendering does", browserTes
   } finally {
     await original.close();
   }
-  assert.deepEqual(Object.keys(expected).sort(), [...TEXTS].sort(), "every text is on Astryx's page");
+  assert.deepEqual(Object.keys(expected).sort(), [...TEXTS, "card"].sort(), "every text is on Astryx's page");
+  assert.equal(expected.card.lineHeight, "24px", "the card inherits the reset's line height (1.5 of 16px)");
+  assert.ok(TEXTS.filter((text) => expected[text].offset !== null).length >= 5, "most texts are in the card");
 
   const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-astryx-canvas-")));
   const host = await startStudioHost({ projectsRoot: root, now });
@@ -108,14 +118,17 @@ test("the canvas draws Astryx's page as Astryx's own rendering does", browserTes
     const review = await ok(call("POST", "/api/import", { html: PAGE, name: "Login card" }), "review");
     await ok(call("POST", "/api/import/commit", { proposalId: review.proposalId }), "commit");
     await waitRevision(page, 1);
-    const holders = Object.fromEntries(Object.entries(expected).map(([text, entry]) => [text, entry.holder]));
+    const holders = Object.fromEntries(TEXTS.map((text) => [text, expected[text].holder]));
     const drawn = await page.evaluate(`(${MEASURE})(document.querySelector("iframe").contentDocument, ${JSON.stringify(TEXTS)}, ${JSON.stringify(holders)})`);
     for (const text of TEXTS) {
       const [want, got] = [expected[text], drawn[text]];
       assert.ok(got, `${text} is drawn`);
       for (const property of ["color", "fontSize", "fontWeight", "fontFamily", "background"]) assert.equal(got[property], want[property], `${text}: ${property}`);
       assert.ok(Math.abs(got.width - want.width) <= 1 && Math.abs(got.height - want.height) <= 1, `${text}: ${got.width}x${got.height}, Astryx ${want.width}x${want.height}`);
+      // Texts in the card sit where Astryx puts them (the legal text is outside the card).
+      if (want.offset !== null) assert.ok(got.offset !== null && Math.abs(got.offset[0] - want.offset[0]) <= 1 && Math.abs(got.offset[1] - want.offset[1]) <= 1, `${text}: at ${got.offset} in the card, Astryx ${want.offset}`);
     }
+    assert.deepEqual(drawn.card, expected.card, "the card: its size, and the line height it inherits from the page");
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();
