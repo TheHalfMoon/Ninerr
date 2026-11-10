@@ -15,7 +15,7 @@ Audited 2026-11-10 for the founder's request to integrate Meta Astryx into Niner
 
 ## What it is, from the source
 
-- **Components.** About 120 components and their parts in `packages/core/src`, in the categories Layout, Form Controls, Table & List, Navigation, Action, Overlay, Feedback & Status, Content, Container and Chat. They are React 19 components styled with StyleX. Core's only runtime dependencies are `@stylexjs/stylex` and `intl-messageformat`.
+- **Components.** About 120 components and their parts (189 documented, with their parts) in `packages/core/src`, in the categories Layout, Form Controls, Table & List, Navigation, Action, Overlay, Feedback & Status, Content, Container and Chat. They are React 19 components styled with StyleX. Core depends on `intl-messageformat` and takes `@stylexjs/stylex`, React and React DOM as peer dependencies.
 - **No third-party primitives.** Astryx uses no Radix, Base UI, React Aria, Floating UI or cmdk. Accessibility is its own code on native platform features: `<dialog>` with focus containment, the Popover API with CSS anchor positioning, combobox and listbox roles with `aria-activedescendant`, and logical properties for RTL. It is tested by about 305 Playwright accessibility specs, axe-core audits and a visual gate of 516 baseline images.
 - **Component metadata.** Each component has a `*.doc.mjs` file holding its name, category, keywords, props with type strings and defaults, usage guidance, accessibility criteria, theming targets and examples. These files are plain object literals, which is how Ninerr reads them without running them.
 - **Design tokens.**
@@ -34,7 +34,7 @@ Audited 2026-11-10 for the founder's request to integrate Meta Astryx into Niner
 
 | Astryx capability | Ninerr's existing place for it | Decision |
 | --- | --- | --- |
-| Component metadata (`*.doc.mjs`) | The catalog's discovery, now with one normalized record schema for every source (`packages/component-sources/src/records.mjs`) | **Done in this milestone.** Records for 184 Astryx components and parts, generated from the pinned commit by static parsing (`scripts/component-sources/astryx-snapshot.mjs`), with each doc file's sha256. |
+| Component metadata (`*.doc.mjs`) | The catalog's discovery, now with one normalized record schema for every source (`packages/component-sources/src/records.mjs`) | **Done in this milestone.** Records for 189 Astryx components and their documented parts (hooks and factory functions excluded), generated from the pinned commit by static parsing (`scripts/component-sources/astryx-snapshot.mjs`), with each doc file's sha256. The records file itself is pinned by hash in the license register. |
 | A design system with its own primitives | The one-primitive-family rule (Base UI, Radix, React Aria) | **Done.** `@astryxdesign/core` is the `astryx` family. A project on Astryx refuses a shadcn item built on Radix or Base UI, and the reverse. |
 | CSS custom-property tokens with `light-dark()` | The design-system node (ADR-0004), light as the default mode and dark as a mode | Milestone D: read a token or theme CSS file the person chooses into Ninerr tokens, through the existing token-import plan. Values with no Ninerr token type (durations, easings) are listed and kept as CSS, not converted. |
 | Static HTML from `astryx experimental render` | The HTML importer (`@ninerr/import-stack`) and the script-free canvas | Milestone C, pending the founder's decision on producing a real fixture (see below). |
@@ -43,7 +43,7 @@ Audited 2026-11-10 for the founder's request to integrate Meta Astryx into Niner
 
 ### Compatibility rules
 
-1. **One system per project.** Astryx brings its own accessible components. Do not mix them with shadcn/Base UI/Radix components for the same role. Enforced by the primitive-family rule.
+1. **One system per project.** Astryx brings its own accessible components. Do not mix them with shadcn/Base UI/Radix components for the same role. The primitive-family rule enforces it for items built on another family's primitives; an item with no primitives (a hook, a utility, a plain styled element) is not refused, and the choice is the person's. A project that already depends on two families takes no item until it settles on one.
 2. **Styling.** Astryx styles are StyleX. A project that installs `@astryxdesign/core` and its prebuilt `astryx.css` needs no StyleX compiler. Copied (swizzled) source needs `@astryxdesign/build`. Astryx ships `tailwind-theme.css`, which maps its tokens into Tailwind v4, so a Tailwind project can use Astryx tokens. Ninerr keeps Tailwind classes and StyleX code parts as they are; it does not translate one into the other.
 3. **Tokens.** Ninerr's canonical tokens stay in the design-system node. Astryx token values are translated into it where a Ninerr token type exists. Anything else stays native CSS.
 4. **Choosing between equivalents** (for example, Astryx `Toast` against Sonner, or `CommandPalette` against cmdk): first accessibility, then correctness, design quality, customizability, performance, dependency cost, maintainability and integration complexity. In a project already on Astryx, its own component is usually right because a second library adds a second styling system. Astryx is never chosen only because of who publishes it.
