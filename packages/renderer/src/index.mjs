@@ -249,6 +249,22 @@ export function drawnRoots(document) {
 
 // ---------- component instances (ADR-0005) ----------
 
+/** The id of what a slot draws in a layer: the layer's id and a unit separator, which ids made by the editor never hold. */
+export const slotIdOf = (layerId) => `${layerId}\u001fslot`;
+
+/**
+ * The component ids an instance's swap and slot values name: only values of its component's
+ * instance-swap and slot properties, whether or not that component still exists.
+ */
+export function chosenComponents(document, instance) {
+  const definition = Object.hasOwn(document.nodes, instance.props.componentId) ? document.nodes[instance.props.componentId] : undefined;
+  const values = isPlainRecord(instance.props.propertyValues) ? instance.props.propertyValues : {};
+  if (definition?.type !== "component-definition" || !Array.isArray(definition.props.properties)) return [];
+  return definition.props.properties
+    .filter((property) => (property.kind === "instance-swap" || property.kind === "slot") && Object.hasOwn(values, property.id) && typeof values[property.id] === "string" && values[property.id] !== "")
+    .map((property) => values[property.id]);
+}
+
 // An instance is expanded when it is drawn, and nothing expanded is ever stored: one change to
 // its component redraws every instance. Its drawn layers keep their component node's id as
 // data-ninerr-id (so scoped stylesheets match inside instances) and carry the instance chain as
@@ -302,18 +318,23 @@ class ExpansionTooLarge extends Error {}
  */
 export function expandInstance(document, instanceId, chain = [], outer = [], depth = 0, budget = { left: MAX_EXPANDED_LAYERS }) {
   try {
-    return expand(document, instanceId, chain, outer, depth, budget);
+    const instance = Object.hasOwn(document.nodes, instanceId) ? document.nodes[instanceId] : undefined;
+    return instance === undefined ? null : expand(document, instance, chain, outer, depth, budget, new Set());
   } catch (error) {
     if (error instanceof ExpansionTooLarge) return null;
     throw error;
   }
 }
 
-function expand(document, instanceId, chain, outer, depth, budget) {
+// `instance` is an instance node, or one a slot makes ({ id, props: { componentId } }); `seen`
+// holds the components already being drawn above it, so a swap or slot value that would draw a
+// component inside itself draws nothing there (stale) instead of looping.
+function expand(document, instance, chain, outer, depth, budget, seen) {
   const nodes = document.nodes;
-  const instance = Object.hasOwn(nodes, instanceId) ? nodes[instanceId] : undefined;
-  const definition = instance && Object.hasOwn(nodes, instance.props.componentId) ? nodes[instance.props.componentId] : undefined;
-  if (!definition || definition.type !== "component-definition" || depth >= MAX_INSTANCE_DEPTH) return null;
+  const instanceId = instance.id;
+  const definition = Object.hasOwn(nodes, instance.props.componentId) ? nodes[instance.props.componentId] : undefined;
+  if (!definition || definition.type !== "component-definition" || depth >= MAX_INSTANCE_DEPTH || seen.has(definition.id)) return null;
+  const inside = new Set(seen).add(definition.id);
   const here = [...chain, instanceId];
   const properties = Array.isArray(definition.props.properties) ? definition.props.properties : [];
   const values = Object.fromEntries(properties.map((property) => [property.id, property.default]));
@@ -342,12 +363,30 @@ function expand(document, instanceId, chain, outer, depth, budget) {
     for (const override of own) if (Array.isArray(override?.path) && override.path.length === 0 && override.nodeId === node.id) current = overridden(current, override.set);
     if (node.type === "component-instance") {
       const passed = [...variantOverrides, ...own].filter((override) => override.path?.[0] === node.id).map((override) => ({ ...override, path: override.path.slice(1) }));
-      const nested = expand(document, node.id, here, passed, depth + 1, budget);
+      // An instance-swap property chooses another component for this nested instance.
+      const swap = properties.find((property) => property.kind === "instance-swap" && property.target?.nodeId === node.id && typeof values[property.id] === "string" && values[property.id] !== "");
+      const nested = expand(document, swap ? { id: node.id, props: { ...node.props, componentId: values[swap.id] } } : node, here, passed, depth + 1, budget, inside);
       if (nested === null) return { id: node.id, type: node.type, props: withVisibility({}, current.hidden), chain: here, children: [], stale: true };
       // What was set on the nested instance itself (its style, attributes, text, visibility) is
       // drawn on its root, over what its component gives it.
       const merged = overridden({ props: nested.props, hidden: null }, { text: current.props.text !== node.props.text ? current.props.text : undefined, style: current.props.style, attributes: current.props.attributes });
       return { ...nested, props: withVisibility(merged.props, current.hidden), chain: here };
+    }
+    // A slot property with a component draws that component here, in place of the layer's own
+    // children and text: an instance the slot makes, whose id is slotIdOf(the layer).
+    const slot = properties.find((property) => property.kind === "slot" && property.target?.nodeId === node.id && typeof values[property.id] === "string" && values[property.id] !== "");
+    if (slot) {
+      const slotId = slotIdOf(node.id);
+      const passed = [...variantOverrides, ...own].filter((override) => override.path?.[0] === slotId).map((override) => ({ ...override, path: override.path.slice(1) }));
+      const filled = expand(document, { id: slotId, props: { componentId: values[slot.id] } }, here, passed, depth + 1, budget, inside);
+      // What is set on the slot's content itself (path [], node slotIdOf(the layer)) is drawn on its
+      // root, as on a nested instance's.
+      let root = filled === null ? null : { props: filled.props, hidden: null };
+      if (root !== null) for (const override of [...variantOverrides, ...own]) if (Array.isArray(override?.path) && override.path.length === 0 && override.nodeId === slotId) root = overridden(root, override.set);
+      const children = filled === null ? [] : [{ ...filled, props: withVisibility(root.props, root.hidden), chain: here }];
+      // What the slot draws takes the place of the layer's own children and text.
+      const { text: _text, ...props } = drawnProps(current.props);
+      return { id: node.id, type: node.type, props: withVisibility(props, current.hidden), chain: here, children, ...(filled === null ? { stale: true } : {}) };
     }
     return { id: node.id, type: node.type, props: withVisibility(drawnProps(current.props), current.hidden), chain: here, children: node.children.filter((id) => Object.hasOwn(nodes, id)).map((id) => view(nodes[id])) };
   };
@@ -356,7 +395,7 @@ function expand(document, instanceId, chain, outer, depth, budget) {
   const style = { ...(isPlainRecord(root.props.style) ? root.props.style : {}), ...(isPlainRecord(instance.props.style) ? instance.props.style : {}) };
   const props = { ...root.props, style };
   if (isPlainRecord(instance.props.modes)) props.modes = instance.props.modes;
-  return { id: instanceId, type: "component-instance", props, chain, children: root.children };
+  return { id: instanceId, type: "component-instance", componentId: definition.id, props, chain, children: root.children, ...(root.stale ? { stale: true } : {}) };
 }
 
 /**
@@ -406,19 +445,34 @@ export function instancesDrawing(document, definitionIds) {
         break;
       }
     }
-    instances.push({ id, componentId: node.props.componentId, inside });
+    // The components it can draw: its own, and those its swap and slot values choose.
+    // (A value naming a component that was just deleted still counts, so its instance is redrawn.)
+    instances.push({ id, componentId: node.props.componentId, draws: [node.props.componentId, ...chosenComponents(document, node)], inside });
   }
-  // A component that holds an instance of a touched one is touched too.
+  // A component whose swap or slot defaults draw a touched one is touched too.
+  const defaults = [];
+  for (const id in nodes) {
+    const node = nodes[id];
+    if (node.type !== "component-definition" || !Array.isArray(node.props.properties)) continue;
+    for (const property of node.props.properties) if ((property.kind === "instance-swap" || property.kind === "slot") && typeof property.default === "string" && property.default !== "") defaults.push({ definition: id, draws: property.default });
+  }
+  // A component that holds an instance drawing a touched one is touched too.
   for (let grew = true; grew;) {
     grew = false;
     for (const entry of instances) {
-      if (touched.has(entry.componentId) && entry.inside !== null && !touched.has(entry.inside)) {
+      if (entry.draws.some((componentId) => touched.has(componentId)) && entry.inside !== null && !touched.has(entry.inside)) {
         touched.add(entry.inside);
         grew = true;
       }
     }
+    for (const entry of defaults) {
+      if (touched.has(entry.draws) && !touched.has(entry.definition)) {
+        touched.add(entry.definition);
+        grew = true;
+      }
+    }
   }
-  return instances.filter((entry) => touched.has(entry.componentId)).map((entry) => entry.id);
+  return instances.filter((entry) => entry.draws.some((componentId) => touched.has(componentId))).map((entry) => entry.id);
 }
 
 /** The component-definition at or above each of `ids`. */
@@ -910,6 +964,7 @@ export function createRenderer(root) {
     element.setAttribute("data-ninerr-id", view.id);
     element.setAttribute("data-ninerr-instance", JSON.stringify(view.chain));
     apply(element, view, plan, { sheet: false });
+    if (view.stale) element.setAttribute("data-ninerr-stale", "");
     for (const child of view.children) element.appendChild(drawView(child));
     return element;
   }
@@ -933,7 +988,9 @@ export function createRenderer(root) {
       elements.set(node.id, target);
     }
     for (const child of [...target.children]) child.remove();
-    target.removeAttribute("data-ninerr-stale");
+    // A slot on the component's root that cannot draw its choice marks the instance itself.
+    if (view.stale) target.setAttribute("data-ninerr-stale", "");
+    else target.removeAttribute("data-ninerr-stale");
     // The component it draws, whose root it is: a layer an instance's root override names.
     target.setAttribute("data-ninerr-component", node.props.componentId);
     apply(target, { ...view, id: node.id, type: node.type }, plan);
@@ -1030,7 +1087,8 @@ export function createRenderer(root) {
       // Each instance the change touches, or that draws a component it touched (nested ones too),
       // is drawn again, once.
       const redraw = new Set(affectedNodeIds.filter((id) => document.nodes[id]?.type === "component-instance"));
-      for (const id of instancesDrawing(document, definitionsAbove(document, affectedNodeIds))) redraw.add(id);
+      const gone = affectedNodeIds.filter((id) => !Object.hasOwn(document.nodes, id));
+      for (const id of instancesDrawing(document, [...definitionsAbove(document, affectedNodeIds), ...gone])) redraw.add(id);
       for (const id of redraw) {
         const element = elements.get(id);
         if (element) expandInto(element, document.nodes[id], document);
