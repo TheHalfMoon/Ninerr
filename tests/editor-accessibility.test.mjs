@@ -967,3 +967,26 @@ test("the Components dialog audits clean, for a layer, a component and an instan
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the Component sources dialog audits clean, browsing an Astryx component's record", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-sources-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("sources");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    await page.locator("#action-component-sources").click();
+    await page.locator('#component-source-results [data-source-id="astryx"]').click();
+    await page.locator("#source-component-query").fill("dialog");
+    await page.locator('#source-component-results [data-component-id="astryx:Dialog"]').click();
+    await page.locator("#source-component-props").waitFor();
+    await audit(page, "the Component sources dialog with an Astryx component's record");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

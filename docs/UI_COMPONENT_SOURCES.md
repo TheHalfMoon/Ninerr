@@ -9,6 +9,7 @@ Status (2026-11-09): **implemented:** the offline catalog with each source's lic
 | Foundation | shadcn/ui | Owned source files, design tokens, component composition, registry format |
 | Foundation | Base UI | Default accessible React primitives for **new** generated projects |
 | Foundation | Radix UI | Accessible alternative for existing/imported Radix projects |
+| Foundation | Astryx (Meta) | A whole design system with its own accessible components, StyleX styling, tokens and themes; Ninerr has its components' records at a pinned commit |
 | Specialist | Sonner | Toasts and notifications |
 | Specialist | Vaul | Gesture-driven drawers |
 | Specialist | cmdk | Command palettes and searchable choices |
@@ -31,6 +32,7 @@ Checked against each publisher's own license file or terms on 2026-11-09. Nothin
 | --- | --- | --- | --- | --- |
 | shadcn/ui | MIT, Copyright (c) 2023 shadcn | allowed | `https://ui.shadcn.com/r/styles/<style>/<name>.json` | https://github.com/shadcn-ui/ui/blob/main/LICENSE.md |
 | Base UI | MIT, Copyright (c) 2019 Material-UI SAS | allowed | npm `@base-ui/react` | https://github.com/mui/base-ui/blob/master/LICENSE |
+| Astryx | MIT, Copyright (c) 2026 Meta Platforms, Inc. | allowed | npm `@astryxdesign/core`; no registry items | https://github.com/meta/astryx/blob/main/LICENSE; audit in `docs/provenance/ASTRYX_SOURCE_AUDIT.md` |
 | Radix UI | MIT, Copyright (c) 2022 WorkOS | allowed | npm `radix-ui`, `@radix-ui/react-*` | https://github.com/radix-ui/primitives/blob/main/LICENSE |
 | Sonner | MIT, Copyright (c) 2023 Emil Kowalski | allowed | npm `sonner` | https://github.com/emilkowalski/sonner/blob/main/LICENSE.md |
 | Vaul | MIT, Copyright (c) 2023 Emil Kowalski | allowed | npm `vaul` | https://github.com/emilkowalski/vaul/blob/main/LICENSE.md |

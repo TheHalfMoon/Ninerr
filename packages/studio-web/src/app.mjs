@@ -9,6 +9,7 @@ import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
 import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
 import { UI_COMPONENT_SOURCE_GROUPS, searchUiComponentSources } from "/packages/component-sources/src/catalog.mjs";
+import { RECORD_SOURCES, loadComponentRecords, searchComponents } from "/packages/component-sources/src/records.mjs";
 import { TOKEN_TYPES } from "/packages/document-model/src/schema-v2.mjs";
 import { addMode, addToken, createDesignSystem, deleteToken, designSystemOf, renameToken, setToken, tokenUses } from "/packages/document-model/src/tokens.mjs";
 import { componentsOf, createComponent, detachInstance, insertInstance, instanceLayers, overrideFor, parseDeclarations, resetInstance, setInstanceOverride } from "/packages/canvas/src/components.mjs";
@@ -922,6 +923,7 @@ function openComponentSourcesDialog() {
         field("Official website", source.website),
         field("Source or documentation", source.source),
         field("Setup example (run only in a compatible, reviewed React project)", source.install),
+        ...(RECORD_SOURCES.includes(source.id) ? [sourceComponentsSection(source)] : []),
       );
     };
     const search = () => {
@@ -944,6 +946,49 @@ function openComponentSourcesDialog() {
       el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close")),
     ];
   });
+}
+
+// The components of a source Ninerr has records for (Astryx): found by name or purpose, each with
+// its props, variants, accessibility notes, limitations and where its record came from. The
+// records are local and pinned; they load when the section opens.
+const RECORDS_SHOWN = 50;
+function sourceComponentsSection(source) {
+  const status = el("p", { id: "source-components-status", role: "status", "aria-live": "polite" }, "Loading its component records…");
+  const section = el("section", { id: "source-components", "aria-labelledby": "source-components-title" },
+    el("h4", { id: "source-components-title" }, `${source.name} components`), status);
+  loadComponentRecords(source.id).then((snapshot) => {
+    const query = el("input", { id: "source-component-query", maxlength: "200", autocomplete: "off", placeholder: "A name or a purpose, such as date picker" });
+    const categories = [...new Set(snapshot.components.map((record) => record.category).filter(Boolean))].sort();
+    const category = el("select", { id: "source-component-category" }, el("option", { value: "" }, "All categories"), ...categories.map((name) => el("option", { value: name }, name)));
+    const list = el("ul", { id: "source-component-results", class: "project-list" });
+    const detail = el("div", { id: "source-component-detail" });
+    const from = `${snapshot.package.name} ${snapshot.package.version}, commit ${snapshot.commit.slice(0, 12)}`;
+    const show = (record) => detail.replaceChildren(
+      el("h5", {}, record.name),
+      el("p", {}, record.description),
+      el("p", {}, `Import: ${record.importPath ?? "a part of " + (record.subComponentOf ?? "another component")}. ${record.rendering === "client" ? "Needs React on the client for its behaviour." : "Renders without client script."}`),
+      ...(record.props.length === 0 ? [] : [el("table", { id: "source-component-props" },
+        el("caption", {}, `${record.name} props`),
+        el("thead", {}, el("tr", {}, ...["Prop", "Type", "Required", "Default"].map((name) => el("th", { scope: "col" }, name)))),
+        el("tbody", {}, ...record.props.map((prop) => el("tr", {}, el("th", { scope: "row" }, prop.name), el("td", {}, prop.type), el("td", {}, prop.required ? "yes" : "no"), el("td", {}, prop.default ?? "")))))]),
+      ...(record.accessibility.length === 0 ? [] : [el("h6", {}, "Accessibility"), el("ul", {}, ...record.accessibility.map((item) => el("li", {}, `${item.name}${item.criterion ? ` (${item.criterion}${item.requirement ? `, ${item.requirement}` : ""})` : ""}: ${item.description}`)))]),
+      ...(record.limitations.length === 0 ? [] : [el("h6", {}, "Limitations"), el("ul", {}, ...record.limitations.map((text) => el("li", {}, text)))]),
+      el("p", { id: "source-component-provenance" }, `From ${record.doc.path} in ${from}. ${snapshot.license.spdx}, ${snapshot.license.copyright.replace(/\.?$/u, ".")}`),
+    );
+    const run = () => {
+      const found = searchComponents(snapshot.components, { query: query.value, category: category.value === "" ? null : category.value, limit: RECORDS_SHOWN });
+      list.replaceChildren(...found.map((record) => el("li", {}, el("button", { type: "button", "data-component-id": record.id, onclick: () => show(record) }, record.category ? `${record.name} — ${record.category}` : record.name))));
+      status.textContent = found.length === 0 ? `No matching component in ${from}.` : `${found.length === RECORDS_SHOWN ? `The first ${RECORDS_SHOWN}` : found.length} matching component${found.length === 1 ? "" : "s"}, from ${from}.`;
+      detail.replaceChildren();
+    };
+    query.addEventListener("input", run);
+    category.addEventListener("change", run);
+    section.append(el("label", {}, "Find a component", query), el("label", {}, "Component category", category), list, detail);
+    run();
+  }, (error) => {
+    status.textContent = `Its component records could not be loaded: ${error.message}`;
+  });
+  return section;
 }
 
 // A registry item the person chose, into the connected codebase (#405). The item is a file they

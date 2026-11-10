@@ -5,6 +5,7 @@
 import { UI_COMPONENT_SOURCES } from "./catalog.mjs";
 
 export { UI_COMPONENT_SOURCES, UI_COMPONENT_SOURCE_GROUPS, UI_IMPORT_POLICIES, searchUiComponentSources } from "./catalog.mjs";
+export { ASTRYX, COMPONENT_RECORD_FIELDS, RECORD_SOURCES, RENDERING, componentRecordProblem, loadComponentRecords, searchComponents } from "./records.mjs";
 
 export const REGISTRY_ITEM_LIMITS = Object.freeze({
   bytes: 1024 * 1024,
@@ -193,9 +194,13 @@ function measureCss(value, depth = 0, counter = { rules: 0 }) {
 
 const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["']([^"'\n]{1,214})["']/gu;
 
+/** The primitive families by id, as a person reads them. */
+export const PRIMITIVE_FAMILIES = Object.freeze({ base: "Base UI", radix: "Radix", aria: "React Aria", astryx: "Astryx" });
+
 /**
  * Which accessible primitive family an item builds on, from its dependencies and the modules its
- * files import: Base UI, Radix, React Aria, none, or mixed (refused: one component, one family).
+ * files import: Base UI, Radix, React Aria, Astryx (a design system with its own primitives),
+ * none, or mixed (refused: one component, one family).
  */
 export function primitiveFamily({ dependencies = [], files = [] }) {
   const evidence = new Set();
@@ -205,6 +210,8 @@ export function primitiveFamily({ dependencies = [], files = [] }) {
     if (within(name, "@base-ui/react") || within(name, "@base-ui-components/react")) evidence.add("base:" + name);
     else if (within(name, "radix-ui") || (name.startsWith("@radix-ui/react-") && !within(name, "@radix-ui/react-icons"))) evidence.add("radix:" + name);
     else if (within(name, "react-aria-components") || within(name, "react-aria") || name.startsWith("@react-aria/")) evidence.add("aria:" + name);
+    // Astryx's components are its own primitives; its themes and build tools are not.
+    else if (within(name, "@astryxdesign/core")) evidence.add("astryx:" + name);
   };
   for (const dependency of dependencies) note(dependency.name);
   for (const file of files) {
