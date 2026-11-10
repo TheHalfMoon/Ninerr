@@ -260,6 +260,31 @@ test("SVG keeps its required case, and a tag change patches like a fresh render"
   }
 });
 
+test("a page's own link and font styles win over the canvas's defaults, even in a cascade layer", browserTestOptions(), async () => {
+  const session = await harness();
+  try {
+    const { page } = session;
+    const doc = createDocument({
+      id: "doc",
+      nodes: [
+        { id: "page", type: "frame", children: ["styled", "plain"], props: { stylesheet: "@layer site{.brand{color:rgb(0, 100, 224);font-family:Georgia}}" } },
+        { id: "styled", type: "element", parentId: "page", props: { tag: "a", text: "Styled", attributes: { href: "https://example.com/a", class: "brand" } } },
+        { id: "plain", type: "element", parentId: "page", props: { tag: "a", text: "Plain", attributes: { href: "https://example.com/b" } } },
+      ],
+    });
+    const looks = await page.evaluate((d) => {
+      window.r.render(d);
+      const look = (id) => { const style = window.frame.contentWindow.getComputedStyle(window.r.elementFor(id)); return [style.color, style.fontFamily]; };
+      return { styled: look("styled"), plain: look("plain") };
+    }, doc);
+    assert.deepEqual(looks.styled, ["rgb(0, 100, 224)", "Georgia"], "the page's layered rule wins");
+    assert.notEqual(looks.plain[0], "rgb(0, 100, 224)");
+    assert.equal(looks.plain[1], "system-ui, sans-serif", "an unstyled page keeps the canvas's base font");
+  } finally {
+    await session.close();
+  }
+});
+
 test("patching agrees with a fresh render over a seeded random edit sequence", browserTestOptions(), async () => {
   const session = await harness();
   try {

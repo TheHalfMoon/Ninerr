@@ -670,8 +670,11 @@ function sanitizeAttribute(tag, namespace, name, rawValue) {
 export const FRAME_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:";
 export const FRAME_SANDBOX = "allow-same-origin";
 
+// The canvas's own defaults (a base font, how a link looks) are in a cascade layer declared first,
+// so a page's own styles win over them, layered or not, as they would in a browser; an unlayered
+// default would beat every rule a page keeps in @layer (Astryx keeps all of its rules so).
 export function frameSrcdoc() {
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}"><style>html,body{margin:0;padding:0}body{font-family:system-ui,sans-serif}[data-ninerr-root]{position:relative;min-height:100vh}a[data-ninerr-href]{color:LinkText;text-decoration:underline}</style></head><body><div data-ninerr-root inert></div></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}"><style>@layer ninerr-canvas{body{font-family:system-ui,sans-serif}a[data-ninerr-href]{color:LinkText;text-decoration:underline}}html,body{margin:0;padding:0}[data-ninerr-root]{position:relative;min-height:100vh}</style></head><body><div data-ninerr-root inert></div></body></html>`;
 }
 
 /**
