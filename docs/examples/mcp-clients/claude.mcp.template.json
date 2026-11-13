@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ninerr": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"
+      ],
+      "env": {
+        "NINERR_MCP_TOKEN": "${NINERR_MCP_TOKEN}"
+      }
+    }
+  }
+}
