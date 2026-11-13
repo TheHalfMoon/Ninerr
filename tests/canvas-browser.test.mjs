@@ -190,13 +190,16 @@ test("moves and resizes commit the geometry the user saw, for margins, padding a
   try {
     const { page } = h;
     // A flow heading with a margin, dragged by (10, 0): it moves by exactly that, keeping its size.
+    // Alt held: nothing snaps (the text beside it is as wide as the platform's font).
     const before = await rectOf(page, "heading");
     const start = await page.evaluate(() => window.screenOf("heading"));
     await page.mouse.move(start.x, start.y);
+    await page.keyboard.down("Alt");
     await page.mouse.down();
     await page.mouse.move(start.x + 5, start.y, { steps: 2 });
     await page.mouse.move(start.x + 10, start.y, { steps: 2 });
     await page.mouse.up();
+    await page.keyboard.up("Alt");
     let result = await h.commit();
     assert.equal(result.intent, "Move layer");
     const after = await rectOf(page, "heading");
@@ -223,9 +226,11 @@ test("moves and resizes commit the geometry the user saw, for margins, padding a
     const collapsing = await rectOf(page, "collapsing");
     const grip = await page.evaluate(() => window.screenOf("collapsing"));
     await page.mouse.move(grip.x, grip.y);
+    await page.keyboard.down("Alt");
     await page.mouse.down();
     await page.mouse.move(grip.x + 10, grip.y, { steps: 3 });
     await page.mouse.up();
+    await page.keyboard.up("Alt");
     // The preview holds the node in place until the host's update arrives: no snap-back.
     const held = await rectOf(page, "collapsing");
     assert.deepEqual([held.x - collapsing.x, held.y - collapsing.y], [10, 0], "the preview is held until the update");
@@ -289,15 +294,57 @@ test("a dragged layer snaps to another's edge, shows the guide while it is near,
     await page.keyboard.up("Alt");
     result = await h.commit();
     assert.equal(result.doc.nodes.badge.props.style.top, "43px");
+    // Alt pressed mid-drag, the pointer still: the preview leaves the snap at once, and the
+    // release commits what is shown. Let go of it again and it snaps back.
+    const shownTop = () => page.evaluate(() => window.canvas.renderer.elementFor("badge").getBoundingClientRect().top);
+    const mid = await page.evaluate(() => window.screenOf("badge"));
+    await page.mouse.move(mid.x, mid.y);
+    await page.mouse.down();
+    await page.mouse.move(mid.x, mid.y - 4, { steps: 3 });
+    assert.equal(await shownTop(), 40, "39 snaps to 40");
+    await page.keyboard.down("Alt");
+    assert.equal(await shownTop(), 39, "Alt pressed: free at once");
+    await page.keyboard.up("Alt");
+    assert.equal(await shownTop(), 40, "Alt let go: snapped again");
+    await page.keyboard.down("Alt");
+    await page.mouse.up();
+    await page.keyboard.up("Alt");
+    result = await h.commit();
+    assert.equal(result.doc.nodes.badge.props.style.top, "39px", "the release commits the free place that was shown");
+    // Control moves freely too (Alt+drag moves windows on some Linux desktops).
+    const ctrl = await page.evaluate(() => window.screenOf("badge"));
+    await page.mouse.move(ctrl.x, ctrl.y);
+    await page.mouse.down();
+    await page.keyboard.down("Control");
+    await page.mouse.move(ctrl.x, ctrl.y + 4, { steps: 3 });
+    await page.mouse.up();
+    await page.keyboard.up("Control");
+    result = await h.commit();
+    assert.equal(result.doc.nodes.badge.props.style.top, "43px");
     // Zoomed in to 2, the distance is still 6 screen pixels: 3 world pixels.
     await page.evaluate(() => window.canvas.setViewport({ x: 24, y: 24, zoom: 2 }));
-    const zoomed = await page.evaluate(() => window.screenOf("badge"));
-    await page.mouse.move(zoomed.x, zoomed.y);
+    const zoomedDrag = async (by) => {
+      const from = await page.evaluate(() => window.screenOf("badge"));
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(from.x, from.y + by, { steps: 3 });
+      await page.mouse.up();
+      return (await h.commit()).doc.nodes.badge.props.style.top;
+    };
+    assert.equal(await zoomedDrag(4), "45px", "43 + 2 = 45 is 5 world pixels from 40 (10 on screen): no snap");
+    assert.equal(await zoomedDrag(-8), "40px", "45 - 4 = 41 snaps to 40, within 3 world pixels");
+    // A layer moved by someone else mid-drag is snapped to where it is now.
+    await page.evaluate(() => window.canvas.setViewport({ x: 24, y: 24, zoom: 1 }));
+    const last = await page.evaluate(() => window.screenOf("badge"));
+    await page.mouse.move(last.x, last.y);
     await page.mouse.down();
-    await page.mouse.move(zoomed.x, zoomed.y - 4, { steps: 3 });
+    await page.mouse.move(last.x, last.y + 10, { steps: 3 });
+    const moved = applyTransaction(h.doc, { id: "elsewhere", actor: "agent", operations: [{ type: "set-props", nodeId: "card", set: { style: { ...h.doc.nodes.card.props.style, top: "53px" } } }] });
+    await page.evaluate(({ d, affected }) => window.canvas.update(d, affected), { d: moved.document, affected: moved.affectedNodeIds });
+    await page.mouse.move(last.x, last.y + 12, { steps: 2 });
     await page.mouse.up();
-    result = await h.commit();
-    assert.equal(result.doc.nodes.badge.props.style.top, "40px", "43 - 2 = 41 snaps to 40, within 3 world pixels");
+    const pending = await page.evaluate(() => window.commits.shift());
+    assert.equal(pending.operations[0].set.style.top, "53px", "52 snaps to the card's new top, 53");
   } finally {
     await h.close();
   }
