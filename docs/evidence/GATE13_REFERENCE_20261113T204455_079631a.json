@@ -1,0 +1,338 @@
+{
+  "schema": "ninerr-gate13-reference/1",
+  "commit": "079631acfce3c32c0b8ccf83eef16d547a7f7a82",
+  "tree": "36697975e3fdbdd1d79044c5ff56a0bdf7478ee6",
+  "date": "2026-11-13T20:44:55.367Z",
+  "machine": {
+    "os": "win32 10.0.26300 (Windows 11 Home)",
+    "cpu": "13th Gen Intel(R) Core(TM) i5-13420H",
+    "logicalCores": 12,
+    "memoryGiB": 16,
+    "node": "v24.19.0",
+    "browserPath": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+  },
+  "browser": "157.0.4341.57",
+  "power": "plugged in (AC, battery 100%), Windows power plan Balanced; power mode slider not read",
+  "referenceProblems": [],
+  "runs": [
+    {
+      "index": 1,
+      "status": 0,
+      "seconds": 53,
+      "failure": null,
+      "measures": {
+        "firstRender": {
+          "value": 544.4
+        },
+        "apply": {
+          "n": 39,
+          "p50": 11.4,
+          "p95": 19.4,
+          "max": 24.8
+        },
+        "insert": {
+          "n": 30,
+          "p50": 31.6,
+          "p95": 41.5,
+          "max": 49.1
+        },
+        "remove": {
+          "n": 30,
+          "p50": 34,
+          "p95": 45.8,
+          "max": 46.8
+        },
+        "edit": {
+          "n": 30,
+          "p50": 115.4,
+          "p95": 152.3,
+          "max": 174.1
+        },
+        "delete": {
+          "n": 20,
+          "p50": 185.1,
+          "p95": 252.1,
+          "max": 263.5
+        }
+      },
+      "openWallMs": 1372,
+      "browser": "157.0.4341.57",
+      "node": "v24.19.0"
+    },
+    {
+      "index": 2,
+      "status": 0,
+      "seconds": 52,
+      "failure": null,
+      "measures": {
+        "firstRender": {
+          "value": 435.5
+        },
+        "apply": {
+          "n": 39,
+          "p50": 14.7,
+          "p95": 21.7,
+          "max": 21.7
+        },
+        "insert": {
+          "n": 30,
+          "p50": 29.4,
+          "p95": 36.3,
+          "max": 48.5
+        },
+        "remove": {
+          "n": 30,
+          "p50": 31.2,
+          "p95": 43.4,
+          "max": 43.9
+        },
+        "edit": {
+          "n": 30,
+          "p50": 142,
+          "p95": 179.9,
+          "max": 197.7
+        },
+        "delete": {
+          "n": 20,
+          "p50": 182.6,
+          "p95": 213.9,
+          "max": 222.3
+        }
+      },
+      "openWallMs": 1381,
+      "browser": "157.0.4341.57",
+      "node": "v24.19.0"
+    },
+    {
+      "index": 3,
+      "status": 0,
+      "seconds": 50,
+      "failure": null,
+      "measures": {
+        "firstRender": {
+          "value": 470.2
+        },
+        "apply": {
+          "n": 40,
+          "p50": 13.4,
+          "p95": 21.2,
+          "max": 23.6
+        },
+        "insert": {
+          "n": 30,
+          "p50": 25.9,
+          "p95": 40.8,
+          "max": 43
+        },
+        "remove": {
+          "n": 30,
+          "p50": 24.1,
+          "p95": 34.9,
+          "max": 39.7
+        },
+        "edit": {
+          "n": 30,
+          "p50": 125.3,
+          "p95": 160.2,
+          "max": 162
+        },
+        "delete": {
+          "n": 20,
+          "p50": 178.4,
+          "p95": 254.2,
+          "max": 270.5
+        }
+      },
+      "openWallMs": 1274,
+      "browser": "157.0.4341.57",
+      "node": "v24.19.0"
+    },
+    {
+      "index": 4,
+      "status": 0,
+      "seconds": 45,
+      "failure": null,
+      "measures": {
+        "firstRender": {
+          "value": 443.1
+        },
+        "apply": {
+          "n": 39,
+          "p50": 10.8,
+          "p95": 17,
+          "max": 17.7
+        },
+        "insert": {
+          "n": 30,
+          "p50": 20.1,
+          "p95": 36.4,
+          "max": 46.5
+        },
+        "remove": {
+          "n": 30,
+          "p50": 24.7,
+          "p95": 35.9,
+          "max": 38.3
+        },
+        "edit": {
+          "n": 30,
+          "p50": 115.1,
+          "p95": 158.3,
+          "max": 165.1
+        },
+        "delete": {
+          "n": 20,
+          "p50": 151.9,
+          "p95": 190.5,
+          "max": 233.3
+        }
+      },
+      "openWallMs": 1379,
+      "browser": "157.0.4341.57",
+      "node": "v24.19.0"
+    },
+    {
+      "index": 5,
+      "status": 0,
+      "seconds": 49,
+      "failure": null,
+      "measures": {
+        "firstRender": {
+          "value": 480.1
+        },
+        "apply": {
+          "n": 39,
+          "p50": 9.8,
+          "p95": 13.9,
+          "max": 15.1
+        },
+        "insert": {
+          "n": 30,
+          "p50": 19.9,
+          "p95": 31.6,
+          "max": 36.4
+        },
+        "remove": {
+          "n": 30,
+          "p50": 24.2,
+          "p95": 40.1,
+          "max": 49.1
+        },
+        "edit": {
+          "n": 30,
+          "p50": 145.1,
+          "p95": 204.4,
+          "max": 207.3
+        },
+        "delete": {
+          "n": 20,
+          "p50": 162.2,
+          "p95": 203.9,
+          "max": 220.1
+        }
+      },
+      "openWallMs": 1687,
+      "browser": "157.0.4341.57",
+      "node": "v24.19.0"
+    }
+  ],
+  "judgement": [
+    {
+      "key": "firstRender",
+      "label": "first render of 10,000 nodes",
+      "stat": "value",
+      "budget": 2000,
+      "values": [
+        544.4,
+        435.5,
+        470.2,
+        443.1,
+        480.1
+      ],
+      "held": 5,
+      "median": 470.2,
+      "pass": true
+    },
+    {
+      "key": "apply",
+      "label": "applying a change from elsewhere",
+      "stat": "p95",
+      "budget": 100,
+      "values": [
+        19.4,
+        21.7,
+        21.2,
+        17,
+        13.9
+      ],
+      "held": 5,
+      "median": 19.4,
+      "pass": true
+    },
+    {
+      "key": "insert",
+      "label": "applying an inserted card",
+      "stat": "p95",
+      "budget": 100,
+      "values": [
+        41.5,
+        36.3,
+        40.8,
+        36.4,
+        31.6
+      ],
+      "held": 5,
+      "median": 36.4,
+      "pass": true
+    },
+    {
+      "key": "remove",
+      "label": "applying a removed card",
+      "stat": "p95",
+      "budget": 100,
+      "values": [
+        45.8,
+        43.4,
+        34.9,
+        35.9,
+        40.1
+      ],
+      "held": 5,
+      "median": 40.1,
+      "pass": true
+    },
+    {
+      "key": "edit",
+      "label": "end-to-end edit in the editor",
+      "stat": "p95",
+      "budget": 750,
+      "values": [
+        152.3,
+        179.9,
+        160.2,
+        158.3,
+        204.4
+      ],
+      "held": 5,
+      "median": 160.2,
+      "pass": true
+    },
+    {
+      "key": "delete",
+      "label": "deleting a layer in the editor",
+      "stat": "p95",
+      "budget": 750,
+      "values": [
+        252.1,
+        213.9,
+        254.2,
+        190.5,
+        203.9
+      ],
+      "held": 5,
+      "median": 213.9,
+      "pass": true
+    }
+  ],
+  "verdict": "pass: every budget holds"
+}
