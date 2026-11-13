@@ -9,7 +9,7 @@ import { browserTestOptions } from "./support/browser.mjs";
 import { openEditor, waitRevision } from "./support/editor.mjs";
 import { client, ok } from "./support/host-api.mjs";
 
-// Token drift (#79, LILAC-D8): the design system's tokens against a stylesheet in the connected
+// Token drift (#79, parity row D8): the design system's tokens against a stylesheet in the connected
 // codebase, both ways, changing nothing.
 
 let clock = 0;
@@ -47,9 +47,9 @@ test("the design system against a stylesheet in the codebase: same, changed, onl
     const drift = await ok(call("POST", "/api/tokens/drift", { file: "src/theme.css" }), "drift");
     assert.equal(drift.file, "src/theme.css");
     assert.equal(drift.drift, true);
-    assert.deepEqual(drift.counts, { same: 1, changed: 1, "only-in-code": 1, "only-in-design": 1, "unreadable-in-code": 0 });
+    assert.deepEqual(drift.counts, { same: 1, changed: 1, "only-in-code": 1, "only-in-design": 1 });
     assert.deepEqual(drift.tokens.map(({ name, status }) => [name, status]), [["--color-brand", "same"], ["--only-code", "only-in-code"], ["--only-design", "only-in-design"], ["--space-2", "changed"]]);
-    assert.deepEqual(drift.tokens.find((token) => token.name === "--space-2"), { name: "--space-2", status: "changed", code: { default: "8px" }, design: { default: "12px" } });
+    assert.deepEqual(drift.tokens.find((token) => token.name === "--space-2"), { name: "--space-2", status: "changed", design: { default: "12px" }, code: { default: "8px" } });
     assert.equal((await ok(call("GET", "/api/document"), "document")).document.revision, revision, "comparing changes nothing");
 
     // In step: no drift.
@@ -60,7 +60,7 @@ test("the design system against a stylesheet in the codebase: same, changed, onl
     // A mode the code sets and the design system has no value in is a difference.
     writeFileSync(join(root, "app", "src", "theme.css"), ":root { --color-brand: #2255ff; --space-2: 12px; --only-design: red; }\n.dark { --space-2: 16px; }\n");
     const extended = await ok(call("POST", "/api/tokens/drift", { file: "src/theme.css" }), "extended");
-    assert.deepEqual(extended.tokens.find((token) => token.name === "--space-2"), { name: "--space-2", status: "changed", code: { default: "12px", dark: "16px" }, design: { default: "12px" }, reason: "the code sets a mode the design system has no value in" });
+    assert.deepEqual(extended.tokens.find((token) => token.name === "--space-2"), { name: "--space-2", status: "changed", design: { default: "12px" }, code: { default: "12px", dark: "16px" }, reason: "the code sets a dark value the design system has none for" });
 
     // Only a stylesheet inside the connected folder is read.
     writeFileSync(join(root, "app", "src", "theme.js"), "export const x = 1;\n");

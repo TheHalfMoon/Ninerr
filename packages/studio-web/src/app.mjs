@@ -759,7 +759,7 @@ function tokenCssSection() {
 
 // Token drift (#79): the design system against a stylesheet in the connected codebase, both
 // ways. Read only: it says what differs, and the import above or the code is where it is mended.
-const DRIFT_WORDS = { same: "the same", changed: "different", "only-in-code": "only in the code", "only-in-design": "only in the design", "unreadable-in-code": "not readable in the code" };
+const DRIFT_WORDS = { same: "the same", changed: "different", "only-in-code": "only in the code", "only-in-design": "only in the design" };
 function tokenDriftSection() {
   const section = el("section", { id: "token-drift", "aria-labelledby": "token-drift-title" }, el("h3", { id: "token-drift-title" }, "Compare tokens with the code"));
   if (state.client === null || state.project === null) {
@@ -786,6 +786,7 @@ function tokenDriftSection() {
     result.replaceChildren(
       el("p", { id: "token-drift-summary", role: "status" }, drift.drift ? `${drift.file} differs from the design system: ${summary}.` : `${drift.file} and the design system agree${summary ? `: ${summary}` : ""}.`),
       ...(differing.length === 0 ? [] : [el("ul", { id: "token-drift-tokens" }, ...differing.slice(0, TOKENS_LISTED).map((token) => el("li", {}, `${token.name}: ${DRIFT_WORDS[token.status]}${token.status === "changed" ? ` (design ${values(token.design)}; code ${values(token.code)})` : ""}${token.reason ? ` — ${token.reason}` : ""}`)))]),
+      ...(differing.length > TOKENS_LISTED ? [el("p", { id: "token-drift-more" }, `And ${differing.length - TOKENS_LISTED} more.`)] : []),
     );
   });
   section.append(el("label", { for: path.id }, "Stylesheet in the connected codebase", path), el("div", { class: "actions" }, compare), error, result);
