@@ -316,6 +316,16 @@ function declarationsOf(input: string): string[] {
 }
 
 /** `cssText` (an imported inline style) as style properties; the renderer re-checks every value. */
+// A CSS escape in a name: up to six hex digits and one optional whitespace, or any other character.
+// A code point CSS replaces (0, a surrogate, past U+10FFFF) becomes U+FFFD, which no name holds.
+function unescapeName(raw: string): string {
+  return raw.replace(/\\([0-9a-fA-F]{1,6})[ \t\n\r\f]?|\\([^\n\r\f0-9a-fA-F])/gu, (_match, hex: string | undefined, char: string | undefined) => {
+    if (hex === undefined) return char ?? "";
+    const code = Number.parseInt(hex, 16);
+    return code === 0 || (code >= 0xd800 && code <= 0xdfff) || code > 0x10ffff ? "�" : String.fromCodePoint(code);
+  });
+}
+
 export function styleProperties(style: unknown): Record<string, string> {
   const out: Record<string, string> = {};
   if (style === null || typeof style !== "object") return out;
@@ -330,10 +340,15 @@ export function styleProperties(style: unknown): Record<string, string> {
     for (const declaration of declarationsOf(value)) {
       const at = declaration.indexOf(":");
       if (at <= 0) continue;
-      const property = declaration.slice(0, at).trim().toLowerCase();
+      // The name as CSS reads it, its escapes decoded (#383): `c\6flor` and `\width` are color and
+      // width to a browser. Only a name that then reads as a property is kept, so decoding can add
+      // a declaration a browser keeps but never an unsafe one. Values are not decoded.
+      const written = unescapeName(declaration.slice(0, at).trim());
+      // CSS matches names ignoring ASCII case only: a Kelvin sign is not a k.
+      const property = written.replace(/[A-Z]/gu, (letter) => letter.toLowerCase());
       const text = declaration.slice(at + 1).trim();
       // Custom properties (--brand) keep their case; other names are lowercased.
-      const name = declaration.slice(0, at).trim().startsWith("--") ? declaration.slice(0, at).trim() : property;
+      const name = written.startsWith("--") ? written : property;
       if ((/^-?[a-z][a-z0-9-]{0,63}$/u.test(name) || /^--[A-Za-z0-9_-]{1,64}$/u.test(name)) && text !== "" && text.length <= 2000) {
         if (Object.hasOwn(out, name) && isImportant(out[name]) && !isImportant(text)) continue;
         delete out[name];

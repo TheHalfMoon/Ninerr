@@ -55,8 +55,14 @@ const state = {
   // Layers this editor has just added, to select once the change that adds them is applied:
   // { ids, applied } for the latest insert, marked applied when that change selects them.
   selectOnApply: null,
+  // A page just added, to show once the change that adds it is drawn.
+  showOnApply: null,
+  // The page last shown, where a new layer goes when nothing is selected.
+  shownPage: null,
   collapsed: new Set(),
   focusedLayer: null,
+  // The align button to focus when the inspector is drawn again after its change.
+  focusAlign: null,
   queue: Promise.resolve(),
   events: null,
   confirmations: [],
@@ -1369,7 +1375,46 @@ async function openCodeDialog() {
             output.select();
             setStatus("Select the code and copy it.");
           }
-        } }, "Copy code")),
+        } }, "Copy code"),
+        // The same layer as a standalone page: its markup, its tokens and its page's stylesheet.
+        el("button", { type: "button", id: "code-export-html", onclick: async () => {
+          let page;
+          try {
+            page = await state.client.post("/api/code/export-html", { nodeId: selected });
+          } catch (failure) {
+            if (handleSessionEnded(failure)) return;
+            error.textContent = describeError(failure);
+            return;
+          }
+          try {
+            await navigator.clipboard.writeText(page.html);
+            setStatus(`HTML page copied: ${page.layers} layer${page.layers === 1 ? "" : "s"}${page.codeParts > 0 ? `, ${page.codeParts} {…} part${page.codeParts === 1 ? "" : "s"} written as comments` : ""}.`);
+          } catch {
+            output.value = page.html;
+            output.select();
+            setStatus("The HTML page is in the code box: select it and copy it.");
+          }
+        } }, "Copy as an HTML page"),
+        // The same JSX with its styles as Tailwind classes: each one says exactly what the style did.
+        el("button", { type: "button", id: "code-export-tailwind", onclick: async () => {
+          let styled;
+          try {
+            styled = await state.client.post("/api/code/export-tailwind", { nodeId: selected });
+          } catch (failure) {
+            if (handleSessionEnded(failure)) return;
+            error.textContent = describeError(failure);
+            return;
+          }
+          const kept = styled.stylesheetApplies ? "; styles kept inline, since the page's stylesheet applies to these layers" : styled.keptAsStyle > 0 ? `; ${styled.keptAsStyle} declaration${styled.keptAsStyle === 1 ? "" : "s"} kept as style, where a class would not say exactly the same` : "";
+          try {
+            await navigator.clipboard.writeText(styled.code);
+            setStatus(`Tailwind code copied: ${styled.classes} class${styled.classes === 1 ? "" : "es"}${kept}.`);
+          } catch {
+            output.value = styled.code;
+            output.select();
+            setStatus(`The Tailwind code is in the code box: select it and copy it${kept}.`);
+          }
+        } }, "Copy with Tailwind classes")),
         // The stylesheet that applies to it (#283), which the canvas applies to its frame alone.
         ...(typeof exported.stylesheet === "string" ? [(() => {
           const sheet = el("textarea", { id: "code-export-css", rows: 6, readonly: true, spellcheck: "false" });
@@ -2102,11 +2147,12 @@ function insert(kind) {
   let parentId = null;
   const selected = state.selection.length === 1 ? doc.nodes[state.selection[0]] : null;
   if (selected && selected.type !== "text") parentId = selected.id;
-  else if (layerRoots(doc).length > 0) parentId = layerRoots(doc)[0];
+  // With nothing selected, a new layer goes on the page shown.
+  else if (layerRoots(doc).length > 0) parentId = currentPage(doc);
   else {
     // An empty project gets a page to hold its first layer.
     const pageId = newId("page");
-    operations.push(...insertNode(null, 0, { id: pageId, type: "frame", tag: "main", style: { position: "relative", width: "800px", height: "600px", background: "#ffffff" } }));
+    operations.push(...insertNode(null, 0, { id: pageId, type: "frame", tag: "main", style: { ...PAGE_STYLE } }));
     parentId = pageId;
   }
   const index = parentId === null ? doc.rootIds.length : (doc.nodes[parentId]?.children.length ?? 0);
@@ -2115,6 +2161,73 @@ function insert(kind) {
     ? insertNode(parentId, index, { id, type: "text", tag: "p", text: "Text", style: { position: "absolute", left: "32px", top: "32px", margin: "0px", "font-size": "16px" } })
     : insertNode(parentId, index, { id, type: "element", tag: "div", style: { position: "absolute", left: "32px", top: "32px", width: "160px", height: "100px", background: "#d9d2ff" } })));
   commitAndSelect(operations, kind === "text" ? "Insert text" : "Insert box", id);
+}
+
+// ---------- pages ----------
+
+// A project's pages are its top-level frames, drawn one after another on the canvas.
+const PAGE_STYLE = { position: "relative", width: "800px", height: "600px", background: "#ffffff" };
+const pageName = (doc, id, index) => (typeof doc.nodes[id]?.props?.name === "string" && doc.nodes[id].props.name.trim() !== "" ? doc.nodes[id].props.name.trim() : `Page ${index + 1}`);
+
+/** The page a layer is on: its top-level ancestor. */
+function pageOf(doc, id) {
+  let node = doc?.nodes[id];
+  for (let steps = 0; node && node.parentId !== null && steps <= 1_100; steps += 1) node = doc.nodes[node.parentId];
+  return node ? node.id : null;
+}
+
+/** Add a page after the others, named for its place, select it and show it. */
+function addPage() {
+  if (state.document === null) return;
+  const doc = state.document;
+  const id = newId("page");
+  const pages = layerRoots(doc);
+  // A name no other page has: Page 2, or Page 3 if Page 2 is taken.
+  const taken = new Set(pages.map((pageId, index) => pageName(doc, pageId, index)));
+  let number = pages.length + 1;
+  while (taken.has(`Page ${number}`)) number += 1;
+  const operations = insertNode(null, doc.rootIds.length, { id, type: "frame", tag: "main", style: { ...PAGE_STYLE } });
+  operations[0].node.props.name = `Page ${number}`;
+  state.showOnApply = id;
+  state.shownPage = id;
+  commitAndSelect(operations, "Add page", id);
+}
+
+/** The page shown: the selected layer's, else the one last shown, else the first. */
+function currentPage(doc) {
+  const pages = layerRoots(doc);
+  const fromSelection = pageOf(doc, state.selection.at(-1) ?? state.focusedLayer);
+  if (fromSelection !== null && pages.includes(fromSelection)) return fromSelection;
+  if (state.shownPage !== null && pages.includes(state.shownPage)) return state.shownPage;
+  return pages[0] ?? null;
+}
+
+/** Select a page and fit the canvas to it. */
+function showPage(id) {
+  if (state.document === null || !state.document.nodes[id]) return;
+  state.shownPage = id;
+  selectLayers([id]);
+  canvas.showLayer(id);
+  renderToolbar();
+}
+
+function renderPages() {
+  const select = $("page-select");
+  const doc = state.document;
+  const pages = doc === null ? [] : layerRoots(doc);
+  const current = doc === null ? null : currentPage(doc);
+  // Redrawn only when what it shows changes, so an open list is not reset under the pointer.
+  const names = pages.map((id, index) => pageName(doc, id, index));
+  const key = JSON.stringify([pages, names, current]);
+  if (select.dataset.key !== key) {
+    select.replaceChildren(...pages.map((id, index) => el("option", { value: id, selected: id === current }, names[index])));
+    select.dataset.key = key;
+  }
+  select.disabled = pages.length === 0;
+  $("action-show-page").disabled = pages.length === 0;
+  $("action-add-page").disabled = doc === null;
+  // A page just added is shown once the canvas has drawn it.
+  if (state.showOnApply !== null && doc !== null && Object.hasOwn(doc.nodes, state.showOnApply) && canvas.showLayer(state.showOnApply)) state.showOnApply = null;
 }
 
 /** Commit a change that adds layer `id`, and select it once the change is applied. */
@@ -2582,6 +2695,31 @@ function onLayersClick(event) {
   focusLayer(id);
 }
 
+// Lining several layers up, or spacing three or more evenly: the buttons do what Alt+A, D, W,
+// S, H, V and Alt+Shift+H, V do on the canvas.
+function alignGroup() {
+  // Counted as align counts them: drawn, with a box, and none inside another selected one.
+  const count = canvas?.alignable ?? 0;
+  if (count < 2) return null;
+  const align = (key, label, keys, action) => el("button", { type: "button", "data-align": key, "aria-keyshortcuts": keys, onclick: () => {
+    // The change's own status says what it did. The inspector is drawn again when it arrives:
+    // focus stays on this button.
+    action();
+    state.focusAlign = key;
+  } }, label);
+  return el("div", { class: "steps", role: "group", id: "align-group", "aria-label": `Align ${count} layers` },
+    align("left", "Align left", "Alt+A", () => canvas.align("left")),
+    align("center", "Align centre", "Alt+H", () => canvas.align("center")),
+    align("right", "Align right", "Alt+D", () => canvas.align("right")),
+    align("top", "Align top", "Alt+W", () => canvas.align("top")),
+    align("middle", "Align middle", "Alt+V", () => canvas.align("middle")),
+    align("bottom", "Align bottom", "Alt+S", () => canvas.align("bottom")),
+    ...(count >= 3 ? [
+      align("horizontal", "Space evenly across", "Alt+Shift+H", () => canvas.distribute("horizontal")),
+      align("vertical", "Space evenly down", "Alt+Shift+V", () => canvas.distribute("vertical")),
+    ] : []));
+}
+
 function renderInspector() {
   const form = $("inspector");
   const doc = state.document;
@@ -2593,7 +2731,11 @@ function renderInspector() {
   const activeField = active?.name ?? null;
   if (doc === null || state.selection.length !== 1 || !doc.nodes[state.selection[0]]) {
     delete form.dataset.nodeId;
-    form.replaceChildren(el("p", {}, doc === null ? "Open a project to start." : state.selection.length > 1 ? `${state.selection.length} layers selected.` : "Select a layer to edit it."));
+    form.replaceChildren(el("p", {}, doc === null ? "Open a project to start." : state.selection.length > 1 ? `${state.selection.length} layers selected.` : "Select a layer to edit it."), ...(doc !== null && state.selection.length > 1 ? [alignGroup()].filter(Boolean) : []));
+    if (state.focusAlign) {
+      form.querySelector(`[data-align="${state.focusAlign}"]`)?.focus();
+      state.focusAlign = null;
+    }
     return;
   }
   const node = doc.nodes[state.selection[0]];
@@ -2717,6 +2859,7 @@ function renderToolbar() {
   undoAgent.title = named ?? "";
   $("action-insert-box").disabled = !open;
   $("action-insert-text").disabled = !open;
+  renderPages();
   $("action-delete").disabled = !open || state.selection.length === 0;
   $("action-group").disabled = !open || state.selection.length === 0;
   $("action-save").disabled = !open;
@@ -2765,8 +2908,24 @@ function isTextInput(target) {
   return target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable);
 }
 
+// Alt+A, D, W, S, H, V align the selection; with Shift, H and V space it evenly. By the key's
+// place, as Option+letter types another character on a Mac.
+const ALIGN_KEYS = { KeyA: "left", KeyD: "right", KeyW: "top", KeyS: "bottom", KeyH: "center", KeyV: "middle" };
+
 function onGlobalKey(event) {
   if ($("dialog").open) return;
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.repeat && !isTextInput(event.target) && state.selection.length >= 2) {
+    if (event.shiftKey && (event.code === "KeyH" || event.code === "KeyV")) {
+      event.preventDefault();
+      if (canvas.distribute(event.code === "KeyH" ? "horizontal" : "vertical") === 0) setStatus("Select three layers or more that are shown to space them evenly.");
+      return;
+    }
+    if (!event.shiftKey && Object.hasOwn(ALIGN_KEYS, event.code)) {
+      event.preventDefault();
+      if (canvas.align(ALIGN_KEYS[event.code]) === 0) setStatus("Select two layers or more that are shown to align them.");
+      return;
+    }
+  }
   const mod = event.ctrlKey || event.metaKey;
   if (!mod || isTextInput(event.target)) return;
   const key = event.key.toLowerCase();
@@ -2823,6 +2982,10 @@ async function main() {
   $("action-redo").addEventListener("click", () => undoRedo("redo"));
   $("action-undo-agent").addEventListener("click", () => undoAgentChange());
   $("action-insert-box").addEventListener("click", () => insert("box"));
+  $("action-add-page").addEventListener("click", addPage);
+  $("page-select").addEventListener("change", (event) => showPage(event.target.value));
+  // Choosing the page already chosen changes nothing; Show fits the canvas to it again.
+  $("action-show-page").addEventListener("click", () => showPage($("page-select").value));
   $("action-insert-text").addEventListener("click", () => insert("text"));
   $("action-delete").addEventListener("click", deleteSelection);
   $("action-zoom-in").addEventListener("click", () => { canvas.zoomBy(1.25); renderToolbar(); });

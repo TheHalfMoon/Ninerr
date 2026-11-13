@@ -202,6 +202,14 @@ test("agents read a layer as JSX through MCP layer_code", async () => {
     const answer = await fetch(host.mcpUrl, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "layer_code", arguments: { nodeId: paragraph } } }) }).then((response) => response.json());
     assert.match(answer.result.structuredContent.code, /<p className="note">Hi<\/p>/u);
     assert.equal(answer.result.structuredContent.layers, 1);
+    // The same layer with its style as Tailwind classes, or as a standalone HTML page.
+    await call("/api/edit", { baseRevision: host.session.document.revision, intent: "Style it", operations: [{ type: "set-props", nodeId: paragraph, set: { style: { padding: "4px" } }, unset: ["attributes"] }] });
+    const ask = (args) => fetch(host.mcpUrl, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "layer_code", arguments: args } }) }).then((response) => response.json());
+    assert.match((await ask({ nodeId: paragraph, format: "tailwind" })).result.structuredContent.code, /<p className="p-\[4px\]">Hi<\/p>/u);
+    assert.match((await ask({ nodeId: paragraph, format: "html" })).result.structuredContent.html, /^<!doctype html>[\s\S]*<p style="padding: 4px">Hi<\/p>/u);
+    assert.match((await ask({ nodeId: paragraph })).result.structuredContent.code, /style=\{\{ padding: "4px" \}\}/u, "JSX by default");
+    const refused = await ask({ nodeId: paragraph, format: "svg" });
+    assert.ok(refused.error || refused.result?.isError, JSON.stringify(refused));
   } finally {
     await host.close();
     rmSync(root, { recursive: true, force: true });

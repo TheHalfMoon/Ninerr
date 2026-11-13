@@ -68,13 +68,34 @@ const MAX_TEXT = 1_000_000;
 const MAX_VALUE = 2_000;
 const STYLE_NAME = /^(--[A-Za-z0-9_-]{1,64}|-?[a-z][a-z-]{0,63})$/u;
 // Anything that could fetch, execute, or escape a declaration is refused outright.
-const UNSAFE_STYLE = /url\s*\(|image-set|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|[\\;{}<>]/iu;
+// image( and src( as in UNSAFE_STYLESHEET: a browser refuses both in a value, so this is defence
+// in depth (#383).
+const UNSAFE_STYLE = /url\s*\(|image-set|image\s*\(|(?:^|[^-\w])src\s*\(|expression\s*\(|javascript:|vbscript:|@import|behavior\s*:|-moz-binding|[\\;{}<>]/iu;
+
+/**
+ * Whether every quote, ( and [ in a style value is closed, in order (#382). An open one is not a
+ * value a browser draws, and written next to other declarations it swallows those after it:
+ * `calc(1px; top: 1px` is one declaration. Backslashes are refused before this is asked.
+ */
+function balancedStyleValue(value) {
+  const open = [];
+  let quote = null;
+  for (const char of value) {
+    if (quote !== null) {
+      if (char === quote) quote = null;
+    } else if (char === "\"" || char === "'") quote = char;
+    else if (char === "(" || char === "[") open.push(char === "(" ? ")" : "]");
+    else if ((char === ")" || char === "]") && open.pop() !== char) return false;
+  }
+  return quote === null && open.length === 0;
+}
 
 /** Why the renderer would not draw this style declaration, or null: the rule planElement applies. */
 export function styleDeclarationProblem(name, value) {
   if (typeof name !== "string" || !STYLE_NAME.test(name)) return `${String(name).slice(0, 40)} is not a style property the canvas draws`;
   if (typeof value !== "string" || value.trim() === "") return `${name} has no value`;
   if (UNSAFE_STYLE.test(value)) return `${name}'s value could fetch or run something, or hide a declaration, and is never drawn`;
+  if (!balancedStyleValue(value)) return `${name}'s value leaves a quote or bracket open, and is never drawn`;
   return null;
 }
 // A stylesheet that could fetch or execute is not drawn at all. It is judged with its escapes
@@ -519,7 +540,7 @@ export function planElement(node) {
   if (isRecord(rawStyle)) {
     for (const [name, rawValue] of Object.entries(rawStyle)) {
       const value = typeof rawValue === "number" ? String(rawValue) : rawValue;
-      if (typeof value !== "string" || !STYLE_NAME.test(name) || value.length > MAX_VALUE || UNSAFE_STYLE.test(value)) dropped += 1;
+      if (typeof value !== "string" || !STYLE_NAME.test(name) || value.length > MAX_VALUE || UNSAFE_STYLE.test(value) || !balancedStyleValue(value)) dropped += 1;
       else style[name] = value.trim();
     }
   }
