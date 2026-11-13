@@ -40,11 +40,14 @@ So the 16 read-only tools need only `read`.
   - `layer_tree`, `layer_children` and `layer_details`: the layers.
   - `find_layers`: search by name or text.
   - `selection`: what the person has selected in the editor.
-  - `layer_code`: a layer as a JSX component.
+  - `layer_code`: a layer as a JSX component; with `format: "tailwind"`, its styles as Tailwind classes; with `format: "html"`, a standalone HTML page that loads and runs nothing.
   - `design_tokens`: the design system's collections, modes and tokens, with how many layer values use each (ADR-0004).
   - `list_components` and `instance_layers`: the components with their properties and instance counts, and the layers an instance draws, with the path and node each override takes (ADR-0005).
   - `search_components` and `get_component`: the records Ninerr has of component sources' components (Meta Astryx, at a pinned commit; `packages/component-sources/src/records.mjs`). The first finds components by name or purpose; the second gives one's exact props, variants, accessibility criteria, limitations and provenance. They read records that ship with Ninerr: nothing is fetched, and no source code is given or imported.
   - `search_design_references` and `get_design_reference`: the local reference pack the person has read into the open project. They return public references with their rights, never file bytes. They take no directory, URL or token, and with no pack read the answer says so; nothing is fetched instead.
+- **Dry runs and revisions** (ADR-0006, in part). Every write and consequential tool also takes:
+  - `dryRun: true`, which checks the change as it would be made (the caller's access, the document rules, the stylesheet budget) and answers `{ dryRun: true, wouldChange, operations, revision }`. It makes nothing, and a dry-run delete asks the person nothing, so it does not check what only the person's approval would. A layer it would create has an id there that a real call does not reuse.
+  - `baseRevision`, the revision the agent read. Once the caller is authorized, a change is refused when the document has moved on since; and the change is made at that revision, so a delete the person approves after the document changed is refused too.
 - **Editing.** Every write is one history transaction, attributed to the agent. The person sees it live on the canvas and can undo it with **Undo agent change**, next to Undo (Ctrl+Alt+Z; Cmd+Option+Z on a Mac): it reverts the agent's latest change in this session, and then the one before. `finish_task` changes nothing; it tells Ninerr the agent is done with some layers.
 - **Only the project the agent has read.** Tools act on the project open in Ninerr. An agent may write or delete only in the project it last connected to (`initialize`) or read with `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection` or `layer_code` (#260). Otherwise the call is refused, before the person is asked anything, and the agent is told to call `project_info` first. Two cases are refused this way:
   - the person has opened another project since the agent last read;

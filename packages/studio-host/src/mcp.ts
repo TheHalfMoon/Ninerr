@@ -4,7 +4,7 @@ import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designS
 import { styleDeclarationProblem } from "@ninerr/renderer";
 import { componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
 import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
-import { exportJsx } from "./code.ts";
+import { exportHtml, exportJsx, exportTailwind } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
@@ -201,10 +201,13 @@ const TOOLS: Tool[] = [
   {
     name: "layer_code",
     title: "Layer as JSX",
-    description: "A layer and everything inside it as a JSX function component (through code-ir), with the tags, attributes and style the canvas renders. codeParts counts {…} parts copied exactly from the source this design was brought in from: they are not sanitized, and the names they use must exist where the code runs.",
-    inputSchema: object({ nodeId: { type: "string" } }, ["nodeId"]),
+    description: "A layer and everything inside it as a JSX function component (through code-ir), with the tags, attributes and style the canvas renders. format \"tailwind\" writes each style as Tailwind classes that set exactly what it says, keeping in a style object what no class can carry; format \"html\" gives a standalone HTML page instead, which loads and runs nothing. codeParts counts {…} parts copied exactly from the source this design was brought in from: they are not sanitized, and the names they use must exist where the code runs (in HTML they are written as comments).",
+    inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: ["jsx", "tailwind", "html"] } }, ["nodeId"]),
     run: ({ session }, args) => {
       try {
+        if (args.format !== undefined && !["jsx", "tailwind", "html"].includes(args.format as string)) throw new ToolError("format is \"jsx\", \"tailwind\" or \"html\"");
+        if (args.format === "tailwind") return exportTailwind(session.document, args.nodeId);
+        if (args.format === "html") return exportHtml(session.document, args.nodeId);
         return exportJsx(session.document, args.nodeId);
       } catch (error) {
         throw new ToolError(error instanceof Error ? error.message : "the layer cannot be exported");
@@ -243,6 +246,7 @@ const TOOLS: Tool[] = [
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
         "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
         "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
+        "Every tool that changes the document takes dryRun: true, which checks the change and says what it would touch (wouldChange) without making it or asking the person anything (a created layer's id there is not the one a real call makes), and baseRevision, the revision you read (project_info gives it): a change to a document that has moved on since is refused, so read it again.",
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
@@ -697,10 +701,20 @@ const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
 // the tools of Ninerr's catalog, which carries the classification each tool is authorized by.
 assertMCPToolSurface({ tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
 
+// Every tool that changes the document also takes these: a dry run checks the change and says
+// what it would touch, changing nothing; baseRevision refuses the call if the document has moved
+// on since the agent read it (ADR-0006).
+const CHANGE_ARGUMENTS = {
+  dryRun: { type: "boolean", description: "Check the change and say what it would touch, without making it." },
+  baseRevision: { type: "integer", minimum: 0, description: "The document revision the change is based on; refused if the document has changed since." },
+};
+
 export function mcpToolDefinitions() {
   return TOOLS.map(({ name, title, description, inputSchema }) => {
     const toolClass = classifyTool(name);
-    return { name, title, description, inputSchema, annotations: { readOnlyHint: toolClass === "read", destructiveHint: toolClass === "consequential", idempotentHint: toolClass === "read", openWorldHint: false } };
+    const changes = toolClass === "write" || toolClass === "consequential";
+    const schema = changes ? { ...inputSchema, properties: { ...(inputSchema as any).properties, ...CHANGE_ARGUMENTS } } : inputSchema;
+    return { name, title, description, inputSchema: schema, annotations: { readOnlyHint: toolClass === "read", destructiveHint: toolClass === "consequential", idempotentHint: toolClass === "read", openWorldHint: false } };
   });
 }
 
@@ -890,7 +904,15 @@ export async function handleMcpMessage(context: McpContext, actor: StudioActor, 
 
 async function callTool(context: McpContext, actor: StudioActor, params: any) {
   const toolName = params?.name;
-  const args = params?.arguments === undefined ? {} : params.arguments;
+  const given = params?.arguments === undefined ? {} : params.arguments;
+  // dryRun and baseRevision belong to the call, not to the tool: taken off before it runs.
+  const changes = typeof toolName === "string" && (classifyTool(toolName) === "write" || classifyTool(toolName) === "consequential");
+  // Only from an object: anything else is left as it came, and refused as tool arguments.
+  const plain = changes && given !== null && typeof given === "object" && !Array.isArray(given);
+  const { dryRun, baseRevision, ...rest } = plain ? given : { dryRun: undefined, baseRevision: undefined };
+  const args = plain ? rest : given;
+  if (dryRun !== undefined && typeof dryRun !== "boolean") return toolResult("dryRun is true or false", true);
+  if (baseRevision !== undefined && (!Number.isSafeInteger(baseRevision) || baseRevision < 0)) return toolResult("baseRevision is a revision number", true);
   if (typeof toolName !== "string" || toolName === "") return toolResult("tools/call needs a tool name", true);
   const session = context.session();
   if (session === null) return toolResult("No project is open in Ninerr. Ask the person to open one.", true);
@@ -907,22 +929,34 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
   };
   const at = context.now();
   const call = { actor, toolName, arguments: args, at };
+  // A change based on a revision the document has moved on from is refused: after the caller is
+  // authorized (so a refused caller learns nothing), before the person is asked anything; and
+  // the change itself is made at that revision, so one made while the person was asked is too.
+  const stale = (): string | null => (baseRevision !== undefined && baseRevision !== session.revision ? `The document has changed: your change is based on revision ${baseRevision}, and it is at ${session.revision}. Read it again first.` : null);
   // Authorize before anything else, including before a consequential call asks the person.
   try {
     requireMCPToolCall(session.accessPolicy(), call);
   } catch (error) {
     if (!(error instanceof MCPAuthorizationError) || error.decision.outcome !== "confirmation-required") return refusal(error);
-    // Before the person is asked to confirm anything.
-    const unread = notRead();
-    if (unread !== null) return toolResult(unread, true);
-    const confirmation = await confirm(context, session, actor, toolName, args, at);
-    if (typeof confirmation === "string") return toolResult(confirmation, true);
-    try {
-      requireMCPToolCall(session.accessPolicy(), { ...call, at: context.now(), confirmation });
-    } catch (again) {
-      return refusal(again);
+    // Reaching here, the caller may change the document. A dry run changes nothing, so the
+    // person is not asked to confirm it.
+    if (dryRun !== true) {
+      // Before the person is asked to confirm anything.
+      const unread = notRead();
+      if (unread !== null) return toolResult(unread, true);
+      const before = stale();
+      if (before !== null) return toolResult(before, true);
+      const confirmation = await confirm(context, session, actor, toolName, args, at);
+      if (typeof confirmation === "string") return toolResult(confirmation, true);
+      try {
+        requireMCPToolCall(session.accessPolicy(), { ...call, at: context.now(), confirmation });
+      } catch (again) {
+        return refusal(again);
+      }
     }
   }
+  const changed = stale();
+  if (changed !== null) return toolResult(changed, true);
   const unread = notRead();
   if (unread !== null) return toolResult(unread, true);
   const tool = TOOL_BY_NAME.get(toolName);
@@ -938,16 +972,31 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       references: context.references,
       edit: (operations, intent) => {
         if (operations.length === 0) throw new ToolError("nothing to change");
-        const event = session.edit(actor, { baseRevision: session.revision, operations, intent, tool: toolName }, "mcp");
+        if (dryRun === true) {
+          const preview = session.preview(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
+          // Nothing is made: the result says so, and what the change would touch.
+          throw new DryRun({ dryRun: true, wouldChange: preview.affectedNodeIds, operations: preview.operations, revision: preview.revision, intent });
+        }
+        const event = session.edit(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
         return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds };
       },
     }, args);
     if (PROJECT_READS.has(toolName) || toolClass === "write" || toolClass === "consequential") context.lastRead.set(actor.actorId, session.name);
     return toolResult(value);
   } catch (error) {
+    if (error instanceof DryRun) return toolResult(error.result);
     if (error instanceof ToolError) return toolResult(error.message, true);
     if (error instanceof StudioError) return toolResult(error.message, true);
     return toolResult("Ninerr could not complete the call.", true);
+  }
+}
+
+// A dry run's answer: thrown from edit, so the tool stops where it would have made the change.
+class DryRun extends Error {
+  readonly result: Record<string, unknown>;
+  constructor(result: Record<string, unknown>) {
+    super("dry run");
+    this.result = result;
   }
 }
 

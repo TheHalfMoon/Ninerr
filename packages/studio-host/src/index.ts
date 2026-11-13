@@ -8,7 +8,7 @@ export { ImportDesk, MAX_IMPORT_HTML_BYTES, MAX_IMPORT_NODES, styleProperties, t
 export { AGENT_CAPABILITIES, AgentRegistry, type AgentSummary } from "./agents.ts";
 export { CONFIRMATION_WAIT_MS, ConfirmationBroker, MCP_PROTOCOL_VERSIONS, handleMcpMessage, mcpToolDefinitions, type PendingConfirmation } from "./mcp.ts";
 export { assertLoopbackUrl, discoverMcpUrl, runRelay, type RelayOptions } from "./relay.ts";
-export { exportJsx, importJsx } from "./code.ts";
+export { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
 export { prepareProjectsFolder, resolveProjectsFolder } from "./projects-folder.ts";
 export { CodebaseLinks, MAX_SCAN_DEPTH, MAX_SCAN_ENTRIES, MAX_SCAN_FILES, MAX_SOURCE_BYTES, assertFolder, bringIn, planWriteBack, readSourceFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 export { type CodeSource, type ImportJsxOptions } from "./code.ts";
