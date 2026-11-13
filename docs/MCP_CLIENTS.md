@@ -76,6 +76,44 @@ Current OpenCode V2 config stores servers under `mcp.servers` in the user or pro
 
 Replace the path, then **merge** the `mcp.servers.ninerr` object with your existing configuration rather than overwriting other servers. Use `opencode mcp list` or `/mcps` to check. Launch OpenCode with the credential in its environment. Source: `docs/examples/mcp-clients/opencode.template.json`.
 
+## Cursor
+
+Cursor supports local stdio MCP servers in `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project). Merge the `ninerr` entry from `docs/examples/mcp-clients/cursor.mcp.template.json` with your existing `mcpServers` object:
+
+```json
+{
+  "mcpServers": {
+    "ninerr": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"],
+      "env": { "NINERR_MCP_TOKEN": "${env:NINERR_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+Set the credential in the environment before launching Cursor, or use the secure environment mechanism Cursor supports. Never copy the token literal into `mcp.json`. Validate by running the same read/dry-run/edit tests below, not by merely seeing the server listed.
+
+## Gemini CLI
+
+Gemini CLI supports stdio MCP servers through `~/.gemini/settings.json` (user) or `.gemini/settings.json` (project). Merge the `mcpServers.ninerr` object from `docs/examples/mcp-clients/gemini.settings.template.json`:
+
+```json
+{
+  "mcpServers": {
+    "ninerr": {
+      "command": "node",
+      "args": ["D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"],
+      "env": { "NINERR_MCP_TOKEN": "${NINERR_MCP_TOKEN}" },
+      "trust": false
+    }
+  }
+}
+```
+
+Keep `trust: false`: Gemini tool calls should retain their own approval controls, in addition to Ninerr's document authorization. Use `gemini mcp list` to inspect configured servers, then exercise the local test project.
+
 ## Other MCP clients
 
 Use the **local stdio** transport with:
@@ -95,7 +133,7 @@ If a client only supports Streamable HTTP, use Ninerr's authenticated **loopback
 4. Ask it to make one small reversible change and check that the editor reflects an **attributed agent transaction**; undo it from Ninerr.
 5. Attempt a consequential `delete_layers` with a test frame: it must request **a person’s approval**, not execute silently. Deny approval and verify no deletion.
 6. Switch projects or revoke the agent connection: verify that a stale agent cannot continue changing the prior document without re-reading/connecting.
-7. Repeat the read + dry-run + edit flow separately with **each client**. Seeing a client in `mcp list` is **not proof** that an end-to-end connection passed.
+7. Repeat the read + dry-run + edit flow separately with **each client** (Codex, Claude Code, OpenCode, Cursor, Gemini CLI where installed). Seeing a client in `mcp list` is **not proof** that an end-to-end connection passed.
 
 Ninerr's `tests/mcp-server.test.mjs`, `tests/mcp-relay.test.mjs` and `tests/mcp-authorization.test.mjs` exercise the server and relay but are **not substitutes** for a live test with each installed client. Do not mark a client "connected" until the actual test passes.
 
