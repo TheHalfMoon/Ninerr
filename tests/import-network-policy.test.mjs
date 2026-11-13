@@ -168,6 +168,10 @@ test("resolved addresses need an allowed policy decision; a private-network gran
   const url = validateNavigationUrl("https://example.com/", remote, privateGrant);
   validateResolvedAddresses(url, ["93.184.216.34"], remote, privateGrant);
   assert.throws(() => validateResolvedAddresses(url, ["10.0.0.5"], remote, privateGrant), /remote target resolved to forbidden address/u);
+  // The refusal names no address, so a tool result does not map the network behind a name (#94).
+  for (const address of ["10.0.0.5", "fd00::1", "169.254.169.254"]) {
+    assert.throws(() => validateResolvedAddresses(url, [address], remote, privateGrant), (error) => /forbidden address \(private, loopback, link-local or reserved\)/u.test(error.message) && !error.message.includes(address), address);
+  }
   assert.throws(() => validateResolvedAddresses(url, ["93.184.216.34"], remote), /network policy denied import\.fetch/u);
 
   const local = defaultImportPolicy("local-app");
