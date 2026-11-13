@@ -2,7 +2,7 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
-Last updated: 2026-11-13. Canonical main: `c081b16`.
+Last updated: 2026-11-13. Canonical main: `63912b7`.
 
 ## Completed since P09 (with evidence)
 
@@ -54,6 +54,7 @@ Last updated: 2026-11-13. Canonical main: `c081b16`.
 | P10-6: a recorded disposition for every open issue | #450 | `182d696` | `docs/evidence/P10_ISSUE_DISPOSITIONS_2026-11-13.md` |
 | Token drift: the design system against a stylesheet in the connected codebase (#79's drift requirement) | #452 | `87d434c` | seven exact-head checks pass |
 | P10 dogfooding on main `0723851`: seven projects, no failed check | #453 | `c081b16` | `docs/evidence/P10_DOGFOODING_2026-11-13.md` |
+| Windows trusted write renamed through its own handle (#349, closed; founder decision 2026-11-13) | #456 | `63912b7` | seven exact-head checks pass |
 
 Each row's PR has its full check results, its fresh-context review findings and fixes, and its mutation results.
 
@@ -70,7 +71,7 @@ Nothing is in review.
 | P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 scale workloads are merged (#426). | The seven-project dogfooding passed on main `0723851` (`docs/evidence/P10_DOGFOODING_2026-11-13.md`) as evidence; the candidate needs its own run.
 | P10-2 | Desktop packages smoke-tested and journeyed on each platform for the candidate. No clean-machine install has been done. |
 | P10-3 | Artifacts bound to the candidate. The Electron LGPL corresponding source is checked but not carried alongside the artifacts (route to be confirmed: see Blockers). |
-| P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is open. |
+| P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is fixed (#456). |
 | P10-5 | Parity dispositions. #79: token drift detection is built (#452); token tiers beyond collections, modes and aliases, and Tailwind config as a drift source, need a disposition. #78 (states bound to source, in the P05 design-components library no product surface uses) needs a disposition. Both are the founder's. |
 | P10-6 | Every open issue has a recorded disposition (`docs/evidence/P10_ISSUE_DISPOSITIONS_2026-11-13.md`); none is critical. #382, #94 and #351 are closed. Judged again on the exact candidate. |
 
@@ -107,7 +108,7 @@ Nothing is in review.
 4. **Aceternity UI and 21st.dev:** the publishers' written permission.
 5. **Reference-machine performance runs and clean-machine installs** need the founder's hardware.
 6. **Owner-only actions:** the `v1.0.0` tag, publishing the draft release, and removing the unused `TYPESAFE_API_KEY` secret.
-7. **#349 (Windows trusted write):** the fix renames the private replacement through its handle, which adds `SetFileInformationByHandle` to the pinned kernel32 boundary. The alternative refuses a projects folder that is not private to the user. Either changes an established security boundary, so it waits for the founder's choice.
+7. **#349 (Windows trusted write):** decided by the founder on 2026-11-13: the replacement is renamed through its own handle (#456, merged; #349 closed).
 8. **PDF export:** the clipboard cannot hold a PDF and the desktop app refuses downloads by design, so a PDF needs either a host route that writes export files into the project folder or printing. Either crosses an established boundary, so it waits for the founder.
 
 ## Tests executed (latest, with exact heads)
@@ -121,6 +122,6 @@ Nothing is in review.
 ## Next engineering actions
 
 Every product item that needs no decision is built and merged. What remains:
-1. The founder's decisions above (ADR-0008 breakpoints, #349, PDF, network access, preview runner, corresponding source, publishers' permission) and the P10-5 parity dispositions (#78, #79).
+1. The founder's decisions above (ADR-0008 breakpoints, PDF, network access, preview runner, corresponding source, publishers' permission) and the P10-5 parity dispositions (#78, #79).
 2. P10 qualification on the exact candidate, once the founder names it: the full suite on three platforms, smoke, gate-13 budgets on the reference machine, P08-G4 remeasured, the seven-project dogfooding (which also answers #377), packaged journeys, a clean-machine install, and a real screen-reader pass (#376).
 3. The release gate: the `v1.0.0` tag and publishing are the owner's.
