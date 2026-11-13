@@ -85,3 +85,61 @@ test("copy a layer as PNG and as SVG: the size the canvas draws it, its colours,
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a layer's margin, a width that is a percentage of its parent, and a rotation are drawn as on the canvas", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-image-geometry-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("geometry");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    const call = client(host.url, host.token);
+    const { document } = await ok(call("GET", "/api/document"), "document");
+    await ok(call("POST", "/api/edit", { baseRevision: document.revision, intent: "Three boxes", operations: [
+      { type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: "stage", type: "frame", props: { name: "Stage", style: { width: "320px", padding: "0px" }, stylesheet: ".unused { color: red; }" } } },
+      { type: "insert-node", parentId: "stage", index: 0, node: { id: "margined", type: "element", props: { tag: "div", style: { margin: "20px", width: "120px", height: "60px", background: "#2255ff" } } } },
+      { type: "insert-node", parentId: "stage", index: 1, node: { id: "half", type: "element", props: { tag: "div", style: { width: "50%", height: "40px", background: "#00aa44" } } } },
+      { type: "insert-node", parentId: "stage", index: 2, node: { id: "turned", type: "element", props: { tag: "div", style: { margin: "40px", width: "100px", height: "40px", background: "#ee1111", transform: "rotate(45deg)" } } } },
+    ] }), "boxes");
+    await waitRevision(page, 1);
+    await page.evaluate(() => {
+      window.copied = [];
+      navigator.clipboard.write = async (items) => { for (const item of items) window.copied.push(await item.getType("image/png")); };
+    });
+    const copy = async (id) => {
+      await page.locator('#layers [role=treeitem][data-node-id="' + id + '"] > .row').click();
+      await page.locator("#action-code").click();
+      await page.locator("#code-export-png").click();
+      await page.waitForFunction((count) => window.copied.length === count, (await page.evaluate(() => window.copied.length)) + 1);
+      await page.keyboard.press("Escape");
+      return page.evaluate(async () => {
+        const bitmap = await createImageBitmap(window.copied.at(-1));
+        const canvas = document.createElement("canvas");
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        const context = canvas.getContext("2d");
+        context.drawImage(bitmap, 0, 0);
+        const at = (x, y) => [...context.getImageData(x, y, 1, 1).data];
+        return { width: bitmap.width, height: bitmap.height, corner: at(2, 2), far: at(bitmap.width - 3, bitmap.height - 3), centre: at(bitmap.width >> 1, bitmap.height >> 1), edge: at(1, bitmap.height >> 1) };
+      });
+    };
+    // The stage holds a stylesheet, so each layer's page has a wrapper standing in for the stage.
+    // The margin is outside the image: its corners are the layer's blue.
+    const margined = await copy("margined");
+    assert.deepEqual([margined.width, margined.height, margined.corner, margined.far], [240, 120, [34, 85, 255, 255], [34, 85, 255, 255]]);
+    // Half of a 320 wide stage is 160, filled to its far edge.
+    const half = await copy("half");
+    assert.deepEqual([half.width, half.height, half.far], [320, 80, [0, 170, 68, 255]]);
+    // Rotated, the image is its bounds once turned: filled at the centre, empty at the corners.
+    const turned = await copy("turned");
+    assert.ok(Math.abs(turned.width - 2 * 99) <= 2 && turned.width === turned.height, `${turned.width} × ${turned.height}`);
+    assert.deepEqual([turned.centre, turned.corner[3], turned.edge[3]], [[238, 17, 17, 255], 0, 0]);
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

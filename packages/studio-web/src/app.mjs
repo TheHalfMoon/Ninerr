@@ -2705,34 +2705,61 @@ function onInspectorChange(event) {
 // size. The page carries its own styles and only data: images, so nothing is fetched. An SVG
 // holding HTML is drawn by browsers; vector editors may not read it.
 async function layerImage(nodeId, format) {
+  const element = canvas.renderer.elementFor(nodeId);
+  if (!element) throw new Error("this layer is not drawn on the canvas");
+  // Its box as the canvas lays it out (border box, before its own transform), and the bounds it
+  // covers once transformed: the image is those bounds.
+  const view = element.ownerDocument.defaultView;
+  const computed = view.getComputedStyle(element);
+  const transforms = ["transform", "translate", "rotate", "scale"].map((name) => [name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
+  const drawn = element.getBoundingClientRect();
+  for (const [name] of transforms) element.style.setProperty(name, "none", "important");
+  const box = element.getBoundingClientRect();
+  for (const [name, value, priority] of transforms) {
+    if (value === "") element.style.removeProperty(name);
+    else element.style.setProperty(name, value, priority);
+  }
   const page = await state.client.post("/api/code/export-html", { nodeId });
-  const rect = canvas.renderer.elementFor(nodeId)?.getBoundingClientRect();
-  const width = Math.max(1, Math.ceil(rect?.width ?? 1));
-  const height = Math.max(1, Math.ceil(rect?.height ?? 1));
+  const width = Math.max(1, Math.ceil(drawn.width));
+  const height = Math.max(1, Math.ceil(drawn.height));
   const parsed = new DOMParser().parseFromString(page.html, "text/html");
-  // The page's body, as the frame it was drawn in: its width, the canvas's defaults below every
-  // rule of the page (its own stylesheet keeps the cascade layer and @scope it was written with).
+  // The page's body, as the frame it was drawn in, holding the layer at the size the canvas gave
+  // it: its own margin, offsets and percentages were measured there, against its parent, which
+  // the image does not have. The canvas's defaults stay below every rule of the page (its own
+  // stylesheet keeps the cascade layer and @scope it was written with).
+  // The layer's element: the body's first, or the first inside the wrapper that stands in for
+  // the page whose stylesheet applies to it (when the layer does not hold that stylesheet).
+  const owner = typeof state.document?.nodes[nodeId]?.props?.stylesheet === "string";
+  let root = parsed.body.firstElementChild;
+  if (root && !owner && root.hasAttribute("data-ninerr-page")) root = root.firstElementChild;
+  if (root) {
+    const pinned = { position: "relative", left: "0px", top: "0px", right: "auto", bottom: "auto", margin: "0px", "box-sizing": "border-box", width: `${box.width}px`, height: `${box.height}px`, "transform-origin": computed.transformOrigin };
+    for (const [name, value] of Object.entries(pinned)) root.style.setProperty(name, value, "important");
+  }
   const frame = parsed.createElement("div");
-  frame.setAttribute("style", `width: ${width}px; margin: 0;`);
+  frame.setAttribute("style", `width: ${box.width}px; height: ${box.height}px; margin: 0;`);
   for (const sheet of parsed.querySelectorAll("style")) frame.append(sheet);
   frame.append(...parsed.body.childNodes);
   for (const sheet of frame.querySelectorAll("style")) sheet.textContent = sheet.textContent.replace(/\bbody \{ margin: 0; font-family: system-ui, sans-serif; \}/u, "div[data-ninerr-image] { margin: 0; font-family: system-ui, sans-serif; }");
   frame.setAttribute("data-ninerr-image", "");
   const markup = new XMLSerializer().serializeToString(frame);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject x="0" y="0" width="${width}" height="${height}">${markup}</foreignObject></svg>`;
-  if (format === "svg") return { svg, width, height, layers: page.layers };
+  // The view is the transformed bounds, measured from the untransformed box's corner.
+  const x = drawn.left - box.left;
+  const y = drawn.top - box.top;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${x} ${y} ${width} ${height}"><foreignObject x="0" y="0" width="${box.width}" height="${box.height}" style="overflow: visible">${markup}</foreignObject></svg>`;
+  if (format === "svg") return { svg, width, height };
   const image = new Image();
   image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
   await image.decode();
   const scale = 2;
-  const drawn = document.createElement("canvas");
-  drawn.width = width * scale;
-  drawn.height = height * scale;
-  const context = drawn.getContext("2d");
+  const surface = document.createElement("canvas");
+  surface.width = width * scale;
+  surface.height = height * scale;
+  const context = surface.getContext("2d");
   context.scale(scale, scale);
   context.drawImage(image, 0, 0, width, height);
-  const blob = await new Promise((resolve, reject) => drawn.toBlob((made) => (made ? resolve(made) : reject(new Error("the image could not be made"))), "image/png"));
-  return { blob, width, height, layers: page.layers };
+  const blob = await new Promise((resolve, reject) => surface.toBlob((made) => (made ? resolve(made) : reject(new Error("the image could not be made"))), "image/png"));
+  return { blob, width, height };
 }
 
 async function copyLayerImage(nodeId, format, { output, error }) {
@@ -2744,6 +2771,7 @@ async function copyLayerImage(nodeId, format, { output, error }) {
     error.textContent = failure instanceof HostError ? describeError(failure) : `The image could not be made: ${failure?.message ?? failure}`;
     return;
   }
+  error.textContent = "";
   const size = `${made.width} × ${made.height}`;
   try {
     if (format === "svg") await navigator.clipboard.writeText(made.svg);
