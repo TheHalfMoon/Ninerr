@@ -1,5 +1,7 @@
 # Ninerr
 
+**First release target: v0.1.0 (not published).** The founder is developing Desktop and UI/UX directly; engineering continues the remaining non-UI core, security, CI, packaging evidence and release infrastructure. A tagged release is not authorized yet. See [the release decision](docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md) and [release requirements](docs/RELEASE.md).
+
 Ninerr is a local-first design workspace for interfaces that are code. A design is a document of real HTML and CSS. Code components are first-class layers, and changes move both ways between the canvas and a codebase. People and AI agents edit the same document, and every change is an attributed history transaction.
 
 ## What is in this repository

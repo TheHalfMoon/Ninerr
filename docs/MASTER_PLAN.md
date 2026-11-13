@@ -17,14 +17,16 @@ Ninerr is an AI-native, web-semantic design environment where humans, software a
 
 ## Current program
 
+**2026-11-14 founder update:** Ninerr's first public release target is **v0.1.0**, superseding the previous v1.0.0 target. The founder owns Desktop and UI implementation and the human-facing acceptance of those surfaces. Engineering continues all independent non-UI core, security, CI, provenance, release-infrastructure and documentation work. The P10 security, privacy, accessibility and evidence gates are not relaxed. See `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`. A tagged or published release still needs separate explicit approval.
+
 The founder set the order on 2026-10-08, when the product was renamed to Ninerr:
 1. **N0: Ninerr independence and migration.** This covers the identity census and migration; backward compatibility for projects and setups from before the rename; independence from every donor's identity; the Apache-2.0 license with its source-rights audit; the Electron corresponding source; the documentation; the CI identity gate; and the repository rename. Issue #190 tracks it, and each grain's evidence is in `docs/evidence/N0_*`.
 2. **P08: deep qualification and dogfooding.**
 3. **P09: Ninerr UI and UX.**
 4. **P10: release candidate hardening.**
-5. **The release gate,** then v1.0.0.
+5. **The release gate,** then v0.1.0.
 
-On 2026-10-13 the founder authorized the program through P08 closeout, P09, P10 and the release gate, and resolved the decisions P08 was waiting on (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`). The `v1.0.0` tag is created only after the exact candidate passes every P10 criterion below, and the release it produces is published only after the release gate has checked it.
+On 2026-10-13 the founder authorized the program through P08 closeout, P09, P10 and the release gate, and resolved the decisions P08 was waiting on (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`). The `v0.1.0` tag is created only after the exact candidate passes every P10 criterion below, and the release it produces is published only after the release gate has checked it.
 
 ## Founder decisions of 2026-10-13
 - **Performance budgets (#275).** Absolute budgets are judged on the stated reference machine (Windows 11, Intel Core i5-13420H with 12 logical cores, 16 GiB, Node 24, Microsoft Edge, plugged in, best performance, nothing else running): `tests/editor-performance.test.mjs` runs five times on the exact candidate commit from a clean checkout, and a budget passes when it holds in at least four runs and the median of the five p95s is within it. A script records all five runs. CI keeps measuring on every PR, as information, and a regression of more than 50% against the last recorded baseline for the same runner OS is investigated. The budgets are unchanged. Editor readiness is measured apart from launching a browser. The P08-G4 budget framework is accepted with these targets: edit, undo and redo p95 at most 100 ms at 1,000 layers and at most 300 ms at 10,000 (100 ms there stays a goal, not claimed until measured); an agent's edit p95 at most 400 ms at 10,000 layers; the documented reopen, close and recovery budgets; the bounded HTML import and code write-back budgets; at most 500 MiB memory growth at 50,000 layers (indicative); the supported-size limits; and the disk model since #290 (one snapshot document plus the journal's archived history segments, kept on purpose).
@@ -47,7 +49,7 @@ Each criterion is met through the product itself, with an end-to-end test that d
 5. **Parity is dispositioned:** each required row of the parity record is proven or carries a recorded disposition, including #78 and #79.
 6. **Nothing critical is open, and the canonical documents match live state.** No critical correctness, data-loss, security or release-blocking issue remains; every other open issue (among them #252 and #108, #94, #64 and #310) is resolved or carries a recorded disposition; and `docs/CURRENT.md`, the evidence records, the architecture catalog and the issue states agree.
 
-Then the release gate: the candidate's release workflow runs on the `v1.0.0` tag, and the draft release it creates is checked against the candidate's evidence before it is published.
+Then the release gate: the candidate's release workflow runs on the `v0.1.0` tag, and the draft release it creates is checked against the candidate's evidence before it is published.
 
 ## Definition of genuinely complete
 
