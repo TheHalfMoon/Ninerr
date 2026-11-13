@@ -280,3 +280,33 @@ test("an agent sets a layer's classes, text direction and aria attributes, and i
     assert.match(refusal(await tool("set_attributes", { updates: [{ nodeId: "go", attributes: { "data-ninerr-id": "x" } }] })), /data-ninerr-id is not an attribute the canvas draws/u);
   });
 });
+
+test("an agent lays out a layer's children in a row or a column, with gap, padding and alignment, and turns it off", async () => {
+  await withAgent(async ({ host, owner, tool, ok }) => {
+    const { nodeId: frame } = await ok("create_frame", { name: "Row", width: 300, height: 80 });
+    await owner("POST", "/api/edit", { baseRevision: host.session.document.revision, intent: "Two children", operations: [
+      { type: "insert-node", parentId: frame, index: 0, node: { id: "a", type: "element", props: { tag: "div", style: { position: "absolute", left: "10px", top: "5px", width: "40px" } } } },
+      { type: "insert-node", parentId: frame, index: 1, node: { id: "b", type: "element", props: { tag: "div", style: { width: "50px" } } } },
+    ] });
+    const styleOf = (id) => host.session.document.nodes[id].props.style;
+    await ok("set_layout", { nodeId: frame, mode: "row", gap: "8px", padding: "4px 6px", align: "center", justify: "space-between", wrap: true });
+    assert.deepEqual([styleOf(frame).display, styleOf(frame)["flex-direction"], styleOf(frame).gap, styleOf(frame).padding, styleOf(frame)["align-items"], styleOf(frame)["justify-content"], styleOf(frame)["flex-wrap"]], ["flex", "row", "8px", "4px 6px", "center", "space-between", "wrap"]);
+    assert.deepEqual(styleOf("a"), { width: "40px" }, "a child placed by left and top joins the row");
+    const revision = host.session.document.revision;
+    await ok("set_layout", { nodeId: frame, mode: "column", wrap: false });
+    assert.deepEqual([styleOf(frame)["flex-direction"], styleOf(frame)["flex-wrap"], styleOf(frame).gap], ["column", undefined, "8px"]);
+    assert.equal(host.session.document.revision, revision + 1, "one change");
+    await ok("set_layout", { nodeId: frame, mode: "free" });
+    assert.deepEqual([styleOf(frame).display, styleOf(frame)["flex-direction"], styleOf(frame).gap, styleOf(frame).position], [undefined, undefined, undefined, "relative"]);
+    // Refusals say why and change nothing.
+    const before = host.session.document.revision;
+    for (const [args, message] of [
+      [{ nodeId: frame, mode: "grid" }, /mode is "row", "column" or "free"/u],
+      [{ nodeId: frame, mode: "row", align: "middle" }, /align is flex-start, center, flex-end, stretch, baseline/u],
+      [{ nodeId: frame, mode: "row", gap: "url(x)" }, /could fetch or run something/u],
+      [{ nodeId: frame, mode: "free", gap: "4px" }, /gap, padding, align, justify and wrap are for a row or a column/u],
+      [{ nodeId: frame, mode: "row", wrap: "yes" }, /wrap is true or false/u],
+    ]) assert.match(refusal(await tool("set_layout", args)), message, JSON.stringify(args));
+    assert.equal(host.session.document.revision, before);
+  });
+});

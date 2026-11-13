@@ -78,7 +78,7 @@ test("the MCP documentation matches the tool surface, classes and confirmation w
   // The rename table maps each earlier name to a current tool; an earlier name is unknown now.
   const renamed = [...doc.matchAll(/^\| `([a-z_]+)` \| `([a-z_]+)` \|$/gm)];
   // Tools added after the rename have no earlier name.
-  const sinceRename = ["search_design_references", "get_design_reference", "design_tokens", "set_token", "add_token_mode", "rename_token", "delete_token", "set_layer_modes", "list_components", "create_component", "add_component_property", "insert_instance", "instance_layers", "set_instance_values", "set_instance_override", "reset_instance", "detach_instance", "search_components", "get_component", "set_attributes"];
+  const sinceRename = ["search_design_references", "get_design_reference", "design_tokens", "set_token", "add_token_mode", "rename_token", "delete_token", "set_layer_modes", "list_components", "create_component", "add_component_property", "insert_instance", "instance_layers", "set_instance_values", "set_instance_override", "reset_instance", "detach_instance", "search_components", "get_component", "set_attributes", "set_layout"];
   const renamedTools = MCP_TOOL_NAMES.filter((name) => !sinceRename.includes(name));
   assert.equal(renamed.length, renamedTools.length);
   assert.deepEqual(renamed.map((row) => row[2]).sort(), [...renamedTools].sort());
