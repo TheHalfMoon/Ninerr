@@ -115,14 +115,16 @@ test("drag-move, resize, nudge and delete commit operations that re-render incre
   const h = await harness();
   try {
     const { page } = h;
-    // Drag the card by (60, 30) screen pixels at zoom 1.
+    // Drag the card by (60, 30) screen pixels at zoom 1, with Alt held so it does not snap.
     const card = await page.evaluate(() => window.screenOf("card"));
     await page.mouse.move(card.x, card.y + 30);
+    await page.keyboard.down("Alt");
     await page.mouse.down();
     await page.mouse.move(card.x + 30, card.y + 45, { steps: 3 });
     await page.mouse.move(card.x + 60, card.y + 60, { steps: 3 });
     assert.equal(await page.evaluate(() => window.commits.length), 0, "dragging previews without committing");
     await page.mouse.up();
+    await page.keyboard.up("Alt");
     let result = await h.commit();
     assert.equal(result.intent, "Move layer");
     assert.equal(result.doc.nodes.card.props.style.left, "100px");
@@ -188,13 +190,16 @@ test("moves and resizes commit the geometry the user saw, for margins, padding a
   try {
     const { page } = h;
     // A flow heading with a margin, dragged by (10, 0): it moves by exactly that, keeping its size.
+    // Alt held: nothing snaps (the text beside it is as wide as the platform's font).
     const before = await rectOf(page, "heading");
     const start = await page.evaluate(() => window.screenOf("heading"));
     await page.mouse.move(start.x, start.y);
+    await page.keyboard.down("Alt");
     await page.mouse.down();
     await page.mouse.move(start.x + 5, start.y, { steps: 2 });
     await page.mouse.move(start.x + 10, start.y, { steps: 2 });
     await page.mouse.up();
+    await page.keyboard.up("Alt");
     let result = await h.commit();
     assert.equal(result.intent, "Move layer");
     const after = await rectOf(page, "heading");
@@ -221,9 +226,11 @@ test("moves and resizes commit the geometry the user saw, for margins, padding a
     const collapsing = await rectOf(page, "collapsing");
     const grip = await page.evaluate(() => window.screenOf("collapsing"));
     await page.mouse.move(grip.x, grip.y);
+    await page.keyboard.down("Alt");
     await page.mouse.down();
     await page.mouse.move(grip.x + 10, grip.y, { steps: 3 });
     await page.mouse.up();
+    await page.keyboard.up("Alt");
     // The preview holds the node in place until the host's update arrives: no snap-back.
     const held = await rectOf(page, "collapsing");
     assert.deepEqual([held.x - collapsing.x, held.y - collapsing.y], [10, 0], "the preview is held until the update");
@@ -252,6 +259,92 @@ test("moves and resizes commit the geometry the user saw, for margins, padding a
     const resized = await rectOf(page, "inline");
     assert.ok(Math.abs(resized.width - (inline.width + 30)) < 0.5, `the rendered box grew by the drag (${inline.width} to ${resized.width})`);
     assert.deepEqual(h.errors, []);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a dragged layer snaps to another's edge, shows the guide while it is near, and moves freely with Alt", browserTestOptions(), async () => {
+  // Without the title, whose height follows the platform's fonts: every line is known.
+  const doc = baseDocument();
+  const h = await harness(createDocument({ id: "doc", nodes: Object.values(doc.nodes).filter((node) => node.id !== "title").map((node) => (node.id === "card" ? { ...node, children: [] } : node)) }));
+  try {
+    const { page } = h;
+    // The badge's top (60) dragged up 17 would be 43: within 6 of the card's top (40), so it snaps.
+    const start = await page.evaluate(() => window.screenOf("badge"));
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x, start.y - 17, { steps: 4 });
+    const guides = await page.evaluate(() => [...window.canvas.stage.querySelectorAll("[data-ninerr-guide]")].map((guide) => [guide.dataset.ninerrGuide, guide.style.top]));
+    assert.deepEqual(guides, [["y", "64px"]], "one guide, along the card's top (40, at screen 24 + 40)");
+    const shown = await page.evaluate(() => window.canvas.renderer.elementFor("badge").getBoundingClientRect().top);
+    assert.equal(shown, 40, "the preview shows the snapped place");
+    await page.mouse.up();
+    let result = await h.commit();
+    assert.deepEqual([result.doc.nodes.badge.props.style.left, result.doc.nodes.badge.props.style.top], ["320px", "40px"]);
+    assert.equal(await page.evaluate(() => window.canvas.stage.querySelectorAll("[data-ninerr-guide]").length), 0, "no guide once the drag ends");
+    // With Alt held it lands where the pointer puts it, 3 below the card's top: 43.
+    const again = await page.evaluate(() => window.screenOf("badge"));
+    await page.mouse.move(again.x, again.y);
+    await page.keyboard.down("Alt");
+    await page.mouse.down();
+    await page.mouse.move(again.x, again.y + 3, { steps: 3 });
+    assert.equal(await page.evaluate(() => window.canvas.stage.querySelectorAll("[data-ninerr-guide]").length), 0, "no guide with Alt");
+    await page.mouse.up();
+    await page.keyboard.up("Alt");
+    result = await h.commit();
+    assert.equal(result.doc.nodes.badge.props.style.top, "43px");
+    // Alt pressed mid-drag, the pointer still: the preview leaves the snap at once, and the
+    // release commits what is shown. Let go of it again and it snaps back.
+    const shownTop = () => page.evaluate(() => window.canvas.renderer.elementFor("badge").getBoundingClientRect().top);
+    const mid = await page.evaluate(() => window.screenOf("badge"));
+    await page.mouse.move(mid.x, mid.y);
+    await page.mouse.down();
+    await page.mouse.move(mid.x, mid.y - 4, { steps: 3 });
+    assert.equal(await shownTop(), 40, "39 snaps to 40");
+    await page.keyboard.down("Alt");
+    assert.equal(await shownTop(), 39, "Alt pressed: free at once");
+    await page.keyboard.up("Alt");
+    assert.equal(await shownTop(), 40, "Alt let go: snapped again");
+    await page.keyboard.down("Alt");
+    await page.mouse.up();
+    await page.keyboard.up("Alt");
+    result = await h.commit();
+    assert.equal(result.doc.nodes.badge.props.style.top, "39px", "the release commits the free place that was shown");
+    // Control moves freely too (Alt+drag moves windows on some Linux desktops).
+    const ctrl = await page.evaluate(() => window.screenOf("badge"));
+    await page.mouse.move(ctrl.x, ctrl.y);
+    await page.mouse.down();
+    await page.keyboard.down("Control");
+    await page.mouse.move(ctrl.x, ctrl.y + 4, { steps: 3 });
+    await page.mouse.up();
+    await page.keyboard.up("Control");
+    result = await h.commit();
+    assert.equal(result.doc.nodes.badge.props.style.top, "43px");
+    // Zoomed in to 2, the distance is still 6 screen pixels: 3 world pixels.
+    await page.evaluate(() => window.canvas.setViewport({ x: 24, y: 24, zoom: 2 }));
+    const zoomedDrag = async (by) => {
+      const from = await page.evaluate(() => window.screenOf("badge"));
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(from.x, from.y + by, { steps: 3 });
+      await page.mouse.up();
+      return (await h.commit()).doc.nodes.badge.props.style.top;
+    };
+    assert.equal(await zoomedDrag(4), "45px", "43 + 2 = 45 is 5 world pixels from 40 (10 on screen): no snap");
+    assert.equal(await zoomedDrag(-8), "40px", "45 - 4 = 41 snaps to 40, within 3 world pixels");
+    // A layer moved by someone else mid-drag is snapped to where it is now.
+    await page.evaluate(() => window.canvas.setViewport({ x: 24, y: 24, zoom: 1 }));
+    const last = await page.evaluate(() => window.screenOf("badge"));
+    await page.mouse.move(last.x, last.y);
+    await page.mouse.down();
+    await page.mouse.move(last.x, last.y + 10, { steps: 3 });
+    const moved = applyTransaction(h.doc, { id: "elsewhere", actor: "agent", operations: [{ type: "set-props", nodeId: "card", set: { style: { ...h.doc.nodes.card.props.style, top: "53px" } } }] });
+    await page.evaluate(({ d, affected }) => window.canvas.update(d, affected), { d: moved.document, affected: moved.affectedNodeIds });
+    await page.mouse.move(last.x, last.y + 12, { steps: 2 });
+    await page.mouse.up();
+    const pending = await page.evaluate(() => window.commits.shift());
+    assert.equal(pending.operations[0].set.style.top, "53px", "52 snaps to the card's new top, 53");
   } finally {
     await h.close();
   }
@@ -294,11 +387,14 @@ test("cancelled, abandoned and tiny drags never commit or leave a preview behind
     // While a committed move waits for its update, a second drag does not start.
     await page.keyboard.press("Escape");
     const badgeStart = await page.evaluate(() => window.screenOf("badge"));
+    // Alt held: the badge moves freely, without snapping.
     const drag = async (from, by) => {
       await page.mouse.move(from.x, from.y);
+      await page.keyboard.down("Alt");
       await page.mouse.down();
       await page.mouse.move(from.x + by, from.y, { steps: 3 });
       await page.mouse.up();
+      await page.keyboard.up("Alt");
     };
     await drag(badgeStart, 20);
     assert.equal(await page.evaluate(() => window.commits.length), 1);
