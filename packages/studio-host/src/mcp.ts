@@ -54,34 +54,76 @@ function onlyArguments(args: unknown, names: string[]): Record<string, unknown> 
   return given;
 }
 
-// Names a person reads and may be asked to approve (layers, components, their properties,
-// tokens, modes, collections and descriptions) look like what they are (#64): an agent's label
-// carries no controls, format characters (bidi reordering, zero-width, tag "smuggling"
-// characters), separators or blank-looking fillers, and variation selectors only where they
-// vary the character before them. ZWNJ and ZWJ stay legal (emoji, complex scripts), and a
-// description may break lines. The rule is decision-assurance's and visual-git's.
-const LABEL_KEYS = new Set(["name", "collection", "description"]);
+// Names a person reads and may be asked to approve (layers, components, their properties and
+// variant options, tokens, modes, collections and descriptions) look like what they are (#64):
+// an agent's label carries no controls, format characters (bidi reordering, zero-width, tag
+// "smuggling" characters), separators or blank-looking fillers, and variation selectors only
+// where they vary the character before them. ZWNJ and ZWJ stay legal (emoji, complex scripts),
+// and a description may break lines. The rule is decision-assurance's and visual-git's. Text
+// content and CSS values are not labels: text may need bidi marks, and CSS has its own rules.
 const HIDDEN_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{34f}\u{115f}\u{1160}\u{2800}\u{3164}\u{ffa0}]/u;
 const JOINERS = /[\u{200c}\u{200d}]/gu;
 const LINE_BREAKS = /[\t\n\r]/gu;
 const SELECTOR_SMUGGLING = /(?<![\p{Extended_Pictographic}0-9#*])[\u{fe0e}\u{fe0f}]|[\u{fe00}-\u{fe0d}]|(?<!\p{Ideographic})[\u{e0100}-\u{e01ef}]/u;
-const MAX_LABEL_DEPTH = 4;
 
-/** The first label among a call's arguments that hides or reorders what a person reads, as a refusal; null when there is none. */
-function hiddenLabel(value: unknown, depth = 0): string | null {
-  if (depth > MAX_LABEL_DEPTH || value === null || typeof value !== "object") return null;
-  for (const [key, entry] of Object.entries(value)) {
-    if (LABEL_KEYS.has(key) && typeof entry === "string") {
+// Each tool's labels, as paths into its arguments: `a[]` is every item of the list a, and
+// `a[].b` each item's b. A write tool whose schema has a label-like field must list it here
+// (checked when the module loads), so a new tool cannot take a label unchecked.
+const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  create_frame: ["name"],
+  rename_layers: ["renames[].name"],
+  create_component: ["name"],
+  add_component_property: ["name", "options[]", "default"],
+  set_token: ["name", "collection", "description"],
+  add_token_mode: ["collection", "name"],
+  rename_token: ["to"],
+  delete_token: ["name", "replacement.token"],
+  set_layer_modes: ["collection"],
+});
+const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
+
+/** The values at a label path in a call's arguments. */
+function valuesAt(value: unknown, path: string): unknown[] {
+  let values = [value];
+  for (const segment of path.split(".")) {
+    const list = segment.endsWith("[]");
+    const key = list ? segment.slice(0, -2) : segment;
+    values = values.flatMap((entry) => {
+      if (entry === null || typeof entry !== "object" || !Object.hasOwn(entry, key)) return [];
+      const next = (entry as Record<string, unknown>)[key];
+      return list ? (Array.isArray(next) ? next : []) : [next];
+    });
+  }
+  return values;
+}
+
+/** The first of a call's labels that hides or reorders what a person reads, as a refusal; null when there is none. */
+function hiddenLabel(toolName: string, args: unknown): string | null {
+  for (const path of LABELS[toolName] ?? []) {
+    const field = path.replace(/\[\]/gu, "").split(".").at(-1);
+    for (const entry of valuesAt(args, path)) {
+      if (typeof entry !== "string") continue;
       const visible = entry.replace(JOINERS, "");
-      const shown = key === "description" ? visible.replace(LINE_BREAKS, "") : visible;
+      const shown = field === "description" ? visible.replace(LINE_BREAKS, "") : visible;
       if (!entry.isWellFormed() || HIDDEN_TEXT.test(shown) || SELECTOR_SMUGGLING.test(entry)) {
-        return `${key} must not contain control or hidden characters: a person reads it as it is shown`;
+        return `${field} must not contain control or hidden characters: a person reads it as it is shown`;
       }
     }
-    const nested = hiddenLabel(entry, depth + 1);
-    if (nested !== null) return nested;
   }
   return null;
+}
+
+/** The label-like fields of a tool's schema, as label paths. */
+function labelLikeFields(schema: any, prefix = ""): string[] {
+  const fields: string[] = [];
+  for (const [key, property] of Object.entries<any>(schema?.properties ?? {})) {
+    const path = `${prefix}${key}`;
+    const items = property?.type === "array" ? property.items : undefined;
+    if (LABEL_LIKE.has(key)) fields.push(items === undefined ? path : `${path}[]`);
+    if (items?.type === "object") fields.push(...labelLikeFields(items, `${path}[].`));
+    if (property?.type === "object") fields.push(...labelLikeFields(property, `${path}.`));
+  }
+  return fields;
 }
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
@@ -813,6 +855,18 @@ const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
 // The definitions the server announces must satisfy the MCP contract validators and be exactly
 // the tools of Ninerr's catalog, which carries the classification each tool is authorized by.
 assertMCPToolSurface({ tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+for (const tool of TOOLS) {
+  const kind = classifyTool(tool.name);
+  if (kind !== "write" && kind !== "consequential") continue;
+  for (const field of labelLikeFields(tool.inputSchema)) {
+    if (!(LABELS[tool.name] ?? []).includes(field)) throw new Error(`${tool.name} takes ${field}, which is not among its checked labels`);
+  }
+}
+for (const [name, paths] of Object.entries(LABELS)) {
+  const tool = TOOL_BY_NAME.get(name);
+  const fields = tool === undefined ? [] : labelLikeFields(tool.inputSchema);
+  for (const path of paths) if (!fields.includes(path)) throw new Error(`${name} has no label ${path}`);
+}
 
 // Every tool that changes the document also takes these: a dry run checks the change and says
 // what it would touch, changing nothing; baseRevision refuses the call if the document has moved
@@ -1057,7 +1111,7 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       // Before the person is asked to confirm anything.
       const unread = notRead();
       if (unread !== null) return toolResult(unread, true);
-      const hidden = changes ? hiddenLabel(args) : null;
+      const hidden = changes ? hiddenLabel(toolName, args) : null;
       if (hidden !== null) return toolResult(hidden, true);
       const before = stale();
       if (before !== null) return toolResult(before, true);
@@ -1074,7 +1128,7 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
   if (changed !== null) return toolResult(changed, true);
   const unread = notRead();
   if (unread !== null) return toolResult(unread, true);
-  const hidden = changes ? hiddenLabel(args) : null;
+  const hidden = changes ? hiddenLabel(toolName, args) : null;
   if (hidden !== null) return toolResult(hidden, true);
   const tool = TOOL_BY_NAME.get(toolName);
   // Unreachable while the server's tools are exactly the catalog (checked at load); fail closed.
