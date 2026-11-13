@@ -114,22 +114,26 @@ export function serialize(record) {
 }
 
 /**
- * The committed artifact: totals by category, term and rule, plus the SHA-256 of the full
- * census, so anyone can regenerate the per-file detail (`node scripts/identity-census.mjs`)
- * and check it against what was recorded without the repository carrying every line.
+ * The committed artifact: totals by category, term and rule, plus the SHA-256 of every
+ * finding (each file's path, and each finding's term, category, rule and count), so anyone can
+ * regenerate the per-file detail (`node scripts/identity-census.mjs`) and check it against what
+ * was recorded without the repository carrying every line. It leaves out what changes without
+ * any finding changing: the number of files scanned and the line each finding is on. Otherwise
+ * every pull request that added a file, or moved a line in a file with a finding, conflicted
+ * with every other one here.
  */
 export function summarize(record) {
   const byRule = {};
   for (const file of record.files) for (const finding of file.findings) byRule[finding.rule] = (byRule[finding.rule] ?? 0) + finding.count;
+  const findings = record.files.map(({ path, findings: list }) => ({ path, findings: list.map(({ lines: _lines, ...finding }) => finding) }));
   return {
-    schema: "identity-census-summary/1",
-    filesScanned: record.filesScanned,
+    schema: "identity-census-summary/2",
     filesWithFindings: record.filesWithFindings,
     gatedFindings: record.gatedFindings,
     byCategory: record.byCategory,
     byTerm: record.byTerm,
     byRule: Object.fromEntries(Object.entries(byRule).sort(([a], [b]) => byCodeUnit(a, b))),
-    censusSha256: createHash("sha256").update(serialize(record), "utf8").digest("hex"),
+    findingsSha256: createHash("sha256").update(serialize(findings), "utf8").digest("hex"),
   };
 }
 
