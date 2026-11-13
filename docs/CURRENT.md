@@ -1,6 +1,6 @@
 # Ninerr — Canonical Program State
 
-Last updated: 2026-11-13 (canonical main `5492954`)
+Last updated: 2026-11-13 (canonical main `d184b15`)
 
 ## Since 2026-11-07
 
@@ -8,7 +8,7 @@ Last updated: 2026-11-13 (canonical main `5492954`)
 - R04 whole-process egress landed (#394, #396, #397), and the CI and release gates were hardened (#401–#403).
 - Component sources (#405): the catalog and registry items (#404, #406); reviewed import into a codebase (#407); schema v2, design tokens and item tokens (#408–#410, founder decision 2026-11-09); components, instances, editing inside them and swap and slot properties (#411, #412, #414); MCP tools for them (#413); Meta Astryx as a first-class source (#415).
 - Jev is retired as a gate (#417, founder decision 2026-11-13). Generated component records are held to data only and to their pinned sha256 by `scripts/check-generated-records.mjs` in the Foundation checks.
-- Merged on 2026-11-13 after their exact-head checks: Astryx tokens (#420); HTML export (#418) and Tailwind export (#434); align and distribute (#419), pages (#422) and typography (#424) in the inspector; agents' dry run and base revision (#425); schema v2 scale workloads (#426); #382 fixed (#427) and #383's escaped names (#436); and CI throughput and reliability (#428, #431, #437, #438, #440). The ledger lists what is in review.
+- Merged on 2026-11-13 after their exact-head checks: Astryx tokens (#420); HTML export (#418) and Tailwind export (#434); align and distribute (#419), pages (#422) and typography (#424) in the inspector; agents' dry run and base revision (#425); schema v2 scale workloads (#426); #382 fixed (#427) and #383's escaped names (#436); and CI throughput and reliability (#428, #431, #437, #438, #440, #442). Later the same day: the Astryx integration completed (#429, #435); the auto layout panel (#423), snapping (#430), constraints (#432) and right-to-left text direction (#433); PNG and SVG copy (#439); MCP `set_attributes` (#443); reduced motion on the canvas (#444); desktop upgrade and uninstall docs and ADR-0008, proposed, for breakpoints (#441). Nothing is in review.
 - On 2026-11-13 the founder directed engineering to finish the product, and named the canvas, layout, design-system, design-to-code, component-source, agent, accessibility and desktop-installation capabilities as committed scope (`docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`).
 
 The frontier is still P10. Nothing is released.
