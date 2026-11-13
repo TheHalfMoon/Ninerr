@@ -1,5 +1,7 @@
 import { findBrowser, launchBrowser, step, watchRequests } from "./browser.mjs";
 
+const EVALUATE_TIMEOUT_MS = 60_000;
+
 // What openEditor watches on each page it opened (requests still loading, errors the page
 // reported), for a wait that times out there to say (#300).
 const watched = new WeakMap();
@@ -20,6 +22,16 @@ export async function openEditor(host, { beforeOpen } = {}) {
   });
   const page = await context.newPage();
   const pending = watchRequests(page);
+  // A page that stops answering would hold a test until its own timeout with nothing said:
+  // each evaluation in the editor fails within a minute instead, saying so (#300).
+  const evaluate = page.evaluate.bind(page);
+  page.evaluate = (fn, arg) => {
+    let timer;
+    const late = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`an evaluation in the editor got no answer within ${EVALUATE_TIMEOUT_MS / 1000} s; still loading: ${pending().join(", ") || "nothing"}`)), EVALUATE_TIMEOUT_MS);
+    });
+    return Promise.race([evaluate(fn, arg), late]).finally(() => clearTimeout(timer));
+  };
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
