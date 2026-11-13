@@ -141,7 +141,9 @@ test("the census is deterministic and the gate counts gated categories only", ()
     const first = census(policy, clean.root, clean.paths);
     assert.equal(serialize(first), serialize(census(policy, clean.root, clean.paths)));
     const summary = summarize(first);
-    assert.equal(summary.censusSha256, createHash("sha256").update(serialize(first)).digest("hex"), "the summary pins the full census");
+    const findings = first.files.map(({ path, findings: list }) => ({ path, findings: list.map(({ lines: _lines, ...finding }) => finding) }));
+    assert.equal(summary.findingsSha256, createHash("sha256").update(serialize(findings)).digest("hex"), "the summary pins every finding");
+    assert.equal(summary.filesScanned, undefined, "nor the number of files, which every new file changes");
     assert.equal(Object.values(summary.byRule).reduce((a, b) => a + b, 0), Object.values(first.byCategory).reduce((a, b) => a + b, 0), "every finding is counted under its rule");
     assert.deepEqual(summary.byCategory, first.byCategory);
     assert.equal(first.gatedFindings, 0);
@@ -159,13 +161,18 @@ test("the census is deterministic and the gate counts gated categories only", ()
     const lines = record.files.find((file) => file.path === "packages/x/src/index.ts").findings.map((finding) => [finding.term, finding.lines]);
     assert.deepEqual(lines, [["lilac", [1]], ["paper", [2]]]);
     assert.equal(record.files.find((file) => file.path === "packages/x/src/lilac.ts").findings[0].lines.length, 0, "a path finding has no line");
-    // Moving one finding to another line keeps every count but changes the digest.
+    // Moving a finding to another line, or adding a file with none, changes nothing recorded.
     writeFileSync(join(dirty.root, "packages/x/src/index.ts"), "\n// Lilac\nconst a = 'paper';\n");
-    const moved = summarize(census(policy, dirty.root, dirty.paths));
-    const { censusSha256: before, ...counts } = summarize(record);
-    const { censusSha256: after, ...movedCounts } = moved;
+    writeFileSync(join(dirty.root, "packages/x/src/clean.ts"), "export {};\n");
+    assert.deepEqual(summarize(census(policy, dirty.root, [...dirty.paths, "packages/x/src/clean.ts"])), summarize(record));
+    // Moving a finding to another file keeps every count but changes the digest.
+    writeFileSync(join(dirty.root, "packages/x/src/index.ts"), "// Lilac\n");
+    writeFileSync(join(dirty.root, "packages/x/src/clean.ts"), "const a = 'paper';\n");
+    const moved = summarize(census(policy, dirty.root, [...dirty.paths, "packages/x/src/clean.ts"]));
+    const { findingsSha256: before, filesWithFindings: _a, ...counts } = summarize(record);
+    const { findingsSha256: after, filesWithFindings: _b, ...movedCounts } = moved;
     assert.deepEqual(movedCounts, counts);
-    assert.notEqual(after, before, "the digest pins line-level detail the counts do not");
+    assert.notEqual(after, before, "the digest pins which file holds each finding, which the counts do not");
   } finally {
     dirty.dispose();
   }

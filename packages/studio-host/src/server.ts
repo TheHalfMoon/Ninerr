@@ -10,6 +10,7 @@ import { writeTrustedFile } from "./trusted-file.ts";
 import { StudioError } from "./errors.ts";
 import { exportJsx, importJsx } from "./code.ts";
 import { MAX_COMPONENT_REQUEST_BYTES, applyComponentImport, planComponentImport, publicPlan } from "./component-import.ts";
+import { MAX_TOKEN_CSS_REQUEST_BYTES, planTokenCss, tokenCssOperations } from "./token-import.ts";
 import { CodebaseLinks, assertFolder, bringIn, keptFields, planWriteBack, removeTemporary, resolveWithFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 import { ImportDesk, MAX_IMPORT_HTML_BYTES } from "./imports.ts";
 import { ConfirmationBroker, handleMcpMessage } from "./mcp.ts";
@@ -241,6 +242,8 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     "POST /api/codebase/resolve",
     "POST /api/components/plan",
     "POST /api/components/apply",
+    "POST /api/tokens/css/plan",
+    "POST /api/tokens/css/apply",
     "POST /api/references/load",
   ]);
   const assertMadeForOpenProject = (request: IncomingMessage): void => {
@@ -428,6 +431,14 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
         return { ...applied, tokenError: error instanceof Error ? error.message : String(error) };
       }
     },
+    // Design tokens from a CSS file the person chose (Astryx's, or any :root custom properties):
+    // a plan first, then exactly that plan as one transaction.
+    "POST /api/tokens/css/plan": (body) => planTokenCss(requireSession().document, body).plan,
+    "POST /api/tokens/css/apply": (body) => {
+      const current = requireSession();
+      const { plan, operations, intent } = tokenCssOperations(current.document, body);
+      return { ...current.edit(owner, { baseRevision: current.revision, operations, intent, tool: "ninerr:tokens" }), added: plan.adds };
+    },
     "POST /api/import/discard": (body) => {
       imports.discard(body?.proposalId);
       return { discarded: true };
@@ -502,7 +513,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     if (route === undefined) throw new StudioError(404, "not-found", "not found");
     // An HTML import may be larger than other requests (the import stack's own limit).
     // JSON escaping can make HTML up to six times larger (control characters as \uXXXX).
-    let body = request.method === "POST" ? await readJson(request, url.pathname === "/api/import" ? MAX_IMPORT_HTML_BYTES * 6 + 64 * 1024 : url.pathname.startsWith("/api/components/") ? MAX_COMPONENT_REQUEST_BYTES : MAX_BODY_BYTES) : undefined;
+    let body = request.method === "POST" ? await readJson(request, url.pathname === "/api/import" ? MAX_IMPORT_HTML_BYTES * 6 + 64 * 1024 : url.pathname.startsWith("/api/components/") ? MAX_COMPONENT_REQUEST_BYTES : url.pathname.startsWith("/api/tokens/css/") ? MAX_TOKEN_CSS_REQUEST_BYTES : MAX_BODY_BYTES) : undefined;
     if (reference) body = { id: referenceIdOf(url.pathname) };
     else if (key === "GET /api/references") body = referenceSearchOf(url.searchParams);
     if (PROJECT_SCOPED.has(key)) assertMadeForOpenProject(request);
