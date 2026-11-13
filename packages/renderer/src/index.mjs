@@ -749,8 +749,9 @@ export const FRAME_SANDBOX = "allow-same-origin";
 // so a page's own styles win over them, layered or not, as they would in a browser; an unlayered
 // default would beat every rule a page keeps in @layer (Astryx keeps all of its rules so).
 // When the system asks for reduced motion, the canvas runs no animation or transition: each ends
-// at once, as its end state. Its !important there wins over a page's own, important or not, since
-// important declarations in the first layer win; export is unchanged, so the design keeps them.
+// at once, as its end state. Important in the first layer, it wins over every rule of a page's
+// stylesheet, important or not, and over a layer's own style unless that style marks the motion
+// important itself (an inline important declaration wins over any rule). Export is unchanged.
 export function frameSrcdoc() {
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${FRAME_CSP}"><style>@layer ninerr-canvas{body{font-family:system-ui,sans-serif}a[data-ninerr-href]{color:LinkText;text-decoration:underline}@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:0s!important;animation-delay:0s!important;animation-iteration-count:1!important;transition-duration:0s!important;transition-delay:0s!important;scroll-behavior:auto!important}}}html,body{margin:0;padding:0}[data-ninerr-root]{position:relative;min-height:100vh}</style></head><body><div data-ninerr-root inert></div></body></html>`;
 }
