@@ -12,7 +12,7 @@
 | [AGENT_CONTRACT.md](AGENT_CONTRACT.md) | The agent and MCP contract, version 2: revision preconditions, dry runs, proposals, idempotency and receipts |
 | [REUSE.md](REUSE.md) | What Ninerr reuses, what it adopts from open source (with licenses), and what it builds |
 | [PLAN.md](PLAN.md) | Phases P11 to P16, tasks in dependency order, integration points, tests, definitions of done, estimates, the critical path and the first PR |
-| [adr/](adr/) | Architecture decision records 0001 to 0007 |
+| [adr/](adr/) | Architecture decision records 0001 to 0008 |
 
 **Questions the plan answers, and where:**
 - **What to build:** PLAN.md, phases P11 to P16.
