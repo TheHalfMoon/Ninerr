@@ -132,6 +132,37 @@ export function setStyle(document, id, changes) {
   return [{ type: "set-props", nodeId: id, set: { style } }];
 }
 
+/** Auto layout: a layer's children placed in a row or a column (CSS flex), or placed freely. */
+export const LAYOUT_MODES = Object.freeze(["free", "row", "column"]);
+
+/**
+ * Turn auto layout on (row or column) or off (free) for `id`, as one change. Turning it on
+ * makes the layer a flex container in that direction, and its children placed by left and top
+ * join the row or column in their order; turning it off leaves them where the flow put them, as
+ * the layer stays a block.
+ */
+export function setLayout(document, id, mode) {
+  if (!LAYOUT_MODES.includes(mode)) throw new TypeError(`mode is one of ${LAYOUT_MODES.join(", ")}`);
+  const node = document.nodes[id];
+  if (!node) return [];
+  const style = { ...styleOf(document, id) };
+  if (mode === "free") {
+    for (const name of ["display", "flex-direction", "flex-wrap", "align-items", "justify-content", "gap", "row-gap", "column-gap"]) delete style[name];
+    return [{ type: "set-props", nodeId: id, set: { style } }];
+  }
+  style.display = "flex";
+  style["flex-direction"] = mode;
+  const operations = [{ type: "set-props", nodeId: id, set: { style } }];
+  for (const childId of node.children) {
+    const child = styleOf(document, childId);
+    if (child.position !== "absolute" && child.position !== "fixed") continue;
+    const next = { ...child };
+    for (const name of ["position", "left", "top", "right", "bottom"]) delete next[name];
+    operations.push({ type: "set-props", nodeId: childId, set: { style: next } });
+  }
+  return operations;
+}
+
 export function setText(id, text) {
   return [{ type: "set-props", nodeId: id, set: { text } }];
 }

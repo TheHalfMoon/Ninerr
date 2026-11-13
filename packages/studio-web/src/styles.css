@@ -93,6 +93,9 @@ dialog select { padding: 6px; border: 1px solid #8e8aa3; border-radius: 4px; min
 dialog textarea { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 6px; border: 1px solid #8e8aa3; border-radius: 4px; width: 100%; }
 .inspector .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
 .inspector .steps button { min-height: 32px; padding: 2px; font-size: 12px; }
+.inspector fieldset.layout { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin: 8px 0; display: grid; gap: 6px; }
+.inspector fieldset.layout legend { padding: 0 4px; }
+.inspector fieldset.layout select { min-height: 24px; padding: 2px 6px; border: 1px solid #8e8aa3; border-radius: 4px; background: #ffffff; }
 /* Reflow (WCAG 1.4.10): below 900px the panels stack under the canvas instead of beside it. */
 @media (max-width: 900px) {
   body { grid-template-rows: auto auto auto; height: auto; min-height: 100%; }

@@ -5,7 +5,7 @@ import { createDocument } from "../packages/document-model/src/index.mjs";
 import { applyTransaction } from "../packages/history/src/index.mjs";
 import {
   MAX_ZOOM, MIN_ZOOM, clampZoom, createViewport, fitBounds, insertNode, moveBy, normalizeSelection, panBy, removeNodes,
-  reorder, resizeTo, screenToWorld, selectNode, setStyle, setText, worldToScreen, zoomAt,
+  reorder, resizeTo, screenToWorld, selectNode, setLayout, setStyle, setText, worldToScreen, zoomAt,
 } from "../packages/canvas/src/index.mjs";
 
 // PC3 (#146): the canvas's pure parts. Viewport math, selection rules, and commands that turn
@@ -86,4 +86,21 @@ test("commands produce history operations that apply cleanly", () => {
   d = apply(d, removeNodes(d, ["card", "title", "missing"]));
   assert.equal(d.nodes.card, undefined);
   assert.equal(d.nodes.title, undefined);
+});
+
+test("auto layout on: a flex row or column, its free children joining the flow; off: the flex styles go", () => {
+  const d = createDocument({ id: "d", nodes: [
+    { id: "board", type: "frame", children: ["a", "b"], props: { style: { position: "relative", width: "300px", gap: "4px" } } },
+    { id: "a", type: "element", parentId: "board", props: { style: { position: "absolute", left: "10px", top: "20px", width: "40px" } } },
+    { id: "b", type: "element", parentId: "board", props: { style: { width: "50px" } } },
+  ] });
+  assert.deepEqual(setLayout(d, "board", "row"), [
+    { type: "set-props", nodeId: "board", set: { style: { position: "relative", width: "300px", gap: "4px", display: "flex", "flex-direction": "row" } } },
+    { type: "set-props", nodeId: "a", set: { style: { width: "40px" } } },
+  ], "only the child placed by left and top changes");
+  const column = applyTransaction(d, { id: "t", actor: "u", operations: setLayout(d, "board", "column") }).document;
+  assert.equal(column.nodes.board.props.style["flex-direction"], "column");
+  assert.deepEqual(setLayout(column, "board", "free"), [{ type: "set-props", nodeId: "board", set: { style: { position: "relative", width: "300px" } } }]);
+  assert.deepEqual(setLayout(d, "missing", "row"), []);
+  assert.throws(() => setLayout(d, "board", "grid"), /mode is one of free, row, column/u);
 });

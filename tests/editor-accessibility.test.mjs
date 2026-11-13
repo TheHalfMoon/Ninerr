@@ -1008,3 +1008,28 @@ test("the Component sources dialog audits clean, browsing an Astryx component's 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the inspector audits clean with auto layout's controls showing", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-layout-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("layout");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    const call = client(host.url, host.token);
+    const { document } = await ok(call("GET", "/api/document"), "document");
+    await ok(call("POST", "/api/edit", { baseRevision: document.revision, operations: [{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: "row", type: "frame", props: { name: "Row", style: { display: "flex", "flex-direction": "row", gap: "8px", width: "300px", height: "80px" } } } }], intent: "Add a row" }), "row");
+    await waitRevision(page, 1);
+    await page.locator('#layers [role=treeitem][data-node-id="row"] > .row').click();
+    await page.locator("#inspect-style-justify-content").waitFor();
+    assert.equal(await page.locator("#inspect-layout-mode").inputValue(), "row");
+    await audit(page, "the inspector with auto layout");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

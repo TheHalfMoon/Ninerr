@@ -4,7 +4,7 @@
 // response or the event stream, whichever arrives first), in revision order. A gap or a
 // change that does not apply means the copy is out of date, and it is fetched again.
 
-import { mountCanvas, insertNode, removeNodes, setStyle, setText } from "/packages/canvas/src/index.mjs";
+import { mountCanvas, insertNode, removeNodes, setStyle, setText, setLayout } from "/packages/canvas/src/index.mjs";
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
 import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
@@ -2559,6 +2559,9 @@ function renderInspector() {
   }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
+  // Auto layout (CSS flex) for a layer that holds others: its children in a row or a column,
+  // with the space between them, its padding, and how they line up.
+  if (node.type !== "text" && !isCodePart(node)) children.push(layoutSection(style));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.
   const step = (label, text, action) => el("button", { type: "button", "aria-label": label, onclick: action }, text);
   children.push(el("div", { class: "steps", role: "group", "aria-label": "Move and resize by 10 pixels" },
@@ -2585,6 +2588,35 @@ function renderInspector() {
   }
 }
 
+// The inspector's auto layout section: how the selected layer places what it holds.
+const LAYOUT_ALIGN = [["", "Default"], ["flex-start", "Start"], ["center", "Centre"], ["flex-end", "End"], ["stretch", "Stretch"], ["baseline", "Baseline"]];
+const LAYOUT_JUSTIFY = [["", "Default"], ["flex-start", "Start"], ["center", "Centre"], ["flex-end", "End"], ["space-between", "Space between"], ["space-around", "Space around"], ["space-evenly", "Space evenly"]];
+function layoutSection(style) {
+  const mode = style.display === "flex" || style.display === "inline-flex" ? (style["flex-direction"] === "column" || style["flex-direction"] === "column-reverse" ? "column" : "row") : "free";
+  const select = (name, label, choices, value) => {
+    const control = el("select", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name }, ...choices.map(([option, text]) => el("option", { value: option, selected: option === value }, text)));
+    control.dataset.original = value;
+    return el("label", { for: control.id }, label, control);
+  };
+  const text = (name, label, value) => {
+    const control = el("input", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name, value, autocomplete: "off" });
+    control.dataset.original = value;
+    return el("label", { for: control.id }, label, control);
+  };
+  const flex = mode !== "free";
+  return el("fieldset", { id: "inspect-layout", class: "layout" },
+    el("legend", {}, "Layout"),
+    select("layout:mode", "Place children", [["free", "Freely"], ["row", "In a row"], ["column", "In a column"]], mode),
+    ...(flex ? [
+      el("div", { class: "pair" },
+        text("style:gap", "Gap", typeof style.gap === "string" ? style.gap : ""),
+        text("style:padding", "Padding", typeof style.padding === "string" ? style.padding : "")),
+      select("style:align-items", mode === "row" ? "Align vertically" : "Align horizontally", LAYOUT_ALIGN, typeof style["align-items"] === "string" ? style["align-items"] : ""),
+      select("style:justify-content", "Distribute", LAYOUT_JUSTIFY, typeof style["justify-content"] === "string" ? style["justify-content"] : ""),
+      select("style:flex-wrap", "Wrap", [["", "No"], ["wrap", "Yes"]], style["flex-wrap"] === "wrap" ? "wrap" : ""),
+    ] : []));
+}
+
 function onInspectorChange(event) {
   const input = event.target;
   const nodeId = $("inspector").dataset.nodeId;
@@ -2604,6 +2636,7 @@ function onInspectorChange(event) {
     else attributes.class = names;
     commit([{ type: "set-props", nodeId, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) }], names === "" ? "Remove classes" : "Change classes");
   }
+  else if (input.name === "layout:mode") commit(setLayout(state.document, nodeId, input.value), input.value === "free" ? "Place children freely" : input.value === "row" ? "Auto layout in a row" : "Auto layout in a column");
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);
     const normalized = /^-?\d+(\.\d+)?$/u.test(value) && property !== "background" && property !== "color" ? `${value}px` : value;
