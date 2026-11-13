@@ -12,10 +12,15 @@ import { startStudioHost } from "../../packages/studio-host/src/index.ts";
  * hold the event loop past the host's 5 s keep-alive with synchronous work: Node 22's fetch
  * then reused the connection the host had closed meanwhile, and the request was reset (#306).
  */
+const REQUEST_TIMEOUT_MS = 60_000;
+
 async function request(url, init) {
   try {
-    return await fetch(url, { ...init, headers: { ...init.headers, connection: "close" } });
+    // An answer that never comes fails here, naming the request, rather than holding the test
+    // until its own timeout with nothing said (#300).
+    return await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...init, headers: { ...init.headers, connection: "close" } });
   } catch (error) {
+    if (error?.name === "TimeoutError") throw new Error(`${init.method} ${new URL(url).pathname} got no answer within ${REQUEST_TIMEOUT_MS / 1000} s`, { cause: error });
     const cause = error?.cause;
     throw new Error(`${init.method} ${new URL(url).pathname} failed before an answer: ${[cause?.code, cause?.message ?? error?.message].filter(Boolean).join(" ")}`, { cause: error });
   }
