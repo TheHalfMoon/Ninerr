@@ -4,8 +4,9 @@ import assert from "node:assert/strict";
 import { createDocument } from "../packages/document-model/src/index.mjs";
 import { applyTransaction } from "../packages/history/src/index.mjs";
 import {
-  ALIGN_EDGES, MAX_ZOOM, MIN_ZOOM, alignOffsets, clampZoom, createViewport, distributeOffsets, fitBounds, insertNode, moveBy, moveEach, normalizeSelection, panBy, removeNodes,
-  reorder, resizeTo, screenToWorld, selectNode, setStyle, setText, worldToScreen, zoomAt,
+  ALIGN_EDGES, MAX_ZOOM, MIN_ZOOM, alignOffsets, clampZoom, createViewport, distributeOffsets, fitBounds, insertNode,
+  moveBy, moveEach, normalizeSelection, panBy, removeNodes, reorder, resizeTo, screenToWorld, selectNode, setLayout,
+  setStyle, setText, worldToScreen, zoomAt,
 } from "../packages/canvas/src/index.mjs";
 
 // PC3 (#146): the canvas's pure parts. Viewport math, selection rules, and commands that turn
@@ -86,6 +87,29 @@ test("commands produce history operations that apply cleanly", () => {
   d = apply(d, removeNodes(d, ["card", "title", "missing"]));
   assert.equal(d.nodes.card, undefined);
   assert.equal(d.nodes.title, undefined);
+});
+
+test("auto layout on: a flex row or column, its free children joining the flow; off: the flex styles go", () => {
+  const d = createDocument({ id: "d", nodes: [
+    { id: "board", type: "frame", children: ["a", "b"], props: { style: { position: "relative", width: "300px", gap: "4px" } } },
+    { id: "a", type: "element", parentId: "board", props: { style: { position: "absolute", left: "10px", top: "20px", width: "40px" } } },
+    { id: "b", type: "element", parentId: "board", props: { style: { width: "50px" } } },
+  ] });
+  assert.deepEqual(setLayout(d, "board", "row"), [
+    { type: "set-props", nodeId: "board", set: { style: { position: "relative", width: "300px", gap: "4px", display: "flex", "flex-direction": "row" } } },
+    { type: "set-props", nodeId: "a", set: { style: { width: "40px" } } },
+  ], "only the child placed by left and top changes");
+  const column = applyTransaction(d, { id: "t", actor: "u", operations: setLayout(d, "board", "column") }).document;
+  assert.equal(column.nodes.board.props.style["flex-direction"], "column");
+  assert.deepEqual(setLayout(column, "board", "free"), [{ type: "set-props", nodeId: "board", set: { style: { position: "relative", width: "300px" } } }]);
+  // Off, each measured child is kept where the row put it.
+  const freed = setLayout(column, "board", "free", { a: { left: 0, top: 0, width: 40 }, b: { left: 0, top: 30, width: 50 } });
+  assert.deepEqual(freed.slice(1).map((operation) => [operation.nodeId, operation.set.style.position, operation.set.style.left, operation.set.style.top]), [["a", "absolute", "0px", "0px"], ["b", "absolute", "0px", "30px"]]);
+  // A reversed or inline flex keeps that when the direction changes.
+  const reversed = createDocument({ id: "r", nodes: [{ id: "x", type: "frame", children: [], props: { style: { display: "inline-flex", "flex-direction": "row-reverse" } } }] });
+  assert.deepEqual(setLayout(reversed, "x", "column")[0].set.style, { display: "inline-flex", "flex-direction": "column-reverse" });
+  assert.deepEqual(setLayout(d, "missing", "row"), []);
+  assert.throws(() => setLayout(d, "board", "grid"), /mode is one of free, row, column/u);
 });
 
 test("align moves each box to the outermost edge, or to the centre of their bounds", () => {

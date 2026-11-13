@@ -205,6 +205,50 @@ export function setStyle(document, id, changes) {
   return [{ type: "set-props", nodeId: id, set: { style } }];
 }
 
+/** Auto layout: a layer's children placed in a row or a column (CSS flex), or placed freely. */
+export const LAYOUT_MODES = Object.freeze(["free", "row", "column"]);
+
+/**
+ * Turn auto layout on (row or column) or off (free) for `id`, as one change. Turning it on
+ * makes the layer a flex container in that direction (keeping inline-flex and a reversed
+ * direction), and its children placed by left and top join the row or column in their order.
+ * Turning it off keeps each child where the row or column put it: `measured[child]` = { left,
+ * top, width } is that place, and the child is positioned there absolutely (the layer becomes
+ * their containing block).
+ */
+export function setLayout(document, id, mode, measured = {}) {
+  if (!LAYOUT_MODES.includes(mode)) throw new TypeError(`mode is one of ${LAYOUT_MODES.join(", ")}`);
+  const node = document.nodes[id];
+  if (!node) return [];
+  const style = { ...styleOf(document, id) };
+  if (mode === "free") {
+    for (const name of ["display", "flex-direction", "flex-wrap", "align-items", "justify-content", "gap", "row-gap", "column-gap"]) delete style[name];
+    if (style.position === undefined || style.position === "static") style.position = "relative";
+    const operations = [{ type: "set-props", nodeId: id, set: { style } }];
+    for (const childId of node.children) {
+      const box = measured[childId];
+      if (box === undefined) continue;
+      const child = { ...styleOf(document, childId), position: "absolute", left: px(box.left), top: px(box.top) };
+      for (const name of ["right", "bottom", "inset"]) delete child[name];
+      if (child.width === undefined && Number.isFinite(box.width)) child.width = px(box.width);
+      operations.push({ type: "set-props", nodeId: childId, set: { style: child } });
+    }
+    return operations;
+  }
+  style.display = style.display === "inline-flex" ? "inline-flex" : "flex";
+  const reversed = typeof style["flex-direction"] === "string" && style["flex-direction"].endsWith("-reverse");
+  style["flex-direction"] = reversed ? `${mode}-reverse` : mode;
+  const operations = [{ type: "set-props", nodeId: id, set: { style } }];
+  for (const childId of node.children) {
+    const child = styleOf(document, childId);
+    if (child.position !== "absolute" && child.position !== "fixed") continue;
+    const next = { ...child };
+    for (const name of ["position", "left", "top", "right", "bottom", "inset"]) delete next[name];
+    operations.push({ type: "set-props", nodeId: childId, set: { style: next } });
+  }
+  return operations;
+}
+
 export function setText(id, text) {
   return [{ type: "set-props", nodeId: id, set: { text } }];
 }
@@ -702,6 +746,10 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
      * Move the selection by (dx, dy), or resize the single selected layer by (dw, dh), as
      * a drag would: the single-pointer alternative to dragging (buttons in the editor).
      */
+    /** Where each layer is in its containing block: { left, top, width } (see moveBy). */
+    measure(ids) {
+      return measuredBoxes(ids.filter((id) => renderer.elementFor(id)));
+    },
     nudge(dx, dy) {
       if (document !== null && selection.length > 0) commit(moveBy(document, selection, dx, dy, measuredBoxes(selection)), selection.length === 1 ? "Move layer" : "Move layers");
     },
