@@ -3,7 +3,7 @@ import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classify
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { styleDeclarationProblem } from "@ninerr/renderer";
 import { componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
-import { exportJsx } from "./code.ts";
+import { exportHtml, exportJsx, exportTailwind } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
@@ -200,10 +200,13 @@ const TOOLS: Tool[] = [
   {
     name: "layer_code",
     title: "Layer as JSX",
-    description: "A layer and everything inside it as a JSX function component (through code-ir), with the tags, attributes and style the canvas renders. codeParts counts {…} parts copied exactly from the source this design was brought in from: they are not sanitized, and the names they use must exist where the code runs.",
-    inputSchema: object({ nodeId: { type: "string" } }, ["nodeId"]),
+    description: "A layer and everything inside it as a JSX function component (through code-ir), with the tags, attributes and style the canvas renders. format \"tailwind\" writes each style as Tailwind classes that set exactly what it says, keeping in a style object what no class can carry; format \"html\" gives a standalone HTML page instead, which loads and runs nothing. codeParts counts {…} parts copied exactly from the source this design was brought in from: they are not sanitized, and the names they use must exist where the code runs (in HTML they are written as comments).",
+    inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: ["jsx", "tailwind", "html"] } }, ["nodeId"]),
     run: ({ session }, args) => {
       try {
+        if (args.format !== undefined && !["jsx", "tailwind", "html"].includes(args.format as string)) throw new ToolError("format is \"jsx\", \"tailwind\" or \"html\"");
+        if (args.format === "tailwind") return exportTailwind(session.document, args.nodeId);
+        if (args.format === "html") return exportHtml(session.document, args.nodeId);
         return exportJsx(session.document, args.nodeId);
       } catch (error) {
         throw new ToolError(error instanceof Error ? error.message : "the layer cannot be exported");
