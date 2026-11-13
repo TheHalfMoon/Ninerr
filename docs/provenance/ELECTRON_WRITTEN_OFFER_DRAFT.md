@@ -1,6 +1,6 @@
 # DRAFT: written offer for the Electron runtime's corresponding source
 
-**Status: draft for the project owner. Not in force, not reviewed by counsel, not legal advice.** It is the route recommended in `docs/provenance/FOUNDER_DECISIONS_PENDING_2026-11-13.md` (decision 6), as LGPL-2.1 section 6 permits (`docs/RELEASE.md`, "The Electron runtime's corresponding source"). It takes effect only when the owner fills in the bracketed fields, adopts it in a decision record, and it ships with the first binary release. A written offer is the owner's own commitment, for at least three years.
+**Status: the route is decided (founder, 2026-11-13: `docs/provenance/FOUNDER_DECISION_2026-11-13_PENDING_BRIEF.md`, decision 6). The offer takes effect when the project owner fills in the bracketed fields below, and ships with the first binary release. It is the owner's own commitment, for at least three years. Not reviewed by counsel; not legal advice.**
 
 ---
 
