@@ -1,0 +1,9 @@
+# Add/merge this entry in ~/.codex/config.toml. Do not overwrite existing servers.
+# Replace the sample absolute path with your stable Ninerr installation path.
+# Do not put credentials in .env: forward NINERR_MCP_TOKEN from the local environment.
+[mcp_servers.ninerr]
+command = "node"
+args = ["D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"]
+env_vars = ["NINERR_MCP_TOKEN"]
+startup_timeout_sec = 20
+tool_timeout_sec = 90
