@@ -2,7 +2,7 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
-Last updated: 2026-11-13. Canonical main: `36d5a85`.
+Last updated: 2026-11-13. Canonical main: `5492954`.
 
 ## Completed since P09 (with evidence)
 
@@ -23,6 +23,18 @@ Last updated: 2026-11-13. Canonical main: `36d5a85`.
 | Astryx tokens (or any `:root` custom properties) from a CSS file into the design system (milestone D) | #420 | `df55b47` | seven exact-head checks pass |
 | The census summary changes only when a finding does (pull requests stop conflicting on it) | #431 | `3800a54` | seven exact-head checks pass |
 | CI: a newer push to a pull request cancels its older runs | #428 | `36d5a85` | seven exact-head checks pass, and the release workflow's dry run |
+| Align and distribute layers | #419 | `273c597` | seven exact-head checks pass |
+| Agents dry-run any change and base it on the revision they read (ADR-0006) | #425 | `e5827f4` | seven exact-head checks pass |
+| Export a layer as a standalone HTML page | #418 | `752ceba` | seven exact-head checks pass |
+| Pages: add a page and pick one to show | #422 | `2b6e606` | seven exact-head checks pass |
+| Style values with an open quote or bracket are never drawn, written or exported (#382, closed) | #427 | `4dbe09c` | seven exact-head checks pass |
+| Tailwind export; MCP `layer_code` in JSX, Tailwind or HTML | #434 | `d449e78` | seven exact-head checks pass |
+| Schema v2 at scale (P10-1 workloads) | #426 | `94c6f59` | seven exact-head checks pass |
+| Escaped style property names (#383, case 2) | #436 | `5fc04bf` | seven exact-head checks pass |
+| CI: a wider ephemeral port range on Windows | #438 | `4f2806c` | seven exact-head checks pass |
+| Open Code Review records a documentation-only pull request | #437 | `d763701` | seven exact-head checks pass |
+| Typography in the inspector (font with tokens, weight, line height, letter spacing, alignment) | #424 | `c455f38` | seven exact-head checks pass |
+| Tests name a request or evaluation that hangs (#300) | #440 | `5492954` | seven exact-head checks pass |
 
 Each row's PR has its full check results, its fresh-context review findings and fixes, and its mutation results.
 
@@ -33,22 +45,16 @@ Each is built, tested, mutation-checked and reviewed by a fresh-context reviewer
 | Capability | PR |
 | --- | --- |
 | Agents search and read the Astryx component records through MCP (milestone E) | #429 |
-| Astryx pages render on the canvas as Astryx renders them; three canvas fixes for every imported page (milestone C) | #435 (contains #429) |
-| Export a layer as a standalone HTML page | #418 |
-| Align and distribute layers | #419 |
+| Astryx pages render on the canvas as Astryx renders them (milestone C) | #435 (contains #429) |
 | This ledger | #421 |
-| Pages: add and switch | #422 |
-| Auto layout panel (row, column, gap, padding, alignment) | #423 (contains #419, #422, #424) |
-| Typography: font (with font tokens), weight, line height, letter spacing, alignment | #424 |
-| Agents: dry-run and `baseRevision` on MCP writes (ADR-0006) | #425 |
-| Schema v2 at scale (P10-1 workloads) | #426 |
-| Style values with an open quote or bracket are never drawn, written or exported (#382; #383's `image(`/`src(`) | #427 |
+| Auto layout panel | #423 |
 | Snapping and guides | #430 (contains #423) |
-| Constraints (pin to left, right, both edges or centre) | #432 (contains #430) |
+| Constraints | #432 (contains #430) |
 | Right-to-left editing: a layer's text direction | #433 (contains #432) |
-| Tailwind export, and MCP `layer_code` in JSX, Tailwind or HTML | #434 (contains #418) |
-| Escaped style property names read as a browser reads them (#383, case 2) | #436 |
-| Open Code Review: a documentation-only pull request is recorded, not failed | #437 |
+| Copy a layer as PNG or SVG | #439 |
+| Desktop upgrade and uninstall docs; ADR-0008 (proposed) for breakpoints | #441 |
+| CI: on main, only the latest waiting push runs | #442 |
+| Reduced motion on the canvas | built and reviewed; opens after #435 |
 
 ## Remaining requirements
 
@@ -56,36 +62,36 @@ Each is built, tested, mutation-checked and reviewed by a fresh-context reviewer
 
 | ID | What remains |
 | --- | --- |
-| P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 scale workloads are in review (#426). |
+| P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 scale workloads are merged (#426). |
 | P10-2 | Desktop packages smoke-tested and journeyed on each platform for the candidate. No clean-machine install has been done. |
 | P10-3 | Artifacts bound to the candidate. The Electron LGPL corresponding source is checked but not carried alongside the artifacts (route to be confirmed: see Blockers). |
 | P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is open. |
 | P10-5 | Parity dispositions. For #79 (tokens), drift detection remains. #78 (component states bound to code) is not built. |
-| P10-6 | Every open issue resolved or dispositioned (22 open on 2026-11-13; #382 in review in #427). `CURRENT.md` agrees with this ledger. |
+| P10-6 | Every open issue resolved or dispositioned (#382 closed by #427; #383 case 2 fixed by #436; #376, #377, #383 have status notes). `CURRENT.md` agrees with this ledger. |
 
 **Product scope** (founder directive, 2026-11-13):
 
 | Capability | State |
 | --- | --- |
-| Align and distribute | in review (#419) |
+| Align and distribute | done (#419) |
 | Auto layout (flex) editing | in review (#423) |
 | Constraints | in review (#432) |
-| Responsive breakpoints | missing |
+| Responsive breakpoints | design proposed (ADR-0008, #441), for the founder |
 | Snapping and guides | in review (#430) |
-| Typography: font picker | in review (#424); text styles (named, reusable) missing |
-| Pages: add and switch | in review (#422) |
-| Export: standalone HTML | in review (#418) |
-| Export: Tailwind | in review (#434) |
-| Export: PNG, SVG, PDF | missing |
+| Typography: font picker | done (#424); text styles (named, reusable) missing |
+| Pages: add and switch | done (#422) |
+| Export: standalone HTML | done (#418) |
+| Export: Tailwind | done (#434) |
+| Export: PNG, SVG | in review (#439); PDF missing |
 | Prototyping and interactions | missing |
 | RTL editing | in review (#433): a layer's text direction |
-| Reduced motion | no motion in the editor; the canvas's imported content is not handled |
+| Reduced motion | no motion in the editor; the canvas ends a design's motion when the system asks (opens after #435) |
 | Component sources | |
 | ↳ three-way update of an imported item | missing |
 | ↳ preview, beyond static HTML | needs a decision (live React preview runner) |
 | ↳ registry fetching | needs a decision (network access) |
-| Agents: dry-run and baseRevision (ADR-0006) | in review (#425) |
-| Windows installer, upgrade, uninstall | missing: packages are archives |
+| Agents: dry-run and baseRevision (ADR-0006) | done (#425) |
+| Windows installer, upgrade, uninstall | packages are archives (founder, 2026-10-13); upgrade and uninstall documented (#441) |
 | Screen-reader pass (#376) | not done with a real screen reader |
 
 ## Open blockers (founder or third party)
@@ -108,8 +114,7 @@ Each is built, tested, mutation-checked and reviewed by a fresh-context reviewer
 
 ## Next engineering actions
 
-1. Merge the open pull requests as their exact-head checks pass, in the order their chains need (#419, #422, #424 before #423, then #430, #432, #433; #418 before #434; #429 before #435). Verify the Astryx integration together on main.
-2. MCP tools for align, layout and pages.
-3. Responsive breakpoints (needs a design: a viewport per page, and media queries drawn per viewport), text styles, and image export (PNG and SVG) by clipboard.
-4. Issue dispositions (#349, #383, #377, #300, #252, #108 and the rest) toward P10-6.
-5. Keep `docs/CURRENT.md` and this ledger current with each merge.
+1. Merge the open pull requests as their checks pass, in their chains' order (#429 then #435; #423, #430, #432, #433), then open reduced motion. Verify the latest main's post-merge CI.
+2. The founder's decisions listed above, and ADR-0008 before breakpoints are built.
+3. Text styles, PDF export, and MCP tools for layout, constraints and direction (agents can already set each through `set_styles` and attributes).
+4. Remaining issue dispositions toward P10-6, and the P10 qualification records.
