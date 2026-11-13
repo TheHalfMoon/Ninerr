@@ -16,7 +16,7 @@ P10 criterion 6 asks that no critical correctness, data-loss, security or releas
 
 | Issue | State | Disposition |
 | --- | --- | --- |
-| #405 Integrate the UI ecosystems as editable components | The Astryx source is complete on main (#415, #420, #429, #435). Registry fetching needs host network access, live previews need a React preview runner, and Aceternity UI and 21st.dev need their publishers' permission. | Open: each remaining part is a founder decision or a third party's. |
+| #405 Integrate the UI ecosystems as editable components | The Astryx source is complete on main (#415, #420, #429, #435). Registry fetching needs host network access, live previews need a React preview runner, and Aceternity UI and 21st.dev need their publishers' permission. | Open for its post-1.0 parts: the founder left registry fetching, live previews and the two publishers out of 1.0 (2026-11-13). |
 | #364 Headless local agent access | A proposal pending its review (its own text says so). The studio host already serves MCP on loopback with the desktop window open. | Post-1.0 proposal unless the founder places it in P10. |
 | #366 Research UI and local MCP for reference packs | The local reference path M01 to M05 is merged; its packaged and offline gates have not been run (`docs/CURRENT.md`). | Founder places it: before the candidate, or after 1.0. |
 | #139 P07 release: umbrella and artifact plan | Closes when every artifact is delivered or has a founder-approved disposition. The Electron LGPL corresponding-source route is the open artifact (completion ledger, blocker 1). | Open until the founder chooses the corresponding-source route. |
@@ -45,7 +45,7 @@ P10 criterion 6 asks that no critical correctness, data-loss, security or releas
 | #383 Style values a browser rejects | Case 2 (escaped names) is fixed (#436). Case 1 (an invalid fallback wins) and the `@x { … }` item need a decision taken with #369: ask a browser, keep a property grammar, or keep every declaration. | Fidelity limit; decided with #369. |
 | #373 Reference packs: decisions before a v1 pack ships | No reference pack has been released, so nothing in it is exposed yet. | Settled before any pack ships; not on the 1.0 path. |
 | #64 Visual Git text and gate follow-ups | Items 1 (invisible-only names, stray variation selectors) and 3 (mixed SHA-1 and SHA-256 ids refused) are done, with tests. Item 2 (link commit versus snapshot commit) is a product decision; item 4 is a simplification; item 5 is an audit of the other packages' text rules. | Open for items 2, 4 and 5; none affects shipped behaviour. |
-| #79 Token graph and drift detection; #78 Component states bound to source | Tokens are modelled (ADR-0004, schema v2); token drift detection is not built. Component states are declared and validated but not bound to source symbols. | P10-5 parity: each needs proof or a recorded disposition from the founder. |
+| #79 Token graph and drift detection; #78 Component states bound to source | Drift is built (#452). The founder dispositioned both on 2026-11-13: #79's remainder covered, #78 superseded by ADR-0005. | Closed. |
 
 ## Umbrellas
 

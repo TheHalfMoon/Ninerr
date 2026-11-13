@@ -2,7 +2,7 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
-Last updated: 2026-11-13. Canonical main: `63912b7`.
+Last updated: 2026-11-13. Canonical main: `338e463`.
 
 ## Completed since P09 (with evidence)
 
@@ -72,7 +72,7 @@ Nothing is in review.
 | P10-2 | Desktop packages smoke-tested and journeyed on each platform for the candidate. No clean-machine install has been done. |
 | P10-3 | Artifacts bound to the candidate. The Electron LGPL corresponding source is checked but not carried alongside the artifacts (route to be confirmed: see Blockers). |
 | P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is fixed (#456). |
-| P10-5 | Parity dispositions. #79: token drift detection is built (#452); token tiers beyond collections, modes and aliases, and Tailwind config as a drift source, need a disposition. #78 (states bound to source, in the P05 design-components library no product surface uses) needs a disposition. Both are the founder's. |
+| P10-5 | Dispositioned by the founder on 2026-11-13: #79's remainder covered (aliases; drift built in #452), #78 superseded by ADR-0005. Both closed. |
 | P10-6 | Every open issue has a recorded disposition (`docs/evidence/P10_ISSUE_DISPOSITIONS_2026-11-13.md`); none is critical. #382, #94 and #351 are closed. Judged again on the exact candidate. |
 
 **Product scope** (founder directive, 2026-11-13):
@@ -82,34 +82,33 @@ Nothing is in review.
 | Align and distribute | done (#419) |
 | Auto layout (flex) editing | done (#423) |
 | Constraints | done (#432) |
-| Responsive breakpoints | design proposed (ADR-0008, #441), for the founder |
+| Responsive breakpoints | ADR-0008 accepted; built after 1.0 (founder, 2026-11-13) |
 | Snapping and guides | done (#430) |
 | Typography: font picker and text styles | done (#424, #446) |
 | Pages: add and switch | done (#422) |
 | Export: standalone HTML | done (#418) |
 | Export: Tailwind | done (#434) |
-| Export: PNG, SVG | done (#439). PDF: needs the founder (where an exported file is written; see blockers) |
+| Export: PNG, SVG | done (#439). PDF: not in 1.0; after it, exports written into the project folder (founder, 2026-11-13) |
 | Prototyping and interactions | missing |
 | RTL editing | done (#433, and MCP `set_attributes` #443): a layer's text direction |
 | Reduced motion | no motion in the editor; the canvas ends a design's motion when the system asks (#444) |
 | Component sources | |
 | ↳ three-way update of an imported item | missing |
-| ↳ preview, beyond static HTML | needs a decision (live React preview runner) |
-| ↳ registry fetching | needs a decision (network access) |
+| ↳ preview, beyond static HTML | not in 1.0: previews stay the canvas's static rendering (founder, 2026-11-13) |
+| ↳ registry fetching | not in 1.0: items come from files the person chooses (founder, 2026-11-13) |
 | Agents: dry-run and baseRevision (ADR-0006) | done (#425) |
 | Windows installer, upgrade, uninstall | packages are archives (founder, 2026-10-13); upgrade and uninstall documented (#441) |
 | Screen-reader pass (#376) | not done with a real screen reader |
 
 ## Open blockers (founder or third party)
 
-1. **The LGPL corresponding source route in practice.** The route ("alongside the artifacts") is decided, but Chromium and Electron source is many gigabytes, past a single release asset. Choose a scoped mirror, a separate mirror, or the LGPL §6 written offer.
-2. **Host network access**, for registry fetching (#405) and optional model providers.
-3. **A live React preview runner** (#405).
-4. **Aceternity UI and 21st.dev:** the publishers' written permission.
-5. **Reference-machine performance runs and clean-machine installs** need the founder's hardware.
-6. **Owner-only actions:** the `v1.0.0` tag, publishing the draft release, and removing the unused `TYPESAFE_API_KEY` secret.
-7. **#349 (Windows trusted write):** decided by the founder on 2026-11-13: the replacement is renamed through its own handle (#456, merged; #349 closed).
-8. **PDF export:** the clipboard cannot hold a PDF and the desktop app refuses downloads by design, so a PDF needs either a host route that writes export files into the project folder or printing. Either crosses an established boundary, so it waits for the founder.
+The founder decided the pending brief on 2026-11-13 (`docs/provenance/FOUNDER_DECISION_2026-11-13_PENDING_BRIEF.md`). What remains:
+1. **The written offer (#457):** the route is decided; the owner fills in the name, contact and date it is signed with.
+2. **The candidate:** the founder names the commit; engineering then runs P10 on it.
+3. **Founder's hardware and hands:** the reference-machine performance runs, a clean-machine install, and a real screen-reader pass (#376).
+4. **Owner-only actions:** the `v1.0.0` tag, publishing the draft release, and removing the unused `TYPESAFE_API_KEY` secret.
+
+Decided and closed: #349 (#456), breakpoints (ADR-0008, after 1.0), PDF, network access and the preview runner (not in 1.0), Aceternity UI and 21st.dev (left out of 1.0), and the P10-5 dispositions.
 
 ## Tests executed (latest, with exact heads)
 
@@ -121,7 +120,6 @@ Nothing is in review.
 
 ## Next engineering actions
 
-Every product item that needs no decision is built and merged. What remains:
-1. The founder's decisions above (ADR-0008 breakpoints, PDF, network access, preview runner, corresponding source, publishers' permission) and the P10-5 parity dispositions (#78, #79).
-2. P10 qualification on the exact candidate, once the founder names it: the full suite on three platforms, smoke, gate-13 budgets on the reference machine, P08-G4 remeasured, the seven-project dogfooding (which also answers #377), packaged journeys, a clean-machine install, and a real screen-reader pass (#376).
-3. The release gate: the `v1.0.0` tag and publishing are the owner's.
+1. When the owner's details are in, merge #457 and record the route in `THIRD_PARTY_NOTICES.md` and `docs/RELEASE.md`.
+2. When the founder names the candidate: run P10 on it (the full suite on three platforms, smoke, packaged journeys and resilience, the dogfooding, the security and offline qualification, and the release-evidence bundle), and write the P10 records.
+3. After 1.0: breakpoints (ADR-0008), PDF export into the project folder, registry fetching through the network policy.

@@ -1,5 +1,7 @@
 # Decisions pending the founder, 2026-11-13
 
+**Decided 2026-11-13:** the founder took this brief as written (`FOUNDER_DECISION_2026-11-13_PENDING_BRIEF.md`). Each decision below is its recommendation.
+
 Every product item that needs no decision is built and merged (`docs/COMPLETION_LEDGER.md`). What remains on the path to `v1.0.0` waits on the decisions below. Each gives the options, what each costs, and a recommendation, so it can be answered in a line. None is taken by engineering: each changes scope, a security boundary, a network policy, a release artifact, or a third party's rights.
 
 ## 1. Responsive breakpoints (ADR-0008, proposed)
