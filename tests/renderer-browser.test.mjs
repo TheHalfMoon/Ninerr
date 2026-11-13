@@ -260,6 +260,39 @@ test("SVG keeps its required case, and a tag change patches like a fresh render"
   }
 });
 
+test("a slot draws its component in place of its layer's text, and a slot that cannot is marked stale", browserTestOptions(), async () => {
+  const session = await harness();
+  try {
+    const { page } = session;
+    const doc = createDocument({
+      id: "doc",
+      nodes: [
+        { id: "icon", type: "component-definition", props: { name: "Icon", properties: [], text: "Star" } },
+        { id: "card", type: "component-definition", children: ["well"], props: { name: "Card", properties: [{ id: "p", name: "Content", kind: "slot", default: "", target: { nodeId: "well", field: "children" } }] } },
+        { id: "well", type: "text", parentId: "card", props: { text: "Own" } },
+        { id: "filled", type: "component-instance", props: { componentId: "card", propertyValues: { p: "icon" } } },
+        { id: "looped", type: "component-instance", props: { componentId: "card", propertyValues: { p: "card" } } },
+      ],
+    });
+    const drawn = await page.evaluate((d) => {
+      window.r.render(d);
+      const well = (id) => window.r.elementFor(id).querySelector('[data-ninerr-id="well"]');
+      return { filled: well("filled").textContent, filledStale: well("filled").hasAttribute("data-ninerr-stale"), looped: well("looped").textContent, loopedStale: well("looped").hasAttribute("data-ninerr-stale") };
+    }, doc);
+    assert.deepEqual(drawn, { filled: "Star", filledStale: false, looped: "", loopedStale: true });
+    // Deleting the component a value names redraws the instance: the slot is then stale.
+    const result = applyTransaction(doc, { id: "t", actor: "u", operations: [{ type: "remove-node", nodeId: "icon" }] });
+    const after = await page.evaluate(({ d, affected }) => {
+      window.r.patch(d, affected);
+      const well = window.r.elementFor("filled").querySelector('[data-ninerr-id="well"]');
+      return { text: well.textContent, stale: well.hasAttribute("data-ninerr-stale") };
+    }, { d: result.document, affected: result.affectedNodeIds });
+    assert.deepEqual(after, { text: "", stale: true });
+  } finally {
+    await session.close();
+  }
+});
+
 test("patching agrees with a fresh render over a seeded random edit sequence", browserTestOptions(), async () => {
   const session = await harness();
   try {

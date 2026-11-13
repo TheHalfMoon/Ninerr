@@ -953,13 +953,31 @@ test("the Components dialog audits clean, for a layer, a component and an instan
     await waitRevision(page, 2);
     await page.locator("#property-add").waitFor();
     await audit(page, "the Components dialog for a component");
-    await page.locator("#components-list button").first().click();
+    // A slot on the component's root: its instances then choose a component for it.
+    await page.locator("#property-name").fill("Content");
+    await page.locator("#property-kind").selectOption("slot");
+    await page.locator("#property-add").click();
     await waitRevision(page, 3);
+    await page.locator("#components-list button").first().click();
+    await waitRevision(page, 4);
     await page.locator("#components-detach").waitFor();
+    await page.locator('select[data-property]').waitFor();
     await audit(page, "the Components dialog for an instance");
     await page.locator("#instance-layer").selectOption({ index: 1 });
     await page.locator("#instance-style").waitFor();
     await audit(page, "the Components dialog editing a layer inside an instance");
+    // The slot offers no component that would draw Card inside Card: here, none but its own content.
+    const slotOptions = () => page.locator("select[data-property] option").evaluateAll((options) => options.map((option) => [option.textContent, option.disabled]));
+    assert.deepEqual(await slotOptions(), [["Its own content", false]]);
+    // A value set elsewhere that draws Card in Card is shown, not offered, and the canvas marks it stale.
+    const { document: now } = await ok(call("GET", "/api/document"), "document");
+    const instance = Object.values(now.nodes).find((node) => node.type === "component-instance");
+    const [slot] = now.nodes[instance.props.componentId].props.properties;
+    await ok(call("POST", "/api/edit", { baseRevision: now.revision, operations: [{ type: "set-props", nodeId: instance.id, set: { propertyValues: { [slot.id]: instance.props.componentId } } }], intent: "Card in Card" }), "values");
+    await waitRevision(page, now.revision + 1);
+    await page.waitForFunction(() => document.querySelectorAll("select[data-property] option").length === 2);
+    assert.deepEqual(await slotOptions(), [["Its own content", false], ["A component that is gone, or would draw this one in itself", true]]);
+    assert.equal(await page.evaluate((id) => document.querySelector("iframe").contentDocument.querySelector(`[data-ninerr-id="${id}"]`).hasAttribute("data-ninerr-stale"), instance.id), true);
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();
