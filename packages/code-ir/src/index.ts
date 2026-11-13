@@ -10,3 +10,4 @@ export * from "./merge.ts";
 export * from "./style.ts";
 export * from "./roundtrip.ts";
 export * from "./provenance.ts";
+export * from "./html.ts";

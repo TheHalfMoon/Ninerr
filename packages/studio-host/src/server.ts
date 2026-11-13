@@ -8,7 +8,7 @@ import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES } from "@ninerr/persistence";
 import { AgentRegistry } from "./agents.ts";
 import { writeTrustedFile } from "./trusted-file.ts";
 import { StudioError } from "./errors.ts";
-import { exportJsx, importJsx } from "./code.ts";
+import { exportHtml, exportJsx, importJsx } from "./code.ts";
 import { MAX_COMPONENT_REQUEST_BYTES, applyComponentImport, planComponentImport, publicPlan } from "./component-import.ts";
 import { CodebaseLinks, assertFolder, bringIn, keptFields, planWriteBack, removeTemporary, resolveWithFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 import { ImportDesk, MAX_IMPORT_HTML_BYTES } from "./imports.ts";
@@ -328,6 +328,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
       return { ...event, frameId };
     },
     "POST /api/code/export": (body) => exportJsx(requireSession().document, body?.nodeId),
+    "POST /api/code/export-html": (body) => exportHtml(requireSession().document, body?.nodeId),
     "POST /api/code/import": (body) => {
       const current = requireSession();
       const { operations, frameId, componentName, layers, layersWithStyleLeftOut, layersWithStyleOutOfOrder } = importJsx(body?.code);

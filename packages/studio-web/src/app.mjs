@@ -1302,7 +1302,26 @@ async function openCodeDialog() {
             output.select();
             setStatus("Select the code and copy it.");
           }
-        } }, "Copy code")),
+        } }, "Copy code"),
+        // The same layer as a standalone page: its markup, its tokens and its page's stylesheet.
+        el("button", { type: "button", id: "code-export-html", onclick: async () => {
+          let page;
+          try {
+            page = await state.client.post("/api/code/export-html", { nodeId: selected });
+          } catch (failure) {
+            if (handleSessionEnded(failure)) return;
+            error.textContent = describeError(failure);
+            return;
+          }
+          try {
+            await navigator.clipboard.writeText(page.html);
+            setStatus(`HTML page copied: ${page.layers} layer${page.layers === 1 ? "" : "s"}${page.codeParts > 0 ? `, ${page.codeParts} {…} part${page.codeParts === 1 ? "" : "s"} written as comments` : ""}.`);
+          } catch {
+            output.value = page.html;
+            output.select();
+            setStatus("The HTML page is in the code box: select it and copy it.");
+          }
+        } }, "Copy as an HTML page")),
         // The stylesheet that applies to it (#283), which the canvas applies to its frame alone.
         ...(typeof exported.stylesheet === "string" ? [(() => {
           const sheet = el("textarea", { id: "code-export-css", rows: 6, readonly: true, spellcheck: "false" });
