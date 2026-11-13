@@ -5,6 +5,7 @@
 // change that does not apply means the copy is out of date, and it is fetched again.
 
 import { mountCanvas, insertNode, removeNodes, setStyle, setText } from "/packages/canvas/src/index.mjs";
+import { styleDeclarationProblem } from "/packages/renderer/src/index.mjs";
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
 import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
@@ -2643,6 +2644,13 @@ function onInspectorChange(event) {
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);
     const normalized = /^-?\d+(\.\d+)?$/u.test(value) && !UNITLESS.has(property) ? `${value}px` : value;
+    // A value the canvas would not draw is said, not stored (an unclosed quote, a semicolon).
+    const problem = normalized === "" ? null : styleDeclarationProblem(property, normalized);
+    if (problem !== null) {
+      setStatus(`Not changed: ${problem}.`);
+      input.value = input.dataset.original = typeof state.document.nodes[nodeId]?.props?.style?.[property] === "string" ? state.document.nodes[nodeId].props.style[property] : "";
+      return;
+    }
     commit(setStyle(state.document, nodeId, { [property]: normalized === "" ? null : normalized }), "Change style");
   }
 }

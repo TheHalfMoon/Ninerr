@@ -60,6 +60,12 @@ test("set a text layer's font from a token, its weight, line height, letter spac
       return [computed.fontFamily, computed.fontWeight, computed.lineHeight, computed.letterSpacing, computed.textAlign];
     });
     assert.deepEqual(drawn, ["Georgia, serif", "700", "48px", "2px", "center"], "the canvas draws them, the font through its token");
+    // A font the canvas would not draw (a semicolon hides a second declaration) is refused, saying why.
+    await page.locator("#inspect-style-font-family").fill("Arial; color: red");
+    await page.locator("#inspect-style-font-family").press("Enter");
+    await page.waitForFunction(() => /^Not changed: font-family's value/u.test(document.getElementById("status").textContent));
+    assert.equal(await page.locator("#inspect-style-font-family").inputValue(), "var(--font-heading)");
+    assert.equal((await ok(call("GET", "/api/document"), "document")).document.revision, 6, "nothing was stored");
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();
