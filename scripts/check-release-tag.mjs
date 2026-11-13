@@ -3,8 +3,7 @@
 // Invoked before dependency installation by Release Evidence on tagged pushes.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-
-const root = fileURLToPath(new URL("../", import.meta.url));
+import { resolve } from "node:path";
 
 export function verifyReleaseTag(tag, product, lockfile) {
   if (typeof product?.version !== "string" ||
@@ -21,13 +20,7 @@ export function verifyReleaseTag(tag, product, lockfile) {
   return version;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === fileURLToPath(new URL(`file://${process.argv[1].startsWith("/") ? "" : "/"}${process.argv[1]}`))) {
-  // This branch is kept for direct CLI invocation but file URL comparison may be
-  // platform-dependent. The robust check below handles Windows as well.
-}
-
-const invoked = process.argv[1] && fileURLToPath(import.meta.url) ===
-  (await import("node:path")).resolve(process.argv[1]);
+const invoked = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1]);
 
 if (invoked) {
   try {
