@@ -162,13 +162,13 @@ test("every editor action works from the keyboard, with visible focus", browserT
     // Tab reaches every toolbar control in order, each with a visible focus ring.
     await page.evaluate(() => document.activeElement.blur());
     const order = [];
-    for (let index = 0; index < 16; index += 1) {
+    for (let index = 0; index < 19; index += 1) {
       await page.keyboard.press("Tab");
       const now = await focused();
       order.push(now.id || now.label);
       if (now.id !== "") assert.ok(now.outline, `${now.id} shows focus`);
     }
-    for (const id of ["action-projects", "action-insert-box", "action-insert-text", "action-zoom-out", "action-zoom-in", "action-fit", "action-save", "action-import", "action-code", "action-agents"]) {
+    for (const id of ["action-projects", "action-insert-box", "action-insert-text", "action-add-page", "action-zoom-out", "action-zoom-in", "action-fit", "action-save", "action-import", "action-code", "action-agents"]) {
       assert.ok(order.includes(id), `${id} is reachable by Tab (order: ${order.join(", ")})`);
     }
     // Insert from the toolbar, then work in the layers tree.
@@ -1001,6 +1001,57 @@ test("the Component sources dialog audits clean, browsing an Astryx component's 
     await page.locator('#source-component-results [data-component-id="astryx:Dialog"]').click();
     await page.locator("#source-component-props").waitFor();
     await audit(page, "the Component sources dialog with an Astryx component's record");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the inspector audits clean with auto layout's controls showing", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-layout-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("layout");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    const call = client(host.url, host.token);
+    const { document } = await ok(call("GET", "/api/document"), "document");
+    await ok(call("POST", "/api/edit", { baseRevision: document.revision, operations: [{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: "row", type: "frame", props: { name: "Row", style: { display: "flex", "flex-direction": "row", gap: "8px", width: "300px", height: "80px" } } } }], intent: "Add a row" }), "row");
+    await waitRevision(page, 1);
+    await page.locator('#layers [role=treeitem][data-node-id="row"] > .row').click();
+    await page.locator("#inspect-style-justify-content").waitFor();
+    assert.equal(await page.locator("#inspect-layout-mode").inputValue(), "row");
+    await audit(page, "the inspector with auto layout");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the inspector audits clean with the Align group for three selected layers", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-align-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("align");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    const call = client(host.url, host.token);
+    const { document } = await ok(call("GET", "/api/document"), "document");
+    const box = (id, left) => ({ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id, type: "frame", props: { name: id, style: { position: "absolute", left: `${left}px`, top: "0px", width: "40px", height: "40px" } } } });
+    await ok(call("POST", "/api/edit", { baseRevision: document.revision, operations: [box("one", 0), box("two", 60), box("three", 200)], intent: "Add boxes" }), "boxes");
+    await waitRevision(page, 1);
+    for (const [index, id] of ["one", "two", "three"].entries()) await page.locator(`#layers [role=treeitem][data-node-id="${id}"] > .row`).click(index === 0 ? {} : { modifiers: ["Shift"] });
+    await page.locator("#align-group").waitFor();
+    assert.equal(await page.locator("#align-group button").count(), 8);
+    await audit(page, "the inspector with three layers selected");
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();

@@ -4,7 +4,8 @@
 // response or the event stream, whichever arrives first), in revision order. A gap or a
 // change that does not apply means the copy is out of date, and it is fetched again.
 
-import { mountCanvas, insertNode, removeNodes, setStyle, setText } from "/packages/canvas/src/index.mjs";
+import { mountCanvas, insertNode, removeNodes, setStyle, setText, setLayout } from "/packages/canvas/src/index.mjs";
+import { styleDeclarationProblem } from "/packages/renderer/src/index.mjs";
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
 import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
@@ -55,8 +56,14 @@ const state = {
   // Layers this editor has just added, to select once the change that adds them is applied:
   // { ids, applied } for the latest insert, marked applied when that change selects them.
   selectOnApply: null,
+  // A page just added, to show once the change that adds it is drawn.
+  showOnApply: null,
+  // The page last shown, where a new layer goes when nothing is selected.
+  shownPage: null,
   collapsed: new Set(),
   focusedLayer: null,
+  // The align button to focus when the inspector is drawn again after its change.
+  focusAlign: null,
   queue: Promise.resolve(),
   events: null,
   confirmations: [],
@@ -2102,11 +2109,12 @@ function insert(kind) {
   let parentId = null;
   const selected = state.selection.length === 1 ? doc.nodes[state.selection[0]] : null;
   if (selected && selected.type !== "text") parentId = selected.id;
-  else if (layerRoots(doc).length > 0) parentId = layerRoots(doc)[0];
+  // With nothing selected, a new layer goes on the page shown.
+  else if (layerRoots(doc).length > 0) parentId = currentPage(doc);
   else {
     // An empty project gets a page to hold its first layer.
     const pageId = newId("page");
-    operations.push(...insertNode(null, 0, { id: pageId, type: "frame", tag: "main", style: { position: "relative", width: "800px", height: "600px", background: "#ffffff" } }));
+    operations.push(...insertNode(null, 0, { id: pageId, type: "frame", tag: "main", style: { ...PAGE_STYLE } }));
     parentId = pageId;
   }
   const index = parentId === null ? doc.rootIds.length : (doc.nodes[parentId]?.children.length ?? 0);
@@ -2115,6 +2123,73 @@ function insert(kind) {
     ? insertNode(parentId, index, { id, type: "text", tag: "p", text: "Text", style: { position: "absolute", left: "32px", top: "32px", margin: "0px", "font-size": "16px" } })
     : insertNode(parentId, index, { id, type: "element", tag: "div", style: { position: "absolute", left: "32px", top: "32px", width: "160px", height: "100px", background: "#d9d2ff" } })));
   commitAndSelect(operations, kind === "text" ? "Insert text" : "Insert box", id);
+}
+
+// ---------- pages ----------
+
+// A project's pages are its top-level frames, drawn one after another on the canvas.
+const PAGE_STYLE = { position: "relative", width: "800px", height: "600px", background: "#ffffff" };
+const pageName = (doc, id, index) => (typeof doc.nodes[id]?.props?.name === "string" && doc.nodes[id].props.name.trim() !== "" ? doc.nodes[id].props.name.trim() : `Page ${index + 1}`);
+
+/** The page a layer is on: its top-level ancestor. */
+function pageOf(doc, id) {
+  let node = doc?.nodes[id];
+  for (let steps = 0; node && node.parentId !== null && steps <= 1_100; steps += 1) node = doc.nodes[node.parentId];
+  return node ? node.id : null;
+}
+
+/** Add a page after the others, named for its place, select it and show it. */
+function addPage() {
+  if (state.document === null) return;
+  const doc = state.document;
+  const id = newId("page");
+  const pages = layerRoots(doc);
+  // A name no other page has: Page 2, or Page 3 if Page 2 is taken.
+  const taken = new Set(pages.map((pageId, index) => pageName(doc, pageId, index)));
+  let number = pages.length + 1;
+  while (taken.has(`Page ${number}`)) number += 1;
+  const operations = insertNode(null, doc.rootIds.length, { id, type: "frame", tag: "main", style: { ...PAGE_STYLE } });
+  operations[0].node.props.name = `Page ${number}`;
+  state.showOnApply = id;
+  state.shownPage = id;
+  commitAndSelect(operations, "Add page", id);
+}
+
+/** The page shown: the selected layer's, else the one last shown, else the first. */
+function currentPage(doc) {
+  const pages = layerRoots(doc);
+  const fromSelection = pageOf(doc, state.selection.at(-1) ?? state.focusedLayer);
+  if (fromSelection !== null && pages.includes(fromSelection)) return fromSelection;
+  if (state.shownPage !== null && pages.includes(state.shownPage)) return state.shownPage;
+  return pages[0] ?? null;
+}
+
+/** Select a page and fit the canvas to it. */
+function showPage(id) {
+  if (state.document === null || !state.document.nodes[id]) return;
+  state.shownPage = id;
+  selectLayers([id]);
+  canvas.showLayer(id);
+  renderToolbar();
+}
+
+function renderPages() {
+  const select = $("page-select");
+  const doc = state.document;
+  const pages = doc === null ? [] : layerRoots(doc);
+  const current = doc === null ? null : currentPage(doc);
+  // Redrawn only when what it shows changes, so an open list is not reset under the pointer.
+  const names = pages.map((id, index) => pageName(doc, id, index));
+  const key = JSON.stringify([pages, names, current]);
+  if (select.dataset.key !== key) {
+    select.replaceChildren(...pages.map((id, index) => el("option", { value: id, selected: id === current }, names[index])));
+    select.dataset.key = key;
+  }
+  select.disabled = pages.length === 0;
+  $("action-show-page").disabled = pages.length === 0;
+  $("action-add-page").disabled = doc === null;
+  // A page just added is shown once the canvas has drawn it.
+  if (state.showOnApply !== null && doc !== null && Object.hasOwn(doc.nodes, state.showOnApply) && canvas.showLayer(state.showOnApply)) state.showOnApply = null;
 }
 
 /** Commit a change that adds layer `id`, and select it once the change is applied. */
@@ -2582,6 +2657,31 @@ function onLayersClick(event) {
   focusLayer(id);
 }
 
+// Lining several layers up, or spacing three or more evenly: the buttons do what Alt+A, D, W,
+// S, H, V and Alt+Shift+H, V do on the canvas.
+function alignGroup() {
+  // Counted as align counts them: drawn, with a box, and none inside another selected one.
+  const count = canvas?.alignable ?? 0;
+  if (count < 2) return null;
+  const align = (key, label, keys, action) => el("button", { type: "button", "data-align": key, "aria-keyshortcuts": keys, onclick: () => {
+    // The change's own status says what it did. The inspector is drawn again when it arrives:
+    // focus stays on this button.
+    action();
+    state.focusAlign = key;
+  } }, label);
+  return el("div", { class: "steps", role: "group", id: "align-group", "aria-label": `Align ${count} layers` },
+    align("left", "Align left", "Alt+A", () => canvas.align("left")),
+    align("center", "Align centre", "Alt+H", () => canvas.align("center")),
+    align("right", "Align right", "Alt+D", () => canvas.align("right")),
+    align("top", "Align top", "Alt+W", () => canvas.align("top")),
+    align("middle", "Align middle", "Alt+V", () => canvas.align("middle")),
+    align("bottom", "Align bottom", "Alt+S", () => canvas.align("bottom")),
+    ...(count >= 3 ? [
+      align("horizontal", "Space evenly across", "Alt+Shift+H", () => canvas.distribute("horizontal")),
+      align("vertical", "Space evenly down", "Alt+Shift+V", () => canvas.distribute("vertical")),
+    ] : []));
+}
+
 function renderInspector() {
   const form = $("inspector");
   const doc = state.document;
@@ -2593,7 +2693,11 @@ function renderInspector() {
   const activeField = active?.name ?? null;
   if (doc === null || state.selection.length !== 1 || !doc.nodes[state.selection[0]]) {
     delete form.dataset.nodeId;
-    form.replaceChildren(el("p", {}, doc === null ? "Open a project to start." : state.selection.length > 1 ? `${state.selection.length} layers selected.` : "Select a layer to edit it."));
+    form.replaceChildren(el("p", {}, doc === null ? "Open a project to start." : state.selection.length > 1 ? `${state.selection.length} layers selected.` : "Select a layer to edit it."), ...(doc !== null && state.selection.length > 1 ? [alignGroup()].filter(Boolean) : []));
+    if (state.focusAlign) {
+      form.querySelector(`[data-align="${state.focusAlign}"]`)?.focus();
+      state.focusAlign = null;
+    }
     return;
   }
   const node = doc.nodes[state.selection[0]];
@@ -2626,6 +2730,11 @@ function renderInspector() {
   }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
+  // Auto layout (CSS flex) for a layer that holds others: its children in a row or a column,
+  // with the space between them, its padding, and how they line up.
+  if (node.type !== "text" && !isCodePart(node)) children.push(layoutSection(style));
+  // How its words look: the font, its weight, line height, letter spacing and alignment.
+  if (node.type === "text" || textId !== null) children.push(textSection(doc, style));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.
   const step = (label, text, action) => el("button", { type: "button", "aria-label": label, onclick: action }, text);
   children.push(el("div", { class: "steps", role: "group", "aria-label": "Move and resize by 10 pixels" },
@@ -2652,6 +2761,71 @@ function renderInspector() {
   }
 }
 
+// The inspector's auto layout section: how the selected layer places what it holds.
+const LAYOUT_ALIGN = [["", "Default"], ["flex-start", "Start"], ["center", "Centre"], ["flex-end", "End"], ["stretch", "Stretch"], ["baseline", "Baseline"]];
+const LAYOUT_JUSTIFY = [["", "Default"], ["flex-start", "Start"], ["center", "Centre"], ["flex-end", "End"], ["space-between", "Space between"], ["space-around", "Space around"], ["space-evenly", "Space evenly"]];
+function layoutSection(style) {
+  const mode = style.display === "flex" || style.display === "inline-flex" ? (style["flex-direction"] === "column" || style["flex-direction"] === "column-reverse" ? "column" : "row") : "free";
+  const select = (name, label, choices, value) => {
+    // A value the list does not name stays shown, as it is, so it is not silently replaced.
+    const options = choices.some(([option]) => option === value) ? choices : [...choices, [value, value]];
+    const control = el("select", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name }, ...options.map(([option, text]) => el("option", { value: option, selected: option === value }, text)));
+    control.dataset.original = value;
+    return el("label", { for: control.id }, label, control);
+  };
+  const text = (name, label, value) => {
+    const control = el("input", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name, value, autocomplete: "off" });
+    control.dataset.original = value;
+    return el("label", { for: control.id }, label, control);
+  };
+  const flex = mode !== "free";
+  return el("fieldset", { id: "inspect-layout", class: "layout" },
+    el("legend", {}, "Layout"),
+    select("layout:mode", "Place children", [["free", "Freely"], ["row", "In a row"], ["column", "In a column"]], mode),
+    ...(flex ? [
+      el("div", { class: "pair" },
+        text("style:gap", "Gap", typeof style.gap === "string" ? style.gap : ""),
+        text("style:padding", "Padding", typeof style.padding === "string" ? style.padding : "")),
+      select("style:align-items", mode === "row" ? "Align vertically" : "Align horizontally", LAYOUT_ALIGN, typeof style["align-items"] === "string" ? style["align-items"] : ""),
+      select("style:justify-content", "Distribute", LAYOUT_JUSTIFY, typeof style["justify-content"] === "string" ? style["justify-content"] : ""),
+      select("style:flex-wrap", "Wrap", [["", "No"], ["wrap", "Yes"]], typeof style["flex-wrap"] === "string" && style["flex-wrap"] !== "nowrap" ? style["flex-wrap"] : ""),
+    ] : []));
+}
+
+// The inspector's text section. A font is a family name, a stack, or a font token as var(--name).
+const FONT_STACKS = ["system-ui, sans-serif", "Georgia, serif", "ui-monospace, monospace", "Helvetica, Arial, sans-serif", "\"Times New Roman\", serif"];
+const FONT_WEIGHTS = [["", "Default"], ["100", "Thin"], ["200", "Extra light"], ["300", "Light"], ["400", "Regular"], ["500", "Medium"], ["600", "Semibold"], ["700", "Bold"], ["800", "Extra bold"], ["900", "Black"]];
+const TEXT_ALIGN = [["", "Default"], ["start", "Start"], ["center", "Centre"], ["end", "End"], ["justify", "Justify"]];
+function textSection(doc, style) {
+  const value = (name) => (typeof style[name] === "string" ? style[name] : "");
+  const input = (name, label, extra = {}) => {
+    const control = el("input", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name, value: value(name.slice(6)), autocomplete: "off", ...extra });
+    control.dataset.original = control.value;
+    return el("label", { for: control.id }, label, control);
+  };
+  const select = (name, label, choices) => {
+    const current = value(name.slice(6));
+    const known = choices.some(([option]) => option === current);
+    // A value the list does not name stays shown, as it is.
+    const options = known ? choices : [...choices, [current, current]];
+    const control = el("select", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name }, ...options.map(([option, text]) => el("option", { value: option, selected: option === current }, text)));
+    control.dataset.original = current;
+    return el("label", { for: control.id }, label, control);
+  };
+  // The project's font tokens first, then common stacks.
+  const system = doc === null ? null : designSystemOf(doc);
+  const fonts = [...(system?.props.tokens ?? []).filter((token) => token.type === "fontFamily").map((token) => `var(${token.name})`), ...FONT_STACKS];
+  const list = el("datalist", { id: "font-families" }, ...fonts.map((font) => el("option", { value: font })));
+  return el("fieldset", { id: "inspect-text-style", class: "layout" },
+    el("legend", {}, "Text"),
+    input("style:font-family", "Font", { list: "font-families", spellcheck: "false" }), list,
+    el("div", { class: "pair" }, select("style:font-weight", "Weight", FONT_WEIGHTS), select("style:text-align", "Align", TEXT_ALIGN)),
+    el("div", { class: "pair" }, input("style:line-height", "Line height"), input("style:letter-spacing", "Letter spacing")));
+}
+
+// Values that are numbers without a unit: a bare number stays one (1.5 is a line height, not 1.5px).
+const UNITLESS = new Set(["background", "color", "line-height", "font-weight", "opacity", "z-index", "flex-grow", "flex-shrink", "order"]);
+
 function onInspectorChange(event) {
   const input = event.target;
   const nodeId = $("inspector").dataset.nodeId;
@@ -2671,9 +2845,21 @@ function onInspectorChange(event) {
     else attributes.class = names;
     commit([{ type: "set-props", nodeId, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) }], names === "" ? "Remove classes" : "Change classes");
   }
+  else if (input.name === "layout:mode") {
+    // Placing them freely keeps each child where the row or column put it.
+    const measured = input.value === "free" ? canvas.measure(state.document.nodes[nodeId]?.children ?? []) : {};
+    commit(setLayout(state.document, nodeId, input.value, measured), input.value === "free" ? "Place children freely" : input.value === "row" ? "Auto layout in a row" : "Auto layout in a column");
+  }
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);
-    const normalized = /^-?\d+(\.\d+)?$/u.test(value) && property !== "background" && property !== "color" ? `${value}px` : value;
+    const normalized = /^-?\d+(\.\d+)?$/u.test(value) && !UNITLESS.has(property) ? `${value}px` : value;
+    // A value the canvas would not draw is said, not stored (an unclosed quote, a semicolon).
+    const problem = normalized === "" ? null : styleDeclarationProblem(property, normalized);
+    if (problem !== null) {
+      setStatus(`Not changed: ${problem}.`);
+      input.value = input.dataset.original = typeof state.document.nodes[nodeId]?.props?.style?.[property] === "string" ? state.document.nodes[nodeId].props.style[property] : "";
+      return;
+    }
     commit(setStyle(state.document, nodeId, { [property]: normalized === "" ? null : normalized }), "Change style");
   }
 }
@@ -2717,6 +2903,7 @@ function renderToolbar() {
   undoAgent.title = named ?? "";
   $("action-insert-box").disabled = !open;
   $("action-insert-text").disabled = !open;
+  renderPages();
   $("action-delete").disabled = !open || state.selection.length === 0;
   $("action-group").disabled = !open || state.selection.length === 0;
   $("action-save").disabled = !open;
@@ -2765,8 +2952,24 @@ function isTextInput(target) {
   return target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable);
 }
 
+// Alt+A, D, W, S, H, V align the selection; with Shift, H and V space it evenly. By the key's
+// place, as Option+letter types another character on a Mac.
+const ALIGN_KEYS = { KeyA: "left", KeyD: "right", KeyW: "top", KeyS: "bottom", KeyH: "center", KeyV: "middle" };
+
 function onGlobalKey(event) {
   if ($("dialog").open) return;
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.repeat && !isTextInput(event.target) && state.selection.length >= 2) {
+    if (event.shiftKey && (event.code === "KeyH" || event.code === "KeyV")) {
+      event.preventDefault();
+      if (canvas.distribute(event.code === "KeyH" ? "horizontal" : "vertical") === 0) setStatus("Select three layers or more that are shown to space them evenly.");
+      return;
+    }
+    if (!event.shiftKey && Object.hasOwn(ALIGN_KEYS, event.code)) {
+      event.preventDefault();
+      if (canvas.align(ALIGN_KEYS[event.code]) === 0) setStatus("Select two layers or more that are shown to align them.");
+      return;
+    }
+  }
   const mod = event.ctrlKey || event.metaKey;
   if (!mod || isTextInput(event.target)) return;
   const key = event.key.toLowerCase();
@@ -2823,6 +3026,10 @@ async function main() {
   $("action-redo").addEventListener("click", () => undoRedo("redo"));
   $("action-undo-agent").addEventListener("click", () => undoAgentChange());
   $("action-insert-box").addEventListener("click", () => insert("box"));
+  $("action-add-page").addEventListener("click", addPage);
+  $("page-select").addEventListener("change", (event) => showPage(event.target.value));
+  // Choosing the page already chosen changes nothing; Show fits the canvas to it again.
+  $("action-show-page").addEventListener("click", () => showPage($("page-select").value));
   $("action-insert-text").addEventListener("click", () => insert("text"));
   $("action-delete").addEventListener("click", deleteSelection);
   $("action-zoom-in").addEventListener("click", () => { canvas.zoomBy(1.25); renderToolbar(); });
