@@ -2772,6 +2772,9 @@ function renderInspector() {
   }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
+  // Its writing direction (the dir attribute), for right-to-left text such as Arabic or Hebrew.
+  // An instance draws its component's attributes, so its direction is set on the component.
+  if (!isCodePart(node) && node.type !== "component-instance") children.push(directionField(node.props?.attributes?.dir));
   // How a positioned layer keeps its place when its parent changes size.
   if (constraintOf(style, "x") !== null) children.push(constraintsSection(style));
   // Auto layout (CSS flex) for a layer that holds others: its children in a row or a column,
@@ -2803,6 +2806,17 @@ function renderInspector() {
     input?.focus();
     if (typing && typing.node === node.id && typing.start !== null) input?.setSelectionRange(typing.start, typing.end);
   }
+}
+
+// The inspector's text direction: from its parent (no dir), set, or from its own text (auto).
+const DIRECTIONS = [["", "From its parent"], ["ltr", "Left to right"], ["rtl", "Right to left"], ["auto", "From its text"]];
+function directionField(value) {
+  const current = typeof value === "string" ? value : "";
+  // A value the list does not name stays shown, as it is, so it is not silently replaced.
+  const options = DIRECTIONS.some(([option]) => option === current) ? DIRECTIONS : [...DIRECTIONS, [current, current]];
+  const control = el("select", { id: "inspect-direction", name: "attribute:dir" }, ...options.map(([option, text]) => el("option", { value: option, selected: option === current }, text)));
+  control.dataset.original = current;
+  return el("label", { for: control.id }, "Text direction", control);
 }
 
 // The inspector's constraints: which of its parent's edges a positioned layer keeps its distance
@@ -2904,6 +2918,12 @@ function onInspectorChange(event) {
     if (names === "") delete attributes.class;
     else attributes.class = names;
     commit([{ type: "set-props", nodeId, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) }], names === "" ? "Remove classes" : "Change classes");
+  }
+  else if (input.name === "attribute:dir") {
+    const attributes = { ...(state.document.nodes[nodeId].props?.attributes ?? {}) };
+    if (value === "") delete attributes.dir;
+    else attributes.dir = value;
+    commit([{ type: "set-props", nodeId, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) }], value === "" ? "Text direction from its parent" : "Set text direction");
   }
   else if (input.name === "constraint:x" || input.name === "constraint:y") {
     const axis = input.name.slice(-1);
