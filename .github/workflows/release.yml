@@ -16,6 +16,9 @@ on:
       - .github/workflows/release.yml
       - .github/workflows/desktop.yml
       - scripts/release-bundle.mjs
+      - scripts/check-release-tag.mjs
+      - package.json
+      - package-lock.json
       - scripts/package-desktop.mjs
       - scripts/fetch-electron.mjs
       - scripts/desktop/electron.mjs
