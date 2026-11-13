@@ -2,6 +2,9 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
+**Founder update, 2026-11-14:** The target for the **first public release** is now **v0.1.0** (superseding v1.0.0), and all Desktop/UI implementation and visual/user-facing acceptance are reserved to the founder. Engineering owns the remaining non-UI core, CI, testing infrastructure, security, release provenance, docs and safe packaging qualification, without altering the Desktop/UI surface. This is a division of labor, not a waiver of P10, accessibility, clean-install, third-party-source or human-approval gates. See `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`. Historical references below to `1.0` are the prior plan and must not be mistaken for the next tag.
+
+
 Last updated: 2026-11-13. Canonical main: `338e463`.
 
 ## Completed since P09 (with evidence)
@@ -117,6 +120,14 @@ Decided and closed: #349 (#456), breakpoints (ADR-0008, after 1.0), PDF, network
 | `9aa1248` (Astryx A to E plus C combined) | `npm run check`, Windows | 1,310 tests: 1,299 pass, 0 fail, 11 skipped |
 | `f8a4b03` (#415) | CI: Foundation on three platforms, Desktop on three platforms, Open Code Review | all pass |
 | `2bff107` (#417) | CI: the same seven checks | all pass |
+
+## Release ownership for v0.1.0 (2026-11-14)
+
+| Owner | Remaining work | Release acceptance |
+| --- | --- | --- |
+| Engineering (not Desktop/UI) | Non-UI correctness and security fixes, offline/egress and regression gates, provenance and SBOM validation, three-platform CI and release-artifact reproducibility, exact-head evidence | Automated evidence must pass on the final candidate; no source, UI, or security gate can be guessed or bypassed |
+| Founder (Desktop/UI) | Desktop product UX and UI changes; clean-machine installation; actual NVDA/JAWS/VoiceOver session; visual and interaction acceptance | Human evidence is recorded with the exact candidate; automated tests do not substitute for screen-reader testing |
+| Founder (legal and release) | Adopt lawful corresponding-source distribution method and valid contact details; ratify final candidate; approve tag and publishing | The written offer draft (#457) is **not** yet a legal commitment; no `v0.1.0` tag or public release until explicit final authorization |
 
 ## Next engineering actions
 
