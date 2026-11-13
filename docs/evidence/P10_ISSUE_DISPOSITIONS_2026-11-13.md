@@ -2,7 +2,7 @@
 
 P10 criterion 6 asks that no critical correctness, data-loss, security or release-blocking issue remains open, and that every other open issue is resolved or carries a recorded disposition. This record gives each issue open on 2026-11-13 its state, as checked against the code and tests on `main` that day, and its disposition. It is the input to P10-6, not its pass: P10-6 is judged on the exact candidate.
 
-**No open issue is critical.** None is a correctness, data-loss or security failure in shipped behaviour, and none blocks a release on its own. The nearest is #349, a hardening of an already fail-closed write, and it waits for the founder.
+**No open issue is critical.** None is a correctness, data-loss or security failure in shipped behaviour, and none blocks a release on its own. The nearest was #349, a hardening of an already fail-closed write; the founder decided it, and it is fixed (#456).
 
 ## Resolved by pull requests in review
 
@@ -10,12 +10,12 @@ P10 criterion 6 asks that no critical correctness, data-loss, security or releas
 | --- | --- | --- |
 | #94 Import-stack hardening follow-ups | Four of its five items were already in place, with tests: `fetchPinnedHttp` is off the public surface, inherited request fields are refused, refusal tests carry matchers, and the test helper was rewritten. The fifth, resolved addresses named in failure reasons, is fixed in #449. | Closes with #449. |
 | #351 Soak test: one slow window fails the drift check | Fixed in #448: the check reads the smaller of the last two windows, tested on #351's own numbers. | Closes with #448. |
+| #349 Windows trusted write: rename through the handle | The founder chose option (a) on 2026-11-13: the replacement is renamed over the target through the handle that wrote it, before it closes. | Closed with #456. |
 
 ## Waiting for the founder
 
 | Issue | State | Disposition |
 | --- | --- | --- |
-| #349 Windows trusted write: rename through the handle | The write already fails closed: a swapped file is refused on the next trusted read. Either fix changes an established security boundary: one adds `SetFileInformationByHandle` to the pinned kernel32 list, the other refuses a projects folder that is not private. | Founder decision; listed as a blocker in the completion ledger. |
 | #405 Integrate the UI ecosystems as editable components | The Astryx source is complete on main (#415, #420, #429, #435). Registry fetching needs host network access, live previews need a React preview runner, and Aceternity UI and 21st.dev need their publishers' permission. | Open: each remaining part is a founder decision or a third party's. |
 | #364 Headless local agent access | A proposal pending its review (its own text says so). The studio host already serves MCP on loopback with the desktop window open. | Post-1.0 proposal unless the founder places it in P10. |
 | #366 Research UI and local MCP for reference packs | The local reference path M01 to M05 is merged; its packaged and offline gates have not been run (`docs/CURRENT.md`). | Founder places it: before the candidate, or after 1.0. |
