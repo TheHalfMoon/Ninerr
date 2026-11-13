@@ -578,6 +578,16 @@ function hasShorthandIn(name, present) {
 }
 
 /**
+ * The names in `style` that a shorthand also in it covers (padding-top beside padding), which the
+ * canvas applies after that shorthand so that they win.
+ */
+export function longhandsCoveredIn(style) {
+  const names = Object.keys(style);
+  const present = new Map(names.map((name, index) => [name, index]));
+  return names.filter((name) => hasShorthandIn(name, present));
+}
+
+/**
  * `style` with each longhand moved to just after its last shorthand. Shorthands keep their
  * order among themselves (so of two overlapping ones the later still wins what they share),
  * and every other entry keeps its place.

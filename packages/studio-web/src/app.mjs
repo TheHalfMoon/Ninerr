@@ -1388,7 +1388,27 @@ async function openCodeDialog() {
             output.select();
             setStatus("The HTML page is in the code box: select it and copy it.");
           }
-        } }, "Copy as an HTML page")),
+        } }, "Copy as an HTML page"),
+        // The same JSX with its styles as Tailwind classes: each one says exactly what the style did.
+        el("button", { type: "button", id: "code-export-tailwind", onclick: async () => {
+          let styled;
+          try {
+            styled = await state.client.post("/api/code/export-tailwind", { nodeId: selected });
+          } catch (failure) {
+            if (handleSessionEnded(failure)) return;
+            error.textContent = describeError(failure);
+            return;
+          }
+          const kept = styled.keptAsStyle > 0 ? `; ${styled.keptAsStyle} declaration${styled.keptAsStyle === 1 ? "" : "s"} no class can carry kept as style` : "";
+          try {
+            await navigator.clipboard.writeText(styled.code);
+            setStatus(`Tailwind code copied: ${styled.classes} class${styled.classes === 1 ? "" : "es"}${kept}.`);
+          } catch {
+            output.value = styled.code;
+            output.select();
+            setStatus(`The Tailwind code is in the code box: select it and copy it${kept}.`);
+          }
+        } }, "Copy with Tailwind classes")),
         // The stylesheet that applies to it (#283), which the canvas applies to its frame alone.
         ...(typeof exported.stylesheet === "string" ? [(() => {
           const sheet = el("textarea", { id: "code-export-css", rows: 6, readonly: true, spellcheck: "false" });

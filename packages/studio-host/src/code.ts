@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, type DesignDoc, type DesignDocNode, designToMarkup } from "@ninerr/code-ir";
-import { DRAWN_ID, planElement, withInstancesExpanded } from "@ninerr/renderer";
+import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, styleToTailwind, type DesignDoc, type DesignDocNode, designToMarkup } from "@ninerr/code-ir";
+import { DRAWN_ID, longhandsCoveredIn, planElement, withInstancesExpanded } from "@ninerr/renderer";
 import { compileTokens, designSystemOf, isCodePart, modeAttribute, styleValuesOf, tokenReferences } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
 import { importedStyle, styleOutOfWrittenOrder, styleProperties } from "./imports.ts";
@@ -267,6 +267,41 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   const { design, ...exported } = exportDesign(document, nodeId);
   try {
     return { ...exported, code: designToCode(design) };
+  } catch (error) {
+    throw refused(error);
+  }
+}
+
+/**
+ * A layer as JSX styled with Tailwind classes: each layer's style becomes classes that set exactly
+ * what it says (code-ir's styleToTailwind), added to its className. A declaration no class can
+ * carry stays in its style object, and so does a longhand beside its shorthand (padding-top with
+ * padding): which of two classes wins is set by Tailwind's stylesheet, not by their order, while
+ * an inline style always wins over a class, as the longhand does on the canvas. The page's
+ * stylesheet and the design tokens are CSS, as for the JSX export.
+ */
+export function exportTailwind(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; classes: number; keptAsStyle: number; stylesheet: string | null; tokens: string | null } {
+  const { design, ...exported } = exportDesign(document, nodeId);
+  let classes = 0;
+  let keptAsStyle = 0;
+  const visit = (node: DesignDocNode) => {
+    if (node.style !== undefined) {
+      const covered = new Set(longhandsCoveredIn(node.style));
+      const converted = styleToTailwind(Object.fromEntries(Object.entries(node.style).filter(([name]) => !covered.has(name))));
+      for (const name of covered) converted.left[name] = node.style[name];
+      classes += converted.classes.length;
+      keptAsStyle += Object.keys(converted.left).length;
+      const own = typeof node.props.className === "string" ? node.props.className : "";
+      const className = [own, ...converted.classes].filter((part) => part !== "").join(" ");
+      if (className !== "") node.props = { ...node.props, className };
+      if (Object.keys(converted.left).length > 0) node.style = converted.left;
+      else delete node.style;
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(design.root);
+  try {
+    return { ...exported, code: designToCode(design), classes, keptAsStyle };
   } catch (error) {
     throw refused(error);
   }
