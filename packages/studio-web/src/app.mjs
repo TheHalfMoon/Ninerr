@@ -2559,6 +2559,8 @@ function renderInspector() {
   }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
+  // How its words look: the font, its weight, line height, letter spacing and alignment.
+  if (node.type === "text" || textId !== null) children.push(textSection(doc, style));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.
   const step = (label, text, action) => el("button", { type: "button", "aria-label": label, onclick: action }, text);
   children.push(el("div", { class: "steps", role: "group", "aria-label": "Move and resize by 10 pixels" },
@@ -2585,6 +2587,40 @@ function renderInspector() {
   }
 }
 
+// The inspector's text section. A font is a family name, a stack, or a font token as var(--name).
+const FONT_STACKS = ["system-ui, sans-serif", "Georgia, serif", "ui-monospace, monospace", "Helvetica, Arial, sans-serif", "\"Times New Roman\", serif"];
+const FONT_WEIGHTS = [["", "Default"], ["100", "Thin"], ["200", "Extra light"], ["300", "Light"], ["400", "Regular"], ["500", "Medium"], ["600", "Semibold"], ["700", "Bold"], ["800", "Extra bold"], ["900", "Black"]];
+const TEXT_ALIGN = [["", "Default"], ["start", "Start"], ["center", "Centre"], ["end", "End"], ["justify", "Justify"]];
+function textSection(doc, style) {
+  const value = (name) => (typeof style[name] === "string" ? style[name] : "");
+  const input = (name, label, extra = {}) => {
+    const control = el("input", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name, value: value(name.slice(6)), autocomplete: "off", ...extra });
+    control.dataset.original = control.value;
+    return el("label", { for: control.id }, label, control);
+  };
+  const select = (name, label, choices) => {
+    const current = value(name.slice(6));
+    const known = choices.some(([option]) => option === current);
+    // A value the list does not name stays shown, as it is.
+    const options = known ? choices : [...choices, [current, current]];
+    const control = el("select", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name }, ...options.map(([option, text]) => el("option", { value: option, selected: option === current }, text)));
+    control.dataset.original = current;
+    return el("label", { for: control.id }, label, control);
+  };
+  // The project's font tokens first, then common stacks.
+  const system = doc === null ? null : designSystemOf(doc);
+  const fonts = [...(system?.props.tokens ?? []).filter((token) => token.type === "fontFamily").map((token) => `var(${token.name})`), ...FONT_STACKS];
+  const list = el("datalist", { id: "font-families" }, ...fonts.map((font) => el("option", { value: font })));
+  return el("fieldset", { id: "inspect-text-style", class: "layout" },
+    el("legend", {}, "Text"),
+    input("style:font-family", "Font", { list: "font-families", spellcheck: "false" }), list,
+    el("div", { class: "pair" }, select("style:font-weight", "Weight", FONT_WEIGHTS), select("style:text-align", "Align", TEXT_ALIGN)),
+    el("div", { class: "pair" }, input("style:line-height", "Line height"), input("style:letter-spacing", "Letter spacing")));
+}
+
+// Values that are numbers without a unit: a bare number stays one (1.5 is a line height, not 1.5px).
+const UNITLESS = new Set(["background", "color", "line-height", "font-weight", "opacity", "z-index", "flex-grow", "flex-shrink", "order"]);
+
 function onInspectorChange(event) {
   const input = event.target;
   const nodeId = $("inspector").dataset.nodeId;
@@ -2606,7 +2642,7 @@ function onInspectorChange(event) {
   }
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);
-    const normalized = /^-?\d+(\.\d+)?$/u.test(value) && property !== "background" && property !== "color" ? `${value}px` : value;
+    const normalized = /^-?\d+(\.\d+)?$/u.test(value) && !UNITLESS.has(property) ? `${value}px` : value;
     commit(setStyle(state.document, nodeId, { [property]: normalized === "" ? null : normalized }), "Change style");
   }
 }
