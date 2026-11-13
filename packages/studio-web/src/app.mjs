@@ -677,9 +677,76 @@ function openTokensDialog() {
     return [
       el("p", {}, "Layers use a token by holding var(--name) in a style value, for example color: var(--brand)."),
       error, body,
+      tokenCssSection(),
       el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close")),
     ];
   });
+}
+
+// Tokens from a CSS file the person chooses, such as Astryx's astryx.css or a theme's theme.css:
+// its :root custom properties, light and dark, reviewed first, then added as one change. Values
+// Ninerr has no token type for are listed and stay the library's own CSS.
+const TOKENS_LISTED = 500;
+function tokenCssSection() {
+  const section = el("section", { id: "token-css", "aria-labelledby": "token-css-title" }, el("h3", { id: "token-css-title" }, "Import tokens from a CSS file"));
+  if (state.client === null || state.project === null) {
+    section.append(el("p", {}, "Open a project to import tokens."));
+    return section;
+  }
+  const file = el("input", { id: "token-css-file", type: "file", accept: ".css,text/css" });
+  const review = el("button", { type: "button", id: "token-css-review" }, "Review tokens");
+  const error = el("p", { id: "token-css-error", role: "alert" });
+  const planView = el("div", { id: "token-css-plan" });
+  let chosen = null;
+  file.addEventListener("change", async () => {
+    const picked = file.files?.[0];
+    chosen = picked ? { fileName: picked.name, css: await picked.text() } : null;
+    planView.replaceChildren();
+    error.textContent = "";
+  });
+  review.addEventListener("click", async () => {
+    error.textContent = "";
+    planView.replaceChildren();
+    if (chosen === null) {
+      error.textContent = "Choose a CSS file first.";
+      return;
+    }
+    const request = chosen;
+    let plan;
+    try {
+      plan = await state.client.post("/api/tokens/css/plan", request);
+    } catch (failure) {
+      error.textContent = failure.message;
+      return;
+    }
+    const counts = {};
+    for (const token of plan.tokens) counts[token.status] = (counts[token.status] ?? 0) + 1;
+    const summary = ["new", "extended", "same", "conflict", "refused"].filter((status) => counts[status]).map((status) => `${counts[status]} ${status}`).join(", ");
+    const add = el("button", { type: "button", class: "primary", id: "token-css-apply", disabled: plan.adds === 0 || plan.problem !== null }, `Add ${plan.adds} token${plan.adds === 1 ? "" : "s"}`);
+    add.addEventListener("click", async () => {
+      add.disabled = true;
+      try {
+        const done = await state.client.post("/api/tokens/css/apply", { ...request, token: plan.token });
+        planView.replaceChildren(el("p", { id: "token-css-done" }, `Added ${done.added} token${done.added === 1 ? "" : "s"}. Undo takes them back.`));
+      } catch (failure) {
+        error.textContent = failure.message;
+        add.disabled = false;
+      }
+    });
+    planView.replaceChildren(
+      // Only the summary is announced; the lists are there to read.
+      el("p", { id: "token-css-summary", role: "status" }, `${plan.source === "astryx" ? "Astryx tokens" : "Tokens"} from ${plan.fileName ?? "the file"}: ${summary || "none"}.${plan.problem ? ` They cannot be added: ${plan.problem}` : ""}`),
+      el("ul", { id: "token-css-tokens" }, ...plan.tokens.slice(0, TOKENS_LISTED).map((token) => el("li", {}, `${token.name} (${token.type}): ${token.status}${token.reason ? ` — ${token.reason}` : ""}`))),
+      ...(plan.tokens.length > TOKENS_LISTED ? [el("p", { id: "token-css-more" }, `And ${plan.tokens.length - TOKENS_LISTED} more.`)] : []),
+      ...(plan.kept.length === 0 ? [] : [
+        el("h4", {}, "Kept as the library's CSS"),
+        el("ul", { id: "token-css-kept" }, ...plan.kept.map((entry) => el("li", {}, `${entry.name}: ${entry.reason}`))),
+      ]),
+      el("div", { class: "actions" }, add),
+    );
+  });
+  section.append(el("label", {}, "CSS file", file), el("div", { class: "actions" }, review), error, planView);
+  return section;
 }
 
 // ---------- components and instances (ADR-0005) ----------
