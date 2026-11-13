@@ -1,6 +1,5 @@
 {
-  "schema": "identity-census-summary/1",
-  "filesScanned": 794,
+  "schema": "identity-census-summary/2",
   "filesWithFindings": 171,
   "gatedFindings": 0,
   "byCategory": {
@@ -63,5 +62,5 @@
     "third-party-component-records": 2,
     "third-party-notices": 71
   },
-  "censusSha256": "386a0c8dd42a58068458b695b32a99e25d11440d005b5cd73582f1dcfd1f59f6"
+  "findingsSha256": "ef290fe7d39726d86acc1635964abb172f0028d9df980ccdfb98b54dd9e4a97c"
 }
