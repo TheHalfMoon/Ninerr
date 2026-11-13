@@ -2,7 +2,7 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
-Last updated: 2026-11-13. Canonical main: `f1bacae`.
+Last updated: 2026-11-13. Canonical main: `c081b16`.
 
 ## Completed since P09 (with evidence)
 
@@ -52,6 +52,8 @@ Last updated: 2026-11-13. Canonical main: `f1bacae`.
 | Soak test: one slow window is not drift (#351, closed) | #448 | `b657d31` | seven exact-head checks pass |
 | Import refusals name no resolved address (#94, closed) | #449 | `f1bacae` | seven exact-head checks pass |
 | P10-6: a recorded disposition for every open issue | #450 | `182d696` | `docs/evidence/P10_ISSUE_DISPOSITIONS_2026-11-13.md` |
+| Token drift: the design system against a stylesheet in the connected codebase (#79's drift requirement) | #452 | `87d434c` | seven exact-head checks pass |
+| P10 dogfooding on main `0723851`: seven projects, no failed check | #453 | `c081b16` | `docs/evidence/P10_DOGFOODING_2026-11-13.md` |
 
 Each row's PR has its full check results, its fresh-context review findings and fixes, and its mutation results.
 
@@ -65,11 +67,11 @@ Nothing is in review.
 
 | ID | What remains |
 | --- | --- |
-| P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 scale workloads are merged (#426). |
+| P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 scale workloads are merged (#426). | The seven-project dogfooding passed on main `0723851` (`docs/evidence/P10_DOGFOODING_2026-11-13.md`) as evidence; the candidate needs its own run.
 | P10-2 | Desktop packages smoke-tested and journeyed on each platform for the candidate. No clean-machine install has been done. |
 | P10-3 | Artifacts bound to the candidate. The Electron LGPL corresponding source is checked but not carried alongside the artifacts (route to be confirmed: see Blockers). |
 | P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is open. |
-| P10-5 | Parity dispositions. For #79 (tokens), drift detection remains. #78 (component states bound to code) is not built. |
+| P10-5 | Parity dispositions. #79: token drift detection is built (#452); token tiers beyond collections, modes and aliases, and Tailwind config as a drift source, need a disposition. #78 (states bound to source, in the P05 design-components library no product surface uses) needs a disposition. Both are the founder's. |
 | P10-6 | Every open issue has a recorded disposition (`docs/evidence/P10_ISSUE_DISPOSITIONS_2026-11-13.md`); none is critical. #382, #94 and #351 are closed. Judged again on the exact candidate. |
 
 **Product scope** (founder directive, 2026-11-13):
