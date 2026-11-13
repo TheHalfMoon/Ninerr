@@ -2594,7 +2594,9 @@ const LAYOUT_JUSTIFY = [["", "Default"], ["flex-start", "Start"], ["center", "Ce
 function layoutSection(style) {
   const mode = style.display === "flex" || style.display === "inline-flex" ? (style["flex-direction"] === "column" || style["flex-direction"] === "column-reverse" ? "column" : "row") : "free";
   const select = (name, label, choices, value) => {
-    const control = el("select", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name }, ...choices.map(([option, text]) => el("option", { value: option, selected: option === value }, text)));
+    // A value the list does not name stays shown, as it is, so it is not silently replaced.
+    const options = choices.some(([option]) => option === value) ? choices : [...choices, [value, value]];
+    const control = el("select", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name }, ...options.map(([option, text]) => el("option", { value: option, selected: option === value }, text)));
     control.dataset.original = value;
     return el("label", { for: control.id }, label, control);
   };
@@ -2613,7 +2615,7 @@ function layoutSection(style) {
         text("style:padding", "Padding", typeof style.padding === "string" ? style.padding : "")),
       select("style:align-items", mode === "row" ? "Align vertically" : "Align horizontally", LAYOUT_ALIGN, typeof style["align-items"] === "string" ? style["align-items"] : ""),
       select("style:justify-content", "Distribute", LAYOUT_JUSTIFY, typeof style["justify-content"] === "string" ? style["justify-content"] : ""),
-      select("style:flex-wrap", "Wrap", [["", "No"], ["wrap", "Yes"]], style["flex-wrap"] === "wrap" ? "wrap" : ""),
+      select("style:flex-wrap", "Wrap", [["", "No"], ["wrap", "Yes"]], typeof style["flex-wrap"] === "string" && style["flex-wrap"] !== "nowrap" ? style["flex-wrap"] : ""),
     ] : []));
 }
 
@@ -2636,7 +2638,11 @@ function onInspectorChange(event) {
     else attributes.class = names;
     commit([{ type: "set-props", nodeId, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) }], names === "" ? "Remove classes" : "Change classes");
   }
-  else if (input.name === "layout:mode") commit(setLayout(state.document, nodeId, input.value), input.value === "free" ? "Place children freely" : input.value === "row" ? "Auto layout in a row" : "Auto layout in a column");
+  else if (input.name === "layout:mode") {
+    // Placing them freely keeps each child where the row or column put it.
+    const measured = input.value === "free" ? canvas.measure(state.document.nodes[nodeId]?.children ?? []) : {};
+    commit(setLayout(state.document, nodeId, input.value, measured), input.value === "free" ? "Place children freely" : input.value === "row" ? "Auto layout in a row" : "Auto layout in a column");
+  }
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);
     const normalized = /^-?\d+(\.\d+)?$/u.test(value) && property !== "background" && property !== "color" ? `${value}px` : value;

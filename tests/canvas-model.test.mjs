@@ -101,6 +101,12 @@ test("auto layout on: a flex row or column, its free children joining the flow; 
   const column = applyTransaction(d, { id: "t", actor: "u", operations: setLayout(d, "board", "column") }).document;
   assert.equal(column.nodes.board.props.style["flex-direction"], "column");
   assert.deepEqual(setLayout(column, "board", "free"), [{ type: "set-props", nodeId: "board", set: { style: { position: "relative", width: "300px" } } }]);
+  // Off, each measured child is kept where the row put it.
+  const freed = setLayout(column, "board", "free", { a: { left: 0, top: 0, width: 40 }, b: { left: 0, top: 30, width: 50 } });
+  assert.deepEqual(freed.slice(1).map((operation) => [operation.nodeId, operation.set.style.position, operation.set.style.left, operation.set.style.top]), [["a", "absolute", "0px", "0px"], ["b", "absolute", "0px", "30px"]]);
+  // A reversed or inline flex keeps that when the direction changes.
+  const reversed = createDocument({ id: "r", nodes: [{ id: "x", type: "frame", children: [], props: { style: { display: "inline-flex", "flex-direction": "row-reverse" } } }] });
+  assert.deepEqual(setLayout(reversed, "x", "column")[0].set.style, { display: "inline-flex", "flex-direction": "column-reverse" });
   assert.deepEqual(setLayout(d, "missing", "row"), []);
   assert.throws(() => setLayout(d, "board", "grid"), /mode is one of free, row, column/u);
 });

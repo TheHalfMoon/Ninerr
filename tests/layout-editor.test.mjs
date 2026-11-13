@@ -66,8 +66,17 @@ test("place a layer's children in a row with a gap, padding and alignment, then 
     assert.deepEqual([style.display, style["flex-direction"], style.gap, style.padding, style["align-items"]], ["flex", "row", "10px", "8px", "center"]);
     assert.equal(after.nodes.a.props.style.position, undefined, "the children joined the row");
 
-    // Four Undos: back to the free layout, each child where it was.
-    for (let revision = 6; revision <= 9; revision += 1) {
+    // Placing them freely again keeps each where the row put it.
+    await page.locator("#inspect-layout-mode").selectOption("free");
+    await waitRevision(page, 6);
+    const kept = await boxes();
+    assert.deepEqual([kept.a.left - kept.board.left, kept.b.left - kept.board.left, kept.c.left - kept.board.left, kept.a.top - kept.board.top], [8, 58, 128, 98], "nothing moves");
+    const { document: freed } = await ok(call("GET", "/api/document"), "document");
+    assert.deepEqual([freed.nodes.a.props.style.position, freed.nodes.board.props.style.display], ["absolute", undefined]);
+    await page.locator("#action-undo").click();
+    await waitRevision(page, 7);
+    // Four more Undos: back to the free layout as it was first, each child where it was.
+    for (let revision = 8; revision <= 11; revision += 1) {
       await page.locator("#action-undo").click();
       await waitRevision(page, revision);
     }
