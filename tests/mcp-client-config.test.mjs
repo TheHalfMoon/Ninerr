@@ -29,9 +29,25 @@ test("OpenCode V2 template is valid local MCP JSON with env expansion", () => {
   assert.equal(config.mcp.servers.ninerr.environment.NINERR_MCP_TOKEN, "{env:NINERR_MCP_TOKEN}");
 });
 
+test("Cursor template is stdio and forwards token through environment substitution", () => {
+  const entry = JSON.parse(read("docs/examples/mcp-clients/cursor.mcp.template.json")).mcpServers.ninerr;
+  assert.equal(entry.type, "stdio");
+  assert.equal(entry.command, "node");
+  assert.match(entry.args[0], /scripts\\/ninerr-mcp\\.mjs$/);
+  assert.equal(entry.env.NINERR_MCP_TOKEN, "${env:NINERR_MCP_TOKEN}");
+});
+
+test("Gemini template is stdio and keeps client confirmations enabled", () => {
+  const entry = JSON.parse(read("docs/examples/mcp-clients/gemini.settings.template.json")).mcpServers.ninerr;
+  assert.equal(entry.command, "node");
+  assert.match(entry.args[0], /scripts\\/ninerr-mcp\\.mjs$/);
+  assert.equal(entry.env.NINERR_MCP_TOKEN, "${NINERR_MCP_TOKEN}");
+  assert.equal(entry.trust, false);
+});
+
 test("client guide requires a live agent connection, not merely a configured command", () => {
   const guide = read("docs/MCP_CLIENTS.md");
-  for (const name of ["Codex", "Claude Code", "OpenCode", "guide", "project_info", "layer_tree", "dry-run", "delete_layers", "NINERR_MCP_TOKEN"]) {
+  for (const name of ["Codex", "Claude Code", "OpenCode", "Cursor", "Gemini CLI", "guide", "project_info", "layer_tree", "dry-run", "delete_layers", "NINERR_MCP_TOKEN"]) {
     assert.ok(guide.includes(name), `missing MCP acceptance topic: ${name}`);
   }
   assert.match(guide, /not proof|not the same/i);
