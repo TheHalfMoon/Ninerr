@@ -242,7 +242,7 @@ const TOOLS: Tool[] = [
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
         "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
         "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
-        "Every tool that changes the document takes dryRun: true, which checks the change and says what it would touch (wouldChange) without making it or asking the person anything, and baseRevision, the revision you read (project_info gives it): a change to a document that has moved on since is refused, so read it again.",
+        "Every tool that changes the document takes dryRun: true, which checks the change and says what it would touch (wouldChange) without making it or asking the person anything (a created layer's id there is not the one a real call makes), and baseRevision, the revision you read (project_info gives it): a change to a document that has moved on since is refused, so read it again.",
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
@@ -861,8 +861,10 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
   const given = params?.arguments === undefined ? {} : params.arguments;
   // dryRun and baseRevision belong to the call, not to the tool: taken off before it runs.
   const changes = typeof toolName === "string" && (classifyTool(toolName) === "write" || classifyTool(toolName) === "consequential");
-  const { dryRun, baseRevision, ...rest } = changes && given !== null && typeof given === "object" && !Array.isArray(given) ? given : { dryRun: undefined, baseRevision: undefined, ...(given ?? {}) };
-  const args = changes ? rest : given;
+  // Only from an object: anything else is left as it came, and refused as tool arguments.
+  const plain = changes && given !== null && typeof given === "object" && !Array.isArray(given);
+  const { dryRun, baseRevision, ...rest } = plain ? given : { dryRun: undefined, baseRevision: undefined };
+  const args = plain ? rest : given;
   if (dryRun !== undefined && typeof dryRun !== "boolean") return toolResult("dryRun is true or false", true);
   if (baseRevision !== undefined && (!Number.isSafeInteger(baseRevision) || baseRevision < 0)) return toolResult("baseRevision is a revision number", true);
   if (typeof toolName !== "string" || toolName === "") return toolResult("tools/call needs a tool name", true);
@@ -881,33 +883,34 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
   };
   const at = context.now();
   const call = { actor, toolName, arguments: args, at };
-  // A change based on an older revision is refused before anything else is asked.
-  if (baseRevision !== undefined && baseRevision !== session.revision) return toolResult(`The document has changed: your change is based on revision ${baseRevision}, and it is at ${session.revision}. Read it again first.`, true);
+  // A change based on a revision the document has moved on from is refused: after the caller is
+  // authorized (so a refused caller learns nothing), before the person is asked anything; and
+  // the change itself is made at that revision, so one made while the person was asked is too.
+  const stale = (): string | null => (baseRevision !== undefined && baseRevision !== session.revision ? `The document has changed: your change is based on revision ${baseRevision}, and it is at ${session.revision}. Read it again first.` : null);
   // Authorize before anything else, including before a consequential call asks the person.
   try {
     requireMCPToolCall(session.accessPolicy(), call);
   } catch (error) {
     if (!(error instanceof MCPAuthorizationError) || error.decision.outcome !== "confirmation-required") return refusal(error);
-    // A dry run changes nothing, so the person is not asked; it is still authorized as a write.
-    if (dryRun === true) {
+    // Reaching here, the caller may change the document. A dry run changes nothing, so the
+    // person is not asked to confirm it.
+    if (dryRun !== true) {
+      // Before the person is asked to confirm anything.
+      const unread = notRead();
+      if (unread !== null) return toolResult(unread, true);
+      const before = stale();
+      if (before !== null) return toolResult(before, true);
+      const confirmation = await confirm(context, session, actor, toolName, args, at);
+      if (typeof confirmation === "string") return toolResult(confirmation, true);
       try {
-        requireMCPToolCall(session.accessPolicy(), { ...call, toolName: "create_frame" });
+        requireMCPToolCall(session.accessPolicy(), { ...call, at: context.now(), confirmation });
       } catch (again) {
         return refusal(again);
       }
-    } else {
-    // Before the person is asked to confirm anything.
-    const unread = notRead();
-    if (unread !== null) return toolResult(unread, true);
-    const confirmation = await confirm(context, session, actor, toolName, args, at);
-    if (typeof confirmation === "string") return toolResult(confirmation, true);
-    try {
-      requireMCPToolCall(session.accessPolicy(), { ...call, at: context.now(), confirmation });
-    } catch (again) {
-      return refusal(again);
-    }
     }
   }
+  const changed = stale();
+  if (changed !== null) return toolResult(changed, true);
   const unread = notRead();
   if (unread !== null) return toolResult(unread, true);
   const tool = TOOL_BY_NAME.get(toolName);
@@ -924,11 +927,11 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       edit: (operations, intent) => {
         if (operations.length === 0) throw new ToolError("nothing to change");
         if (dryRun === true) {
-          const preview = session.preview(actor, { baseRevision: session.revision, operations, intent, tool: toolName }, "mcp");
+          const preview = session.preview(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
           // Nothing is made: the result says so, and what the change would touch.
           throw new DryRun({ dryRun: true, wouldChange: preview.affectedNodeIds, operations: preview.operations, revision: preview.revision, intent });
         }
-        const event = session.edit(actor, { baseRevision: session.revision, operations, intent, tool: toolName }, "mcp");
+        const event = session.edit(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
         return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds };
       },
     }, args);
