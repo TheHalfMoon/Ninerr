@@ -355,22 +355,32 @@ const TOOLS: Tool[] = [
         if (update.attributes === null || typeof update.attributes !== "object" || Array.isArray(update.attributes)) throw new ToolError("each update needs an attributes object");
         if (node.type === "component-instance") throw new ToolError(`${node.id} is an instance, which draws its component's attributes: set them on the component, or use set_instance_override`);
         const attributes: Record<string, string> = { ...(node.props?.attributes && typeof node.props.attributes === "object" ? node.props.attributes : {}) };
+        // The element as the canvas draws it, without attributes: what it drops already (a tag it
+        // does not know) is not counted against an attribute.
+        const element = { type: node.type, props: node.props?.tag === undefined ? {} : { tag: node.props.tag } };
+        const baseline = planElement(element).dropped;
         for (const [raw, value] of Object.entries(update.attributes)) {
           const name = raw.toLowerCase();
           if (!/^[a-z][a-z0-9-]{0,63}$/u.test(name)) throw new ToolError(`${JSON.stringify(raw).slice(0, 80)} is not an attribute name`);
+          // Names match whatever their case (an SVG's viewBox is stored as written); the key already
+          // there keeps its spelling, so a change replaces it and null removes it.
+          const key = Object.keys(attributes).find((existing) => existing.toLowerCase() === name) ?? raw;
           if (value === null) {
-            delete attributes[name];
+            delete attributes[key];
             continue;
           }
           if (typeof value !== "string" || value.length > 2000) throw new ToolError(`the value for ${name} must be a string of at most 2000 characters, or null`);
           const written = name === "class" ? [...new Set(value.split(/[\t\n\f\r ]+/u).filter((part) => part !== ""))].join(" ") : value;
           if (name === "dir" && !["ltr", "rtl", "auto"].includes(written)) throw new ToolError("dir is \"ltr\", \"rtl\" or \"auto\"");
-          // The canvas's own rule for this element (planElement): what it would not draw is refused.
-          if (planElement({ type: node.type, props: { ...(node.props?.tag === undefined ? {} : { tag: node.props.tag }), attributes: { [name]: written } } }).dropped > 0) {
+          // The canvas's own rule for this element (planElement): what it would not draw is refused,
+          // and what it draws is stored as it draws it (a link trimmed, an input type lowercased).
+          const plan = planElement({ ...element, props: { ...element.props, attributes: { [key]: written } } });
+          if (plan.dropped > baseline) {
             throw new ToolError(`${name}${name === "href" || name === "src" ? `="${written.slice(0, 60)}"` : ""} is not an attribute the canvas draws on this ${typeof node.props?.tag === "string" ? `<${node.props.tag}>` : node.type}`);
           }
-          if (written === "" && name === "class") delete attributes.class;
-          else attributes[name] = written;
+          const drawn = Object.values(plan.attributes as Record<string, string>)[0] ?? written;
+          delete attributes[key];
+          if (!(drawn === "" && name === "class")) attributes[key] = drawn;
         }
         return { type: "set-props", nodeId: node.id, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) };
       });

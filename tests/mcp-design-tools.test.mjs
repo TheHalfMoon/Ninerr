@@ -240,7 +240,7 @@ test("an agent adds a slot and fills an instance's slot with a component, never 
 });
 
 test("an agent sets a layer's classes, text direction and aria attributes, and is refused what the canvas would not draw", async () => {
-  await withAgent(async ({ host, tool, ok }) => {
+  await withAgent(async ({ host, owner, tool, ok }) => {
     const { nodeId: frame } = await ok("create_frame", { name: "Card", width: 200, height: 100 });
     const revision = host.session.document.revision;
     await ok("set_attributes", { updates: [{ nodeId: frame, attributes: { class: "  card  card wide ", dir: "rtl", lang: "ar", "aria-label": "بطاقة" } }] });
@@ -264,5 +264,19 @@ test("an agent sets a layer's classes, text direction and aria attributes, and i
     const { componentId } = await ok("create_component", { nodeId: frame, name: "Card" });
     const { instanceId } = await ok("insert_instance", { componentId, afterId: componentId });
     assert.match(refusal(await tool("set_attributes", { updates: [{ nodeId: instanceId, attributes: { dir: "rtl" } }] })), /is an instance, which draws its component's attributes/u);
+    // Names match whatever their case, keeping the spelling stored (an SVG's viewBox); a value is
+    // stored as the canvas draws it (a link trimmed, an input type lowercased).
+    const base = host.session.document.revision;
+    await owner("POST", "/api/edit", { baseRevision: base, intent: "Add an icon, a link and a field", operations: [
+      { type: "insert-node", parentId: null, index: host.session.document.rootIds.length, node: { id: "icon", type: "vector", props: { tag: "svg", attributes: { viewBox: "0 0 10 10" } } } },
+      { type: "insert-node", parentId: null, index: host.session.document.rootIds.length + 1, node: { id: "go", type: "element", props: { tag: "a", text: "Go" } } },
+      { type: "insert-node", parentId: null, index: host.session.document.rootIds.length + 2, node: { id: "field", type: "element", props: { tag: "input" } } },
+    ] });
+    await ok("set_attributes", { updates: [{ nodeId: "icon", attributes: { viewbox: "0 0 24 24" } }, { nodeId: "go", attributes: { href: "  https://example.com/a  " } }, { nodeId: "field", attributes: { type: "EMAIL" } }] });
+    assert.deepEqual(host.session.document.nodes.icon.props.attributes, { viewBox: "0 0 24 24" });
+    assert.deepEqual([host.session.document.nodes.go.props.attributes, host.session.document.nodes.field.props.attributes], [{ href: "https://example.com/a" }, { type: "email" }]);
+    await ok("set_attributes", { updates: [{ nodeId: "icon", attributes: { VIEWBOX: null } }] });
+    assert.equal(host.session.document.nodes.icon.props.attributes, undefined);
+    assert.match(refusal(await tool("set_attributes", { updates: [{ nodeId: "go", attributes: { "data-ninerr-id": "x" } }] })), /data-ninerr-id is not an attribute the canvas draws/u);
   });
 });
