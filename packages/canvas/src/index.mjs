@@ -684,6 +684,15 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       viewport = zoomAt(viewport, { x: stage.clientWidth / 2, y: stage.clientHeight / 2 }, factor);
       applyViewport();
     },
+    /** Fit the view to one layer, such as a page: its box on the canvas, with a margin. */
+    showLayer(id) {
+      const element = renderer.elementFor(id);
+      if (!element) return false;
+      const box = element.getBoundingClientRect();
+      viewport = fitBounds({ x: box.left, y: box.top, width: Math.max(1, box.width), height: Math.max(1, box.height) }, stage.clientWidth, stage.clientHeight);
+      applyViewport();
+      return true;
+    },
     fit() {
       const root = frameDocument.querySelector("[data-ninerr-root]");
       viewport = fitBounds({ x: 0, y: 0, width: Math.max(1, root.scrollWidth), height: Math.max(1, frameDocument.documentElement.scrollHeight) }, stage.clientWidth, stage.clientHeight);
