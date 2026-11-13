@@ -54,6 +54,17 @@ A release's archives are in its GitHub Release, each with a Sigstore attestation
   - Chromium's sandbox, which Ninerr never turns off, needs unprivileged user namespaces.
   - Most distributions allow them. Ubuntu 24.04 and later restrict them through AppArmor. There, either give the app an AppArmor profile that allows `userns`, or make `chrome-sandbox` in the package owned by root and setuid (`sudo chown root chrome-sandbox && sudo chmod 4755 chrome-sandbox`).
 
+## Upgrading and uninstalling
+
+A package is a folder (on macOS, `Ninerr.app`) that holds everything it runs. Installing writes nothing anywhere else, and running Ninerr writes outside that folder only in the two places below.
+
+- **Your projects** are in the projects folder: "Ninerr Projects" in your home folder, or `NINERR_PROJECTS`. They belong to you, not to a package, and no upgrade or uninstall touches them.
+- **Electron's own data** (the window's browser caches and settings; no project) is in Electron's usual place for an app named Ninerr: `%APPDATA%\Ninerr` on Windows, `~/Library/Application Support/Ninerr` on macOS, and `~/.config/Ninerr` on Linux.
+
+To upgrade, quit Ninerr, then replace the folder (or `Ninerr.app`) with the new release's, checked as `docs/RELEASE.md` says. Projects open in the new version. A project from before the rename is copied into the Ninerr format the first time it is opened, with the original left unchanged; a project in an older schema is migrated when the new version opens it, and an older Ninerr refuses a schema newer than its own (`docs/MIGRATION.md`). So going back to the old version can open only the projects the new one has not opened: copy the projects folder first if you may want to go back.
+
+To uninstall, quit Ninerr and delete the folder (or `Ninerr.app`). Delete Electron's data folder above too, to leave nothing behind. Your projects folder stays until you delete it yourself.
+
 ## How the window is protected
 
 The window is isolated and sandboxed, with no Node, and its preload gives the page only the fact that it is the desktop app.
