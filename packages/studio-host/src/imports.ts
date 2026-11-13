@@ -344,7 +344,8 @@ export function styleProperties(style: unknown): Record<string, string> {
       // width to a browser. Only a name that then reads as a property is kept, so decoding can add
       // a declaration a browser keeps but never an unsafe one. Values are not decoded.
       const written = unescapeName(declaration.slice(0, at).trim());
-      const property = written.toLowerCase();
+      // CSS matches names ignoring ASCII case only: a Kelvin sign is not a k.
+      const property = written.replace(/[A-Z]/gu, (letter) => letter.toLowerCase());
       const text = declaration.slice(at + 1).trim();
       // Custom properties (--brand) keep their case; other names are lowercased.
       const name = written.startsWith("--") ? written : property;

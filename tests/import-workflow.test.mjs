@@ -48,6 +48,7 @@ test("inline styles become style properties", () => {
   assert.deepEqual(styleProperties({ cssText: "\\width: 3px; c\\6flor: red; to\\70 : 1px; --a\\_b: 1; \\0 x: 2; w\\:x: 3; c\\6F LOR: blue" }), { width: "3px", top: "1px", "--a_b": "1", color: "blue" });
   assert.deepEqual(styleProperties({ cssText: "content: '\\2014'" }), { content: "'\\2014'" }, "a value keeps its escapes");
   assert.deepEqual(styleProperties({ cssText: "\\110000 x: 1; \\d800 y: 2; top: 4px" }), { top: "4px" }, "an escape past U+10FFFF or a surrogate is U+FFFD, and does not throw");
+  assert.deepEqual(styleProperties({ cssText: "stro\\212A e: red;stroKe: blue; COLOR: green" }), { color: "green" }, "names ignore ASCII case only: a Kelvin sign is not a k");
   assert.deepEqual(styleProperties(null), {});
 });
 
