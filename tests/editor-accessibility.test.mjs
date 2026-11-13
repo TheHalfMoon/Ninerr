@@ -1008,3 +1008,29 @@ test("the Component sources dialog audits clean, browsing an Astryx component's 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("the inspector audits clean with the Align group for three selected layers", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-a11y-align-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("align");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    const call = client(host.url, host.token);
+    const { document } = await ok(call("GET", "/api/document"), "document");
+    const box = (id, left) => ({ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id, type: "frame", props: { name: id, style: { position: "absolute", left: `${left}px`, top: "0px", width: "40px", height: "40px" } } } });
+    await ok(call("POST", "/api/edit", { baseRevision: document.revision, operations: [box("one", 0), box("two", 60), box("three", 200)], intent: "Add boxes" }), "boxes");
+    await waitRevision(page, 1);
+    for (const [index, id] of ["one", "two", "three"].entries()) await page.locator(`#layers [role=treeitem][data-node-id="${id}"] > .row`).click(index === 0 ? {} : { modifiers: ["Control"] });
+    await page.locator("#align-group").waitFor();
+    assert.equal(await page.locator("#align-group button").count(), 8);
+    await audit(page, "the inspector with three layers selected");
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

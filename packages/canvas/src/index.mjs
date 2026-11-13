@@ -111,6 +111,65 @@ export function moveBy(document, ids, dx, dy, measured = {}) {
   });
 }
 
+// ---------- align and distribute ----------
+
+/** The edges and centres layers align to: left, centre and right; top, middle and bottom. */
+export const ALIGN_EDGES = Object.freeze(["left", "center", "right", "top", "middle", "bottom"]);
+
+/**
+ * How far each box moves so they line up along `edge`, as { id: { dx, dy } }: each box's edge
+ * (or centre) goes to the outermost one among them (the centre of their bounds, for a centre).
+ * `boxes` maps ids to { left, top, width, height } in one coordinate space.
+ */
+export function alignOffsets(boxes, edge) {
+  if (!ALIGN_EDGES.includes(edge)) throw new TypeError(`edge is one of ${ALIGN_EDGES.join(", ")}`);
+  const entries = Object.entries(boxes);
+  if (entries.length < 2) return {};
+  const left = Math.min(...entries.map(([, box]) => box.left));
+  const top = Math.min(...entries.map(([, box]) => box.top));
+  const right = Math.max(...entries.map(([, box]) => box.left + box.width));
+  const bottom = Math.max(...entries.map(([, box]) => box.top + box.height));
+  const target = {
+    left: (box) => ({ dx: left - box.left, dy: 0 }),
+    center: (box) => ({ dx: (left + right) / 2 - (box.left + box.width / 2), dy: 0 }),
+    right: (box) => ({ dx: right - (box.left + box.width), dy: 0 }),
+    top: (box) => ({ dx: 0, dy: top - box.top }),
+    middle: (box) => ({ dx: 0, dy: (top + bottom) / 2 - (box.top + box.height / 2) }),
+    bottom: (box) => ({ dx: 0, dy: bottom - (box.top + box.height) }),
+  }[edge];
+  return Object.fromEntries(entries.map(([id, box]) => [id, target(box)]));
+}
+
+/**
+ * How far each box moves so the gaps between them along `axis` ("horizontal" or "vertical")
+ * are equal: the first and last stay where they are, the others move between them in order.
+ * Three boxes at least; fewer move nowhere.
+ */
+export function distributeOffsets(boxes, axis) {
+  if (axis !== "horizontal" && axis !== "vertical") throw new TypeError("axis is horizontal or vertical");
+  const [start, size, other] = axis === "horizontal" ? ["left", "width", "dx"] : ["top", "height", "dy"];
+  const entries = Object.entries(boxes).sort(([, a], [, b]) => a[start] - b[start] || a[size] - b[size]);
+  if (entries.length < 3) return {};
+  const first = entries[0][1];
+  const last = entries.at(-1)[1];
+  const used = entries.reduce((sum, [, box]) => sum + box[size], 0);
+  const gap = (last[start] + last[size] - first[start] - used) / (entries.length - 1);
+  const offsets = {};
+  let at = first[start];
+  for (const [id, box] of entries) {
+    offsets[id] = { dx: 0, dy: 0, [other]: at - box[start] };
+    at += box[size] + gap;
+  }
+  return offsets;
+}
+
+/** One move per layer by its own offset: the history operations, in one change. */
+export function moveEach(document, offsets, measured = {}) {
+  return Object.entries(offsets)
+    .filter(([id, { dx, dy }]) => Object.hasOwn(document.nodes, id) && (Math.abs(dx) >= 0.01 || Math.abs(dy) >= 0.01))
+    .flatMap(([id, { dx, dy }]) => moveBy(document, [id], dx, dy, measured));
+}
+
 /**
  * Set `id`'s CSS `width`/`height` (the box its `box-sizing` names), at least 1px. An inline
  * box ignores both, so `{ inline: true }` also makes it `inline-block`, which keeps it in the
@@ -330,6 +389,11 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
   const commit = (operations, intent) => {
     if (operations.length > 0) onCommit(operations, intent, { revision: document.revision });
   };
+  // Where layers are on the page, in the frame's CSS pixels (the canvas zoom is outside it).
+  const frameBoxes = (ids) => Object.fromEntries(ids.map((id) => {
+    const box = renderer.elementFor(id).getBoundingClientRect();
+    return [id, { left: box.left, top: box.top, width: box.width, height: box.height }];
+  }));
 
   capture.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || document === null) return;
@@ -580,6 +644,20 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
      */
     nudge(dx, dy) {
       if (document !== null && selection.length > 0) commit(moveBy(document, selection, dx, dy, measuredBoxes(selection)), selection.length === 1 ? "Move layer" : "Move layers");
+    },
+    /**
+     * Line up the selected layers (two or more) along an edge or centre, or space three or more
+     * evenly, as one change. Each moves in its own place, as a drag would move it.
+     */
+    align(edge) {
+      const ids = document === null ? [] : normalizeSelection(document, selection).filter((id) => renderer.elementFor(id));
+      if (ids.length < 2) return;
+      commit(moveEach(document, alignOffsets(frameBoxes(ids), edge), measuredBoxes(ids)), "Align layers");
+    },
+    distribute(axis) {
+      const ids = document === null ? [] : normalizeSelection(document, selection).filter((id) => renderer.elementFor(id));
+      if (ids.length < 3) return;
+      commit(moveEach(document, distributeOffsets(frameBoxes(ids), axis), measuredBoxes(ids)), "Distribute layers");
     },
     resizeBy(dw, dh) {
       if (document === null || selection.length !== 1 || !renderer.elementFor(selection[0])) return;

@@ -2515,6 +2515,23 @@ function onLayersClick(event) {
   focusLayer(id);
 }
 
+// Lining several layers up, or spacing three or more evenly: the buttons do what Alt+A, D, W,
+// S, H, V and Alt+Shift+H, V do on the canvas.
+function alignGroup(count) {
+  const align = (label, keys, action) => el("button", { type: "button", "aria-keyshortcuts": keys, onclick: action }, label);
+  return el("div", { class: "steps", role: "group", id: "align-group", "aria-label": `Align ${count} layers` },
+    align("Align left", "Alt+A", () => canvas.align("left")),
+    align("Align centre", "Alt+H", () => canvas.align("center")),
+    align("Align right", "Alt+D", () => canvas.align("right")),
+    align("Align top", "Alt+W", () => canvas.align("top")),
+    align("Align middle", "Alt+V", () => canvas.align("middle")),
+    align("Align bottom", "Alt+S", () => canvas.align("bottom")),
+    ...(count >= 3 ? [
+      align("Space evenly across", "Alt+Shift+H", () => canvas.distribute("horizontal")),
+      align("Space evenly down", "Alt+Shift+V", () => canvas.distribute("vertical")),
+    ] : []));
+}
+
 function renderInspector() {
   const form = $("inspector");
   const doc = state.document;
@@ -2526,7 +2543,7 @@ function renderInspector() {
   const activeField = active?.name ?? null;
   if (doc === null || state.selection.length !== 1 || !doc.nodes[state.selection[0]]) {
     delete form.dataset.nodeId;
-    form.replaceChildren(el("p", {}, doc === null ? "Open a project to start." : state.selection.length > 1 ? `${state.selection.length} layers selected.` : "Select a layer to edit it."));
+    form.replaceChildren(el("p", {}, doc === null ? "Open a project to start." : state.selection.length > 1 ? `${state.selection.length} layers selected.` : "Select a layer to edit it."), ...(doc !== null && state.selection.length > 1 ? [alignGroup(state.selection.length)] : []));
     return;
   }
   const node = doc.nodes[state.selection[0]];
@@ -2698,8 +2715,24 @@ function isTextInput(target) {
   return target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable);
 }
 
+// Alt+A, D, W, S, H, V align the selection; with Shift, H and V space it evenly. By the key's
+// place, as Option+letter types another character on a Mac.
+const ALIGN_KEYS = { KeyA: "left", KeyD: "right", KeyW: "top", KeyS: "bottom", KeyH: "center", KeyV: "middle" };
+
 function onGlobalKey(event) {
   if ($("dialog").open) return;
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !isTextInput(event.target) && state.selection.length >= 2) {
+    if (event.shiftKey && (event.code === "KeyH" || event.code === "KeyV")) {
+      event.preventDefault();
+      canvas.distribute(event.code === "KeyH" ? "horizontal" : "vertical");
+      return;
+    }
+    if (!event.shiftKey && Object.hasOwn(ALIGN_KEYS, event.code)) {
+      event.preventDefault();
+      canvas.align(ALIGN_KEYS[event.code]);
+      return;
+    }
+  }
   const mod = event.ctrlKey || event.metaKey;
   if (!mod || isTextInput(event.target)) return;
   const key = event.key.toLowerCase();
