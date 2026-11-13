@@ -370,7 +370,27 @@ export class StudioSession {
     stacks.set(actor.actorId, stack);
   }
 
-  #commit(actor: StudioActor, transport: "http" | "mcp" | "agent", input: { operations: unknown[]; intent: string | null; tool: string | null; link?: { undoOf?: string; redoOf?: string; revertOf?: string }; provenance?: Record<string, unknown> }, conflictCode?: string): { event: ChangeEvent; inverse: unknown[] } {
+  /**
+   * What `input` would change if `actor` made it now, checked exactly as an edit is (the
+   * revision, the operations, authorization, the document rules and the stylesheet budget), with
+   * nothing stored: an agent's dry run. Throws as edit would.
+   */
+  preview(actor: StudioActor, input: EditInput, transport: "http" | "mcp" | "agent" = "mcp"): { revision: number; affectedNodeIds: string[]; operations: number } {
+    this.#assertUsable();
+    if (input === null || typeof input !== "object" || !Number.isSafeInteger(input.baseRevision)) throw new StudioError(400, "invalid-edit", "baseRevision must be an integer");
+    if (input.baseRevision !== this.#store.revision) {
+      throw new StudioError(409, "stale-revision", `edit is based on revision ${input.baseRevision}; the project is at ${this.#store.revision}`);
+    }
+    if (!Array.isArray(input.operations) || input.operations.length === 0) throw new StudioError(400, "invalid-edit", "operations must be a non-empty array");
+    if (input.operations.length > MAX_OPERATIONS_PER_EDIT) throw new StudioError(413, "too-many-operations", `an edit may hold at most ${MAX_OPERATIONS_PER_EDIT} operations`);
+    const intent = typeof input.intent === "string" ? input.intent.slice(0, 500) : null;
+    const tool = typeof input.tool === "string" ? input.tool.slice(0, 200) : null;
+    const planned = this.#plan(actor, transport, { operations: input.operations, intent, tool });
+    return { revision: this.#store.revision, affectedNodeIds: planned.affectedNodeIds, operations: input.operations.length };
+  }
+
+  // A change applied to the current document, checked, with nothing stored.
+  #plan(actor: StudioActor, transport: "http" | "mcp" | "agent", input: { operations: unknown[]; intent: string | null; tool: string | null; link?: { undoOf?: string; redoOf?: string; revertOf?: string }; provenance?: Record<string, unknown> }, conflictCode?: string): { at: string; transactionId: string; attributed: Record<string, unknown>; nextDocument: any; inverse: unknown[]; affectedNodeIds: string[] } {
     const at = this.#now();
     const transactionId = `tx-${randomUUID()}`;
     let attributed: Record<string, unknown>;
@@ -419,6 +439,11 @@ export class StudioSession {
     } catch (error) {
       throw asEditError(error, conflictCode);
     }
+    return { at, transactionId, attributed, nextDocument, inverse, affectedNodeIds };
+  }
+
+  #commit(actor: StudioActor, transport: "http" | "mcp" | "agent", input: { operations: unknown[]; intent: string | null; tool: string | null; link?: { undoOf?: string; redoOf?: string; revertOf?: string }; provenance?: Record<string, unknown> }, conflictCode?: string): { event: ChangeEvent; inverse: unknown[] } {
+    const { at, transactionId, attributed, nextDocument, inverse, affectedNodeIds } = this.#plan(actor, transport, input, conflictCode);
     let committed: { revision: number };
     try {
       committed = this.#store.commit(attributed);
