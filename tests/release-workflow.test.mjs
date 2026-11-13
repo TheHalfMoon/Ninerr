@@ -64,6 +64,13 @@ test("the release is a draft for an existing tag, and every collected file is si
   assert.match(all.attest, /subject-path: \|\n {12}dist\/release\/\*\*\n {12}dist\/out\/\*\n/);
   for (const target of ["linux-x64", "darwin-arm64", "win32-x64"]) assert.ok(all.collect.includes(target), `collect checks the ${target} archive`);
   assert.match(all.collect, /if \[ "\$count" -ne 7 \]/, "collect refuses a set missing any file");
+  // One commit and one version across the set: the bundle's, which must be this run's commit and, on a tag, the tag's version.
+  assert.match(all.collect, /commit=\$\(jq -r '\.sourceCommit' evidence\/MANIFEST\.json\)/);
+  assert.match(all.collect, /if \[ "\$commit" != "\$GITHUB_SHA" \]; then [^\n]*exit 1; fi/);
+  assert.match(all.collect, /case "\$version" in ""\|null\) [^\n]*exit 1 ;; esac/);
+  assert.match(all.collect, /if \[ "\$GITHUB_REF_TYPE" = tag \] && \[ "\$GITHUB_REF_NAME" != "v\$version" \]; then [^\n]*exit 1; fi/);
+  assert.match(all.collect, /if \[ "\$\(jq -r '\.commit' "\$manifest"\)" != "\$commit" \]; then [^\n]*exit 1; fi/);
+  assert.match(all.collect, /if \[ "\$\(jq -r '\.version' "\$manifest"\)" != "\$version" \]; then [^\n]*exit 1; fi/);
   // collect downloads each archive by the exact name the Desktop workflow uploads it under.
   const upload = /name: (ninerr-desktop-\$\{\{ matrix\.target \}\}-\$\{\{ [^}]+\}\})\n/.exec(read(".github/workflows/desktop.yml"))?.[1];
   assert.ok(upload, "desktop.yml uploads each package under one name");

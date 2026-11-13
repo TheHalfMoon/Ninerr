@@ -18,7 +18,7 @@ import { ELECTRON_LICENSE_SHA256, ELECTRON_VERSION } from "./desktop/electron.mj
 import { buildSbom, checkPolicy, externalPackages, purlFor } from "./sbom.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-export const BUNDLE_SCHEMA = 1;
+export const BUNDLE_SCHEMA = 2;
 
 // Repository files copied into the bundle, at the same relative path.
 export const BUNDLED_DOCUMENTS = Object.freeze([
@@ -157,6 +157,8 @@ export function buildReleaseBundle(out, { sourceCommit, root = ROOT, nodeModules
   const manifest = {
     schema: BUNDLE_SCHEMA,
     product: "Ninerr",
+    // The product version package.json declares, which a release tag must name (scripts/check-release-tag.mjs).
+    version: typeof projectPackage.version === "string" ? projectPackage.version : null,
     sourceCommit,
     lockfileSha256: sha256(lockText),
     // The license package.json declares; without one it is recorded as such, never guessed.

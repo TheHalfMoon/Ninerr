@@ -10,7 +10,7 @@
 // close it again. Its fuses are read back from the binary, and ELECTRON_RUN_AS_NODE is
 // shown to have no effect. The result is printed as one JSON line and the exit code is 0
 // only if every check held.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { preparePackage, sleep, waitForRevision } from "./desktop/drive.mjs";
 import { NINERR_FUSES, readFuses } from "./desktop/fuses.mjs";
@@ -35,6 +35,11 @@ async function main() {
       ? join(packaged, "Ninerr.app", "Contents", "Frameworks", "Electron Framework.framework", "Versions", "A", "Electron Framework")
       : executable;
     check("fuses are set in the binary", JSON.stringify(readFuses(fusedBinary)) === JSON.stringify(NINERR_FUSES), readFuses(fusedBinary));
+    // The version the app itself reports (Electron reads its app's package.json) and the one its manifest names are the product's.
+    const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    const resources = manifest.target.startsWith("darwin-") ? join(packaged, "Ninerr.app", "Contents", "Resources") : join(packaged, "resources");
+    const appVersion = JSON.parse(readFileSync(join(resources, "app", "package.json"), "utf8")).version;
+    check("the app and its manifest name the product version", appVersion === version && manifest.version === version, { app: appVersion, manifest: manifest.version, product: version });
 
     // First run: a project, a layer, a rename.
     let ninerr = await launch();
