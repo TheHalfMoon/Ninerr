@@ -5,6 +5,7 @@
 import { UI_COMPONENT_SOURCES } from "./catalog.mjs";
 
 export { UI_COMPONENT_SOURCES, UI_COMPONENT_SOURCE_GROUPS, UI_IMPORT_POLICIES, searchUiComponentSources } from "./catalog.mjs";
+export { TOKEN_CSS_LIMITS, TokenCssError, tokensFromCss } from "./tokens-css.mjs";
 export { ASTRYX, COMPONENT_RECORD_FIELDS, RECORD_SOURCES, RENDERING, componentRecordProblem, loadComponentRecords, searchComponents } from "./records.mjs";
 
 export const REGISTRY_ITEM_LIMITS = Object.freeze({

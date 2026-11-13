@@ -1,6 +1,6 @@
 # Ninerr — Component Source System
 
-Status (2026-11-10): **implemented:** the offline catalog with each source's license and import policy; Meta Astryx as a first-class source, with records of its components (props, variants, accessibility, provenance) at a pinned commit, searchable in the editor, and its own primitive family (`docs/provenance/ASTRYX_SOURCE_AUDIT.md`); reading a registry item into a checked, bounded form (`@ninerr/component-sources`); and importing an item the person chose into their connected codebase, planned first, then created as new files only, with its component brought onto the canvas through the existing Bring in. **Not yet implemented:** fetching items from a registry, design tokens and component instances on the canvas (they need the document schema the design-platform ADRs propose), an interactive React preview, and three-way updates of an imported item. Each is listed under "What remains" with what it waits on.
+Status (2026-11-10): **implemented:** the offline catalog with each source's license and import policy; Meta Astryx as a first-class source, with records of its components (props, variants, accessibility, provenance) at a pinned commit, searchable in the editor, and its own primitive family (`docs/provenance/ASTRYX_SOURCE_AUDIT.md`); design tokens from a CSS file the person chooses (Astryx's `astryx.css` or a theme's `theme.css`, or any `:root` custom properties), light and dark, into the design system as one undoable change; reading a registry item into a checked, bounded form (`@ninerr/component-sources`); and importing an item the person chose into their connected codebase, planned first, then created as new files only, with its component brought onto the canvas through the existing Bring in. **Not yet implemented:** fetching items from a registry, design tokens and component instances on the canvas (they need the document schema the design-platform ADRs propose), an interactive React preview, and three-way updates of an imported item. Each is listed under "What remains" with what it waits on.
 
 ## Required sources
 
@@ -85,6 +85,10 @@ In **Component sources**, under *Import a registry item*, the person chooses a s
 
 Only the person, through the editor's session, plans or applies an import; agents have no tool for it.
 
+### Tokens from a CSS file (implemented)
+
+In **Tokens**, under *Import tokens from a CSS file*, the person chooses a CSS file. `tokensFromCss` (`packages/component-sources/src/tokens-css.mjs`) reads the custom properties its `:root` rules declare, and those of `:scope` inside `@scope`, which is how an Astryx theme's `theme.css` declares its tokens; `@layer` blocks and CSS nesting are read through. `light-dark(a, b)` gives a light and a dark value, wherever it appears in a value (Astryx writes every colour and shadow so), and `.dark`, `[data-theme="dark"]` and `@media (prefers-color-scheme: dark)` rules give dark values. Rules for other selectors, and rules inside any other at-rule (another media query, `@supports`, `@container`), are not the page's tokens and are skipped. Later declarations replace earlier ones, as in the cascade. Durations, easings, sizes, stacking orders, border and outline settings and private (`--_`) properties have no Ninerr token type: they are listed and stay the library's CSS. `POST /api/tokens/css/plan` plans the rest with the same rules as an item's tokens (type by name; new, same, extended, conflict or refused; nothing there is overwritten), and `POST /api/tokens/css/apply` adds exactly the reviewed plan as one transaction, undone by Undo. At most 1 MiB and 5,000 custom properties. Ninerr fetches nothing.
+
 ### What remains, and what it waits on
 
 - **Fetching from a registry.** A pinned, per-item fetch from the catalog's licensed registries needs network access the host does not have today, and a decision on how a person grants it.
@@ -93,7 +97,7 @@ Only the person, through the editor's session, plans or applies an import; agent
 - **Interactive preview.** A React component cannot run on the script-free canvas. A preview needs an isolated, permission-scoped runner with React available offline: a separate decision.
 - **Updating an imported item.** Today a changed upstream item conflicts with the created file. A three-way update against the imported version can reuse `threeWayMerge` from `@ninerr/code-ir`.
 - **Aceternity UI and 21st.dev.** Their terms grant no license to import; that needs the publishers' written permission.
-- **Astryx, further milestones** (`docs/provenance/ASTRYX_SOURCE_AUDIT.md`): its token CSS into the design system (milestone D); its components on the canvas from static HTML its own renderer produces (milestone C, which needs a real fixture made outside Ninerr); agents' search and inspection of component records through MCP (milestone E).
+- **Astryx, further milestones** (`docs/provenance/ASTRYX_SOURCE_AUDIT.md`): its components on the canvas from static HTML its own renderer produces (milestone C, which needs a real fixture made outside Ninerr); agents' search and inspection of component records through MCP (milestone E).
 
 ### Default experience once the remaining integration is built
 
