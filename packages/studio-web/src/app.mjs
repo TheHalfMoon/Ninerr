@@ -2627,7 +2627,8 @@ function renderInspector() {
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
   // Its writing direction (the dir attribute), for right-to-left text such as Arabic or Hebrew.
-  if (!isCodePart(node)) children.push(directionField(node.props?.attributes?.dir));
+  // An instance draws its component's attributes, so its direction is set on the component.
+  if (!isCodePart(node) && node.type !== "component-instance") children.push(directionField(node.props?.attributes?.dir));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.
   const step = (label, text, action) => el("button", { type: "button", "aria-label": label, onclick: action }, text);
   children.push(el("div", { class: "steps", role: "group", "aria-label": "Move and resize by 10 pixels" },

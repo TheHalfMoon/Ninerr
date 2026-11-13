@@ -61,6 +61,20 @@ test("set a layer right to left: the canvas draws it so, its children follow, an
     await page.getByRole("combobox", { name: "Text direction" }).selectOption("");
     await waitRevision(page, 3);
     assert.equal((await ok(call("GET", "/api/document"), "document")).document.nodes.card.props.attributes, undefined);
+    // An instance draws its component's attributes: its direction is set on the component, so
+    // it has no control of its own.
+    const { document: before } = await ok(call("GET", "/api/document"), "document");
+    await ok(call("POST", "/api/edit", { baseRevision: before.revision, intent: "A component and an instance", operations: [
+      { type: "insert-node", parentId: null, index: before.rootIds.length, node: { id: "comp", type: "component-definition", props: { name: "Badge", properties: [] } } },
+      { type: "insert-node", parentId: "comp", index: 0, node: { id: "label", type: "text", props: { tag: "span", text: "جديد" } } },
+      { type: "insert-node", parentId: "card", index: 1, node: { id: "inst", type: "component-instance", props: { componentId: "comp", propertyValues: {} } } },
+    ] }), "instance");
+    await waitRevision(page, 4);
+    await page.locator('#layers [role=treeitem][data-node-id="comp"] > .row').click();
+    await page.getByRole("combobox", { name: "Text direction" }).waitFor();
+    await page.locator('#layers [role=treeitem][data-node-id="inst"] > .row').click();
+    await page.locator("#inspect-style-width").waitFor();
+    assert.equal(await page.getByRole("combobox", { name: "Text direction" }).count(), 0);
     assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();
