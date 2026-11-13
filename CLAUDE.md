@@ -1,5 +1,8 @@
 # Claude Project Instructions
 
+**Current founder directive (2026-11-14):** The first public Ninerr release target is **v0.1.0**, not v1.0.0. The founder personally owns Desktop and UI/UX code, implementation and human-facing acceptance. Do **not** autonomously edit Desktop/UI, canvas presentation or user-visible interaction code; continue independent non-UI core, CLI/MCP/agent, security, CI, release evidence, license-audit and documentation tasks. Proposed UI/Desktop changes must be reserved for founder review. Keep human screen-reader, clean-machine, legal-source, exact-head and release-approval gates. Do not create a tag, a GitHub release or publish without the founder's separate approval. See `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`.
+
+
 Ninerr repository governance and canonical evidence are authoritative. Read `AGENTS.md` and `docs/MASTER_PLAN.md` before changing product code. Do not restart completed phases or rewrite accepted architecture unless live evidence requires it.
 
 ## Cloud-ready project tooling
@@ -50,4 +53,4 @@ Use normal merge commits. Do not squash, rebase, force-push, or rewrite history.
 
 ## Current program direction
 
-Continue from the live canonical frontier in `docs/CURRENT.md`. The current program is N0 (Ninerr independence and migration), then P08, P09, P10 and the release gate, as `docs/MASTER_PLAN.md` sets out. The founder authorized the program through the release gate on 2026-10-13 (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`); v1.0.0 is created only after the exact candidate passes every P10 criterion, and published only after the release gate. Do not redo already closed work unless live evidence proves a regression.
+Continue from the live canonical frontier in `docs/CURRENT.md`. The current program is N0 (Ninerr independence and migration), then P08, P09, P10 and the release gate, as `docs/MASTER_PLAN.md` sets out. The founder authorized the original program through the release gate on 2026-10-13 (`docs/provenance/FOUNDER_AUTHORIZATION_2026-10-13_COMPLETION.md`). The 2026-11-14 founder decision supersedes the first-release version target with **v0.1.0**, while retaining the applicable P10, licensing, human acceptance and exact-candidate gates. The tag is created only with separate founder authorization after the candidate qualifies, and nothing is published until approval. Do not redo already closed work unless live evidence proves a regression.
