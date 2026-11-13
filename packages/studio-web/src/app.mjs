@@ -4,7 +4,7 @@
 // response or the event stream, whichever arrives first), in revision order. A gap or a
 // change that does not apply means the copy is out of date, and it is fetched again.
 
-import { mountCanvas, insertNode, removeNodes, setStyle, setText } from "/packages/canvas/src/index.mjs";
+import { mountCanvas, insertNode, removeNodes, setStyle, setText, constraintOf, setConstraint } from "/packages/canvas/src/index.mjs";
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
 import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
 import { HostError, connect, forgetToken } from "/packages/studio-web/src/client.mjs";
@@ -2626,6 +2626,8 @@ function renderInspector() {
   }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
+  // How a positioned layer keeps its place when its parent changes size.
+  if (constraintOf(style, "x") !== null) children.push(constraintsSection(style));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.
   const step = (label, text, action) => el("button", { type: "button", "aria-label": label, onclick: action }, text);
   children.push(el("div", { class: "steps", role: "group", "aria-label": "Move and resize by 10 pixels" },
@@ -2652,6 +2654,22 @@ function renderInspector() {
   }
 }
 
+// The inspector's constraints: which of its parent's edges a positioned layer keeps its distance
+// from, on each axis, or its centre.
+const CONSTRAINTS = {
+  x: [["start", "Left"], ["end", "Right"], ["both", "Left and right"], ["centre", "Centre"]],
+  y: [["start", "Top"], ["end", "Bottom"], ["both", "Top and bottom"], ["centre", "Centre"]],
+};
+function constraintsSection(style) {
+  const select = (axis, label) => {
+    const value = constraintOf(style, axis);
+    const control = el("select", { id: `inspect-constraint-${axis}`, name: `constraint:${axis}` }, ...CONSTRAINTS[axis].map(([option, text]) => el("option", { value: option, selected: option === value }, text)));
+    control.dataset.original = value;
+    return el("label", { for: control.id }, label, control);
+  };
+  return el("fieldset", { id: "inspect-constraints", class: "pair" }, el("legend", {}, "Pin to parent"), select("x", "Horizontally"), select("y", "Vertically"));
+}
+
 function onInspectorChange(event) {
   const input = event.target;
   const nodeId = $("inspector").dataset.nodeId;
@@ -2670,6 +2688,12 @@ function onInspectorChange(event) {
     if (names === "") delete attributes.class;
     else attributes.class = names;
     commit([{ type: "set-props", nodeId, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) }], names === "" ? "Remove classes" : "Change classes");
+  }
+  else if (input.name === "constraint:x" || input.name === "constraint:y") {
+    const axis = input.name.slice(-1);
+    const measured = canvas.measureConstraint(nodeId, axis);
+    const names = Object.fromEntries(CONSTRAINTS[axis]);
+    commit(measured === null ? [] : setConstraint(state.document, nodeId, axis, input.value, measured), `Pin layer: ${names[input.value].toLowerCase()}`);
   }
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);
