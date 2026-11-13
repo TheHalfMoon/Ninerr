@@ -2,7 +2,7 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
-Last updated: 2026-11-13. Canonical main: `4d0c031`.
+Last updated: 2026-11-13. Canonical main: `df55b47`.
 
 ## Completed since P09 (with evidence)
 
@@ -20,18 +20,32 @@ Last updated: 2026-11-13. Canonical main: `4d0c031`.
 | Meta Astryx as a first-class source: audit, records of 189 components, own primitive family, editor search | #415 | `a10fa82` | `docs/provenance/ASTRYX_SOURCE_AUDIT.md`, `tests/astryx-source.test.mjs` |
 | Generated records checked as data, pinned by sha256 | #416, #417 | `4d0c031` | `scripts/check-generated-records.mjs`, `tests/generated-records.test.mjs` |
 | Jev retired as a gate | #417 | `4d0c031` | `docs/provenance/FOUNDER_DECISION_2026-11-13_RETIRE_JEV.md` |
+| Astryx tokens (or any `:root` custom properties) from a CSS file into the design system (milestone D) | #420 | `df55b47` | seven exact-head checks pass |
 
 Each row's PR has its full check results, its fresh-context review findings and fixes, and its mutation results.
 
 ## In review
 
-| Capability | PR | State |
-| --- | --- | --- |
-| Astryx tokens (or any `:root` custom properties) from a CSS file into the design system (milestone D) | #420 | open; CI running |
-| Agents search and read component records through MCP (milestone E) | stacked on #420 | built and reviewed; opens after #420 |
-| Astryx pages render on the canvas as Astryx renders them; three canvas fixes for every imported page (milestone C) | stacked on E | built and reviewed; opens after E |
-| Align and distribute layers | #419 | open; CI running |
-| Export a layer as a standalone HTML page | #418 | open; CI running |
+Each is built, tested, mutation-checked and reviewed by a fresh-context reviewer, with the findings fixed, before its PR opens. Each merges after its seven exact-head checks pass.
+
+| Capability | PR |
+| --- | --- |
+| Agents search and read the Astryx component records through MCP (milestone E) | #429 |
+| Astryx pages render on the canvas as Astryx renders them; three canvas fixes for every imported page (milestone C) | opens after #429 |
+| Export a layer as a standalone HTML page | #418 |
+| Align and distribute layers | #419 |
+| This ledger | #421 |
+| Pages: add and switch | #422 |
+| Auto layout panel (row, column, gap, padding, alignment) | #423 |
+| Typography: font (with font tokens), weight, line height, letter spacing, alignment | #424 |
+| Agents: dry-run and `baseRevision` on MCP writes (ADR-0006) | #425 |
+| Schema v2 at scale (P10-1 workloads) | #426 |
+| Style values with an open quote or bracket are never drawn, written or exported (#382; #383's `image(`/`src(`) | #427 |
+| CI: a newer push to a pull request cancels its older runs | #428 |
+| Snapping and guides | #430 |
+| The census summary changes only when a finding does | #431 |
+| Constraints (pin to left, right, both edges or centre) | #432 |
+| Tailwind export | built in part; opens after #418 |
 
 ## Remaining requirements
 
@@ -39,25 +53,26 @@ Each row's PR has its full check results, its fresh-context review findings and 
 
 | ID | What remains |
 | --- | --- |
-| P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 needs scale workloads: 10,000 instances, and token rename across 10,000 values. |
+| P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 scale workloads are in review (#426). |
 | P10-2 | Desktop packages smoke-tested and journeyed on each platform for the candidate. No clean-machine install has been done. |
 | P10-3 | Artifacts bound to the candidate. The Electron LGPL corresponding source is checked but not carried alongside the artifacts (route to be confirmed: see Blockers). |
 | P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is open. |
 | P10-5 | Parity dispositions. For #79 (tokens), drift detection remains. #78 (component states bound to code) is not built. |
-| P10-6 | Every open issue resolved or dispositioned (22 open on 2026-11-13). `CURRENT.md` agrees with this ledger. |
+| P10-6 | Every open issue resolved or dispositioned (22 open on 2026-11-13; #382 in review in #427). `CURRENT.md` agrees with this ledger. |
 
 **Product scope** (founder directive, 2026-11-13):
 
 | Capability | State |
 | --- | --- |
 | Align and distribute | in review (#419) |
-| Auto layout (flex) editing | missing: no layout panel. Flex is drawn and editable as classes, styles or MCP `set_styles`. |
-| Constraints and responsive breakpoints | missing |
-| Snapping and guides | missing |
-| Typography: font picker, text styles | partial: size and colour fields; font token types exist |
-| Pages: add and switch | partial: a `page` type and root frames, but no add-page control |
+| Auto layout (flex) editing | in review (#423) |
+| Constraints | in review (#432) |
+| Responsive breakpoints | missing |
+| Snapping and guides | in review (#430) |
+| Typography: font picker | in review (#424); text styles (named, reusable) missing |
+| Pages: add and switch | in review (#422) |
 | Export: standalone HTML | in review (#418) |
-| Export: Tailwind | missing |
+| Export: Tailwind | in progress (after #418) |
 | Export: PNG, SVG, PDF | missing |
 | Prototyping and interactions | missing |
 | RTL editing | missing |
@@ -66,7 +81,7 @@ Each row's PR has its full check results, its fresh-context review findings and 
 | ↳ three-way update of an imported item | missing |
 | ↳ preview, beyond static HTML | needs a decision (live React preview runner) |
 | ↳ registry fetching | needs a decision (network access) |
-| Agents: dry-run and baseRevision (ADR-0006) | missing |
+| Agents: dry-run and baseRevision (ADR-0006) | in review (#425) |
 | Windows installer, upgrade, uninstall | missing: packages are archives |
 | Screen-reader pass (#376) | not done with a real screen reader |
 
@@ -89,9 +104,8 @@ Each row's PR has its full check results, its fresh-context review findings and 
 
 ## Next engineering actions
 
-1. Merge #418, #419 and #420, then open and merge milestones E and C. Verify the Astryx integration together on main.
-2. Refresh `docs/CURRENT.md` to this ledger (done in this PR) and keep both current.
-3. Scale workloads for schema v2 (P10-1), and a CI smoke of the dogfooding driver.
-4. Core editor gaps, in small PRs: pages (add and switch), the layout panel (flex direction, gap, alignment, padding), the font picker and text styles, then constraints.
-5. Agent contract: dry-run and `baseRevision` on MCP writes (ADR-0006), with confirmation for imports.
-6. Issue dispositions (#349, #382, #383, #377, #300, #252, #108 and the rest) toward P10-6.
+1. Merge #428 and #431 (CI throughput), refresh every open PR once against main, and merge them as their exact-head checks pass. Then open milestone C and verify the Astryx integration together on main.
+2. Wire the Tailwind export after #418, and add MCP tools for align, layout, pages and HTML export.
+3. Responsive breakpoints, text styles, image export (PNG and SVG), and RTL editing.
+4. Issue dispositions (#349, #383, #377, #300, #252, #108 and the rest) toward P10-6.
+5. Keep `docs/CURRENT.md` and this ledger current with each merge.
