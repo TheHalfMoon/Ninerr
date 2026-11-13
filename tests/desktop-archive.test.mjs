@@ -42,6 +42,8 @@ function makePackage(root, order, at) {
   if (posix) {
     chmodSync(join(top, "ninerr"), 0o755);
     symlinkSync("resources/app/package.json", join(top, "current"));
+    // A link to a folder, as in a macOS framework (Versions/Current -> A).
+    symlinkSync("resources", join(top, "current-folder"));
   }
   const date = new Date(at);
   const touch = (path) => {
@@ -73,6 +75,8 @@ function checkUnpacked(top, files) {
     assert.equal(lstatSync(join(top, "ninerr")).mode & 0o777, 0o755, "an executable stays executable");
     assert.equal(lstatSync(join(top, "LICENSE")).mode & 0o777, 0o644);
     assert.equal(readlinkSync(join(top, "current")), "resources/app/package.json", "a link stays a link");
+    assert.equal(readlinkSync(join(top, "current-folder")), "resources", "a link to a folder stays a link");
+    assert.equal(readFileSync(join(top, "current-folder", "app", "package.json"), "utf8"), files["resources/app/package.json"], "and leads where it did");
   }
 }
 

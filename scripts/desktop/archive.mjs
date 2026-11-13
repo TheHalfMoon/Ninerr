@@ -1,5 +1,5 @@
 // Deterministic archives of a package folder: the same files give the same bytes, whatever the
-// time, the machine, its user, or the order its file system lists a folder in. Entries are in
+// time, the machine, its user and umask, or the order its file system lists a folder in. Entries are in
 // path order, every time is fixed, and nothing about the host is written. A zip (Windows and
 // macOS) is written here; a tar.gz (Linux) is GNU tar's, told to do the same, then `gzip -n`.
 // Compressed bytes are zlib's, so the same Node.js release gives the same archive.
@@ -116,10 +116,17 @@ export function writeZip(root, name, archive) {
 export function writeTarGz(root, name, archive) {
   const tar = `${archive.replace(/\.gz$/u, "")}`;
   rmSync(tar, { force: true });
-  const flags = ["--sort=name", "--mtime=@315532800", "--owner=0", "--group=0", "--numeric-owner", "--format=gnu", "--mode=go-w"];
+  const flags = ["--sort=name", "--mtime=@315532800", "--owner=0", "--group=0", "--numeric-owner", "--format=gnu", "--mode=u+rwX,go=rX"];
   const made = spawnSync("tar", [...flags, "-cf", tar, "-C", root, name], { stdio: "inherit" });
-  if (made.status !== 0) throw new Error("tar failed: GNU tar 1.28 or later is needed for a deterministic archive");
+  if (made.status !== 0) {
+    rmSync(tar, { force: true });
+    throw new Error("tar failed: GNU tar 1.28 or later is needed for a deterministic archive");
+  }
   rmSync(archive, { force: true });
   const zipped = spawnSync("gzip", ["-9", "-n", tar], { stdio: "inherit" });
-  if (zipped.status !== 0) throw new Error("gzip failed");
+  if (zipped.status !== 0) {
+    rmSync(tar, { force: true });
+    rmSync(archive, { force: true });
+    throw new Error("gzip failed");
+  }
 }
