@@ -101,6 +101,7 @@ test("the MCP protocol: initialize, tools/list, notifications and errors", async
     assert.deepEqual(init.result.capabilities, { tools: { listChanged: false } });
     assert.match(init.result.instructions, /Call guide first/u);
     assert.equal(init.result.serverInfo.name, "ninerr");
+    assert.equal(init.result.serverInfo.version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, "the server reports the product version");
     assert.equal((await mcp(token, "initialize", { protocolVersion: "1999-01-01" })).json.result.protocolVersion, "2025-06-18", "an unknown version gets the latest");
     assert.equal((await mcp(token, "notifications/initialized", undefined, { notification: true })).status, 202);
     const { tools } = (await mcp(token, "tools/list")).json.result;

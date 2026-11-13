@@ -35,8 +35,11 @@ async function main() {
       ? join(packaged, "Ninerr.app", "Contents", "Frameworks", "Electron Framework.framework", "Versions", "A", "Electron Framework")
       : executable;
     check("fuses are set in the binary", JSON.stringify(readFuses(fusedBinary)) === JSON.stringify(NINERR_FUSES), readFuses(fusedBinary));
+    // The version the app itself reports (Electron reads its app's package.json) and the one its manifest names are the product's.
     const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-    check("the package names the product version", manifest.version === version, { manifest: manifest.version, product: version });
+    const resources = manifest.target.startsWith("darwin-") ? join(packaged, "Ninerr.app", "Contents", "Resources") : join(packaged, "resources");
+    const appVersion = JSON.parse(readFileSync(join(resources, "app", "package.json"), "utf8")).version;
+    check("the app and its manifest name the product version", appVersion === version && manifest.version === version, { app: appVersion, manifest: manifest.version, product: version });
 
     // First run: a project, a layer, a rename.
     let ninerr = await launch();

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
@@ -21,7 +22,9 @@ import type { StudioActor, StudioSession } from "./session.ts";
 // the editor (the host's own confirmation flow), never from the client (#82, P06 G8).
 
 export const MCP_PROTOCOL_VERSIONS = Object.freeze(["2025-06-18", "2025-03-26", "2024-11-05"]);
-const SERVER_INFO = Object.freeze({ name: "ninerr", title: "Ninerr", version: "0.0.0" });
+// The product's version, from the package.json at the root of the source tree, or of the app inside a desktop package.
+const PRODUCT_VERSION: string = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version;
+const SERVER_INFO = Object.freeze({ name: "ninerr", title: "Ninerr", version: PRODUCT_VERSION });
 const MAX_RESULT_NODES = 500;
 const MAX_TREE_DEPTH = 12;
 const MAX_DUPLICATED_NODES = 5_000;
