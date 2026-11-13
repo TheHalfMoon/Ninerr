@@ -210,11 +210,11 @@ export function assertFolder(folder: unknown, projectsRoot: string): string {
   return real;
 }
 
-/** A source file inside `folder`, by its path relative to it. */
-export function readSourceFile(folder: string, file: unknown): { file: string; content: string; sha256: string; absolute: string } {
+/** A source file inside `folder`, by its path relative to it; with `css`, a stylesheet instead. */
+export function readSourceFile(folder: string, file: unknown, { css = false }: { css?: boolean } = {}): { file: string; content: string; sha256: string; absolute: string } {
   // Forward slashes only: no backslash, and no colon (a Windows drive or alternate stream).
-  if (typeof file !== "string" || file === "" || file.length > 512 || isAbsolute(file) || /[\\:\u0000-\u001f]/u.test(file) || file.split("/").some((part) => part === ".." || part === "." || part === "") || !SOURCE.test(file)) {
-    throw new StudioError(400, "invalid-file", "a source file is a .js, .jsx or .tsx path inside the connected folder");
+  if (typeof file !== "string" || file === "" || file.length > 512 || isAbsolute(file) || /[\\:\u0000-\u001f]/u.test(file) || file.split("/").some((part) => part === ".." || part === "." || part === "") || !(css ? /\.css$/u : SOURCE).test(file)) {
+    throw new StudioError(400, "invalid-file", css ? "a stylesheet is a .css path inside the connected folder" : "a source file is a .js, .jsx or .tsx path inside the connected folder");
   }
   const absolute = join(folder, file);
   let entry;

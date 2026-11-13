@@ -85,9 +85,9 @@ const SUBSYSTEMS = [
   {
     id: "tokens-themes",
     title: "Tokens and themes",
-    owner: "@ninerr/tokens",
-    status: "planned",
-    boundary: "CSS-variable-oriented design tokens, themes, and modes consumed by layout, components, and the renderer.",
+    owner: "@ninerr/document-model",
+    status: "implemented",
+    boundary: "Design tokens, collections and modes as props of the one design-system node, bound by var(--name) in style values and compiled to CSS custom properties per mode for the canvas and code export (ADR-0004). Tokens come in from a CSS file or a registry item through a reviewed plan, and drift between the design system and a stylesheet in the connected codebase is reported both ways (#79, studio host).",
     dependsOn: ["document-model"],
   },
   {
@@ -95,7 +95,7 @@ const SUBSYSTEMS = [
     title: "Renderer",
     owner: "@ninerr/renderer",
     status: "implemented",
-    boundary: "Read-only rendering of document state as web semantics in a script-free sandboxed frame: allowlisted tags, attributes, URLs and styles under the frozen web-semantic props convention (tag, text, attributes, style), a stable data-ninerr-id node to DOM identity, and incremental patches from history affectedNodeIds (PC2). Layout comes from the browser's CSS engine; tokens, text shaping, vector editing and media remain their own planned subsystems.",
+    boundary: "Read-only rendering of document state as web semantics in a script-free sandboxed frame: allowlisted tags, attributes, URLs and styles under the frozen web-semantic props convention (tag, text, attributes, style), a stable data-ninerr-id node to DOM identity, and incremental patches from history affectedNodeIds (PC2). Layout comes from the browser's CSS engine, and tokens are compiled by tokens-themes; text shaping, vector editing and media remain their own planned subsystems.",
     dependsOn: ["document-model"],
   },
   {
