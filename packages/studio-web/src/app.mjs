@@ -1399,7 +1399,7 @@ async function openCodeDialog() {
             error.textContent = describeError(failure);
             return;
           }
-          const kept = styled.keptAsStyle > 0 ? `; ${styled.keptAsStyle} declaration${styled.keptAsStyle === 1 ? "" : "s"} no class can carry kept as style` : "";
+          const kept = styled.stylesheetApplies ? "; styles kept inline, since the page's stylesheet applies to these layers" : styled.keptAsStyle > 0 ? `; ${styled.keptAsStyle} declaration${styled.keptAsStyle === 1 ? "" : "s"} kept as style, where a class would not say exactly the same` : "";
           try {
             await navigator.clipboard.writeText(styled.code);
             setStatus(`Tailwind code copied: ${styled.classes} class${styled.classes === 1 ? "" : "es"}${kept}.`);

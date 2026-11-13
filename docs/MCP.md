@@ -40,7 +40,7 @@ So the 14 read-only tools need only `read`.
   - `layer_tree`, `layer_children` and `layer_details`: the layers.
   - `find_layers`: search by name or text.
   - `selection`: what the person has selected in the editor.
-  - `layer_code`: a layer as a JSX component.
+  - `layer_code`: a layer as a JSX component; with `format: "tailwind"`, its styles as Tailwind classes; with `format: "html"`, a standalone HTML page that loads and runs nothing.
   - `design_tokens`: the design system's collections, modes and tokens, with how many layer values use each (ADR-0004).
   - `list_components` and `instance_layers`: the components with their properties and instance counts, and the layers an instance draws, with the path and node each override takes (ADR-0005).
   - `search_design_references` and `get_design_reference`: the local reference pack the person has read into the open project. They return public references with their rights, never file bytes. They take no directory, URL or token, and with no pack read the answer says so; nothing is fetched instead.
