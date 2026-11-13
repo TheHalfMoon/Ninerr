@@ -57,6 +57,8 @@ const state = {
   selectOnApply: null,
   collapsed: new Set(),
   focusedLayer: null,
+  // The align button to focus when the inspector is drawn again after its change.
+  focusAlign: null,
   queue: Promise.resolve(),
   events: null,
   confirmations: [],
@@ -2604,6 +2606,31 @@ function onLayersClick(event) {
   focusLayer(id);
 }
 
+// Lining several layers up, or spacing three or more evenly: the buttons do what Alt+A, D, W,
+// S, H, V and Alt+Shift+H, V do on the canvas.
+function alignGroup() {
+  // Counted as align counts them: drawn, with a box, and none inside another selected one.
+  const count = canvas?.alignable ?? 0;
+  if (count < 2) return null;
+  const align = (key, label, keys, action) => el("button", { type: "button", "data-align": key, "aria-keyshortcuts": keys, onclick: () => {
+    // The change's own status says what it did. The inspector is drawn again when it arrives:
+    // focus stays on this button.
+    action();
+    state.focusAlign = key;
+  } }, label);
+  return el("div", { class: "steps", role: "group", id: "align-group", "aria-label": `Align ${count} layers` },
+    align("left", "Align left", "Alt+A", () => canvas.align("left")),
+    align("center", "Align centre", "Alt+H", () => canvas.align("center")),
+    align("right", "Align right", "Alt+D", () => canvas.align("right")),
+    align("top", "Align top", "Alt+W", () => canvas.align("top")),
+    align("middle", "Align middle", "Alt+V", () => canvas.align("middle")),
+    align("bottom", "Align bottom", "Alt+S", () => canvas.align("bottom")),
+    ...(count >= 3 ? [
+      align("horizontal", "Space evenly across", "Alt+Shift+H", () => canvas.distribute("horizontal")),
+      align("vertical", "Space evenly down", "Alt+Shift+V", () => canvas.distribute("vertical")),
+    ] : []));
+}
+
 function renderInspector() {
   const form = $("inspector");
   const doc = state.document;
@@ -2615,7 +2642,11 @@ function renderInspector() {
   const activeField = active?.name ?? null;
   if (doc === null || state.selection.length !== 1 || !doc.nodes[state.selection[0]]) {
     delete form.dataset.nodeId;
-    form.replaceChildren(el("p", {}, doc === null ? "Open a project to start." : state.selection.length > 1 ? `${state.selection.length} layers selected.` : "Select a layer to edit it."));
+    form.replaceChildren(el("p", {}, doc === null ? "Open a project to start." : state.selection.length > 1 ? `${state.selection.length} layers selected.` : "Select a layer to edit it."), ...(doc !== null && state.selection.length > 1 ? [alignGroup()].filter(Boolean) : []));
+    if (state.focusAlign) {
+      form.querySelector(`[data-align="${state.focusAlign}"]`)?.focus();
+      state.focusAlign = null;
+    }
     return;
   }
   const node = doc.nodes[state.selection[0]];
@@ -2873,8 +2904,24 @@ function isTextInput(target) {
   return target instanceof HTMLElement && (target.matches("input, textarea, select") || target.isContentEditable);
 }
 
+// Alt+A, D, W, S, H, V align the selection; with Shift, H and V space it evenly. By the key's
+// place, as Option+letter types another character on a Mac.
+const ALIGN_KEYS = { KeyA: "left", KeyD: "right", KeyW: "top", KeyS: "bottom", KeyH: "center", KeyV: "middle" };
+
 function onGlobalKey(event) {
   if ($("dialog").open) return;
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.repeat && !isTextInput(event.target) && state.selection.length >= 2) {
+    if (event.shiftKey && (event.code === "KeyH" || event.code === "KeyV")) {
+      event.preventDefault();
+      if (canvas.distribute(event.code === "KeyH" ? "horizontal" : "vertical") === 0) setStatus("Select three layers or more that are shown to space them evenly.");
+      return;
+    }
+    if (!event.shiftKey && Object.hasOwn(ALIGN_KEYS, event.code)) {
+      event.preventDefault();
+      if (canvas.align(ALIGN_KEYS[event.code]) === 0) setStatus("Select two layers or more that are shown to align them.");
+      return;
+    }
+  }
   const mod = event.ctrlKey || event.metaKey;
   if (!mod || isTextInput(event.target)) return;
   const key = event.key.toLowerCase();
