@@ -5,7 +5,7 @@ This is the persistent record of what is complete, what remains and what blocks 
 **Founder update, 2026-11-14:** The target for the **first public release** is now **v0.1.0** (superseding v1.0.0), and all Desktop/UI implementation and visual/user-facing acceptance are reserved to the founder. Engineering owns the remaining non-UI core, CI, testing infrastructure, security, release provenance, docs and safe packaging qualification, without altering the Desktop/UI surface. This is a division of labor, not a waiver of P10, accessibility, clean-install, third-party-source or human-approval gates. See `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`. Historical references below to `1.0` are the prior plan and must not be mistaken for the next tag.
 
 
-Last updated: 2026-11-13. Canonical main: `338e463`.
+Last updated: 2026-11-14. Canonical main: `2cbb625`.
 
 ## Completed since P09 (with evidence)
 
@@ -67,12 +67,12 @@ Nothing is in review.
 
 ## Remaining requirements
 
-**Release-candidate criteria (P10, `docs/MASTER_PLAN.md`).** None has a P10 record yet.
+**Release-candidate criteria (P10, `docs/MASTER_PLAN.md`).** The latest P10 run was on `079631a`, a test candidate and not the release candidate: every check it could run passed, with no defect (`docs/evidence/P10_CANDIDATE_TEST_079631a_2026-11-14.md`). Evidence for one commit is not evidence for another, so the v0.1.0 candidate is qualified again on its own commit.
 
 | ID | What remains |
 | --- | --- |
 | P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 scale workloads are merged (#426). | The seven-project dogfooding passed on main `0723851` (`docs/evidence/P10_DOGFOODING_2026-11-13.md`) as evidence; the candidate needs its own run.
-| P10-2 | Desktop packages smoke-tested and journeyed on each platform for the candidate. No clean-machine install has been done. |
+| P10-2 | Desktop packages smoke-tested and journeyed on each platform for the candidate. No clean-machine install has been done; its protocol is in `docs/ACCEPTANCE.md`. |
 | P10-3 | Artifacts bound to the candidate. The Electron LGPL corresponding source is checked but not carried alongside the artifacts (route to be confirmed: see Blockers). |
 | P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is fixed (#456). |
 | P10-5 | Dispositioned by the founder on 2026-11-13: #79's remainder covered (aliases; drift built in #452), #78 superseded by ADR-0005. Both closed. |
@@ -101,15 +101,15 @@ Nothing is in review.
 | ↳ registry fetching | not in 1.0: items come from files the person chooses (founder, 2026-11-13) |
 | Agents: dry-run and baseRevision (ADR-0006) | done (#425) |
 | Windows installer, upgrade, uninstall | packages are archives (founder, 2026-10-13); upgrade and uninstall documented (#441) |
-| Screen-reader pass (#376) | not done with a real screen reader |
+| Screen-reader pass (#376) | not done with a real screen reader; its protocol is in `docs/ACCEPTANCE.md` |
 
 ## Open blockers (founder or third party)
 
 The founder decided the pending brief on 2026-11-13 (`docs/provenance/FOUNDER_DECISION_2026-11-13_PENDING_BRIEF.md`). What remains:
 1. **The written offer (#457):** the route is decided; the owner fills in the name, contact and date it is signed with.
 2. **The candidate:** the founder names the commit; engineering then runs P10 on it.
-3. **Founder's hardware and hands:** the reference-machine performance runs, a clean-machine install, and a real screen-reader pass (#376).
-4. **Owner-only actions:** the `v1.0.0` tag, publishing the draft release, and removing the unused `TYPESAFE_API_KEY` secret.
+3. **Founder's hardware and hands:** the reference-machine performance runs, a clean-machine install, and a real screen-reader pass (#376), each by the protocol in `docs/ACCEPTANCE.md`.
+4. **Owner-only actions:** the `v0.1.0` tag, publishing the draft release, and removing the unused `TYPESAFE_API_KEY` secret.
 
 Decided and closed: #349 (#456), breakpoints (ADR-0008, after 1.0), PDF, network access and the preview runner (not in 1.0), Aceternity UI and 21st.dev (left out of 1.0), and the P10-5 dispositions.
 
@@ -117,6 +117,8 @@ Decided and closed: #349 (#456), breakpoints (ADR-0008, after 1.0), PDF, network
 
 | Head | Run | Result |
 | --- | --- | --- |
+| `1ebdc52` (#461, v0.1.0) | CI: Foundation and Desktop on three platforms, Release Evidence build, desktop and collect, Open Code Review | all pass |
+| `079631a` (P10 test candidate) | `npm run check`, smoke, gate 13 by the reference protocol, packaged smoke, journey and resilience on Windows; Release Evidence in CI | all pass (`docs/evidence/P10_CANDIDATE_TEST_079631a_2026-11-14.md`) |
 | `9aa1248` (Astryx A to E plus C combined) | `npm run check`, Windows | 1,310 tests: 1,299 pass, 0 fail, 11 skipped |
 | `f8a4b03` (#415) | CI: Foundation on three platforms, Desktop on three platforms, Open Code Review | all pass |
 | `2bff107` (#417) | CI: the same seven checks | all pass |
@@ -132,5 +134,5 @@ Decided and closed: #349 (#456), breakpoints (ADR-0008, after 1.0), PDF, network
 ## Next engineering actions
 
 1. When the owner's details are in, merge #457 and record the route in `THIRD_PARTY_NOTICES.md` and `docs/RELEASE.md`.
-2. When the founder names the candidate: run P10 on it (the full suite on three platforms, smoke, packaged journeys and resilience, the dogfooding, the security and offline qualification, and the release-evidence bundle), and write the P10 records.
+2. When the founder names the v0.1.0 candidate: run P10 on it (the full suite on three platforms, smoke, packaged journeys and resilience, the dogfooding, the security and offline qualification, and the release-evidence bundle), and write the P10 records.
 3. After 1.0: breakpoints (ADR-0008), PDF export into the project folder, registry fetching through the network policy.
