@@ -112,6 +112,40 @@ export function moveBy(document, ids, dx, dy, measured = {}) {
 }
 
 /**
+ * Snap a moving box to other boxes' edges and centres. `box` is where the dragged layers' union
+ * would be ({ x, y, width, height }), `targets` the boxes it may snap to, `threshold` the
+ * largest distance a snap moves it. Each axis snaps on its own, to the nearest line within the
+ * threshold. Returns the extra { dx, dy } to add, and the lines it now meets as guides.
+ */
+export function snapMove(box, targets, threshold) {
+  const lines = (start, size) => [start, start + size / 2, start + size];
+  const axis = (start, size) => {
+    const moving = lines(box[start], box[size]);
+    let best = null;
+    for (const target of targets) {
+      for (const line of lines(target[start], target[size])) {
+        for (const edge of moving) {
+          const delta = line - edge;
+          if (Math.abs(delta) <= threshold && (best === null || Math.abs(delta) < Math.abs(best))) best = delta;
+        }
+      }
+    }
+    if (best === null) return { delta: 0, guides: [] };
+    const placed = moving.map((edge) => edge + best);
+    const guides = new Set();
+    for (const target of targets) {
+      for (const line of lines(target[start], target[size])) {
+        if (placed.some((edge) => Math.abs(edge - line) < 0.5)) guides.add(line);
+      }
+    }
+    return { delta: best, guides: [...guides].sort((a, b) => a - b) };
+  };
+  const x = axis("x", "width");
+  const y = axis("y", "height");
+  return { dx: x.delta, dy: y.delta, guides: { x: x.guides, y: y.guides } };
+}
+
+/**
  * Set `id`'s CSS `width`/`height` (the box its `box-sizing` names), at least 1px. An inline
  * box ignores both, so `{ inline: true }` also makes it `inline-block`, which keeps it in the
  * line while honouring the size.
@@ -167,6 +201,11 @@ export function insertNode(parentId, index, { id, type = "element", tag, text, s
 
 // A press that moves less than this many screen pixels is a click, not a drag.
 const DRAG_THRESHOLD = 3;
+// A moved layer snaps to another's edge or centre within this many screen pixels; Alt held
+// while dragging moves it freely.
+const SNAP_DISTANCE = 6;
+// At most this many layers are measured as snap targets when a drag starts.
+const MAX_SNAP_TARGETS = 2_000;
 const OVERLAY_STYLE = "position:absolute;inset:0;pointer-events:none;";
 const STAGE_STYLE = "position:relative;overflow:hidden;width:100%;height:100%;outline:none;background:#e9e9ef;touch-action:none;user-select:none;-webkit-user-select:none;";
 
@@ -274,6 +313,14 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       }
       overlay.appendChild(box);
     }
+    // The lines a snapped move meets, across the whole stage.
+    for (const [axis, at] of drag?.guides ? [...drag.guides.x.map((line) => ["x", line]), ...drag.guides.y.map((line) => ["y", line])] : []) {
+      const guide = owner.createElement("div");
+      guide.dataset.ninerrGuide = axis;
+      const point = worldToScreen(viewport, { x: at, y: at });
+      guide.setAttribute("style", axis === "x" ? `position:absolute;top:0;bottom:0;left:${point.x}px;width:0;border-left:1px solid #ff3d7f;` : `position:absolute;left:0;right:0;top:${point.y}px;height:0;border-top:1px solid #ff3d7f;`);
+      overlay.appendChild(guide);
+    }
     if (target !== null) {
       const element = renderer.elementForTarget(target);
       const rect = element ? worldRect(element) : null;
@@ -375,7 +422,39 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     };
     stage.setPointerCapture?.(event.pointerId);
   });
-  const deltas = (event, current) => ({ dx: (event.clientX - current.startX) / viewport.zoom, dy: (event.clientY - current.startY) / viewport.zoom });
+  const deltas = (event, current) => {
+    const dx = (event.clientX - current.startX) / viewport.zoom;
+    const dy = (event.clientY - current.startY) / viewport.zoom;
+    if (current.kind !== "move" || !current.moved || event.altKey) {
+      if (current.kind === "move") current.guides = null;
+      return { dx, dy };
+    }
+    current.snap ??= snapTargets(current.ids);
+    if (current.snap.box === null) return { dx, dy };
+    const { box, targets } = current.snap;
+    const snapped = snapMove({ ...box, x: box.x + dx, y: box.y + dy }, targets, SNAP_DISTANCE / viewport.zoom);
+    current.guides = snapped.guides;
+    return { dx: dx + snapped.dx, dy: dy + snapped.dy };
+  };
+  // Measured once, when a move first needs them and before its preview moves anything: the
+  // dragged layers' union, and every other drawn layer's box (not one inside a dragged layer).
+  const snapTargets = (ids) => {
+    const dragged = ids.map((id) => renderer.elementFor(id)).filter(Boolean);
+    if (dragged.length === 0) return { box: null, targets: [] };
+    const rects = dragged.map(worldRect);
+    const x = Math.min(...rects.map((rect) => rect.x));
+    const y = Math.min(...rects.map((rect) => rect.y));
+    const box = { x, y, width: Math.max(...rects.map((rect) => rect.x + rect.width)) - x, height: Math.max(...rects.map((rect) => rect.y + rect.height)) - y };
+    const targets = [];
+    for (const id of Object.keys(document.nodes)) {
+      if (targets.length >= MAX_SNAP_TARGETS) break;
+      const element = renderer.elementFor(id);
+      if (!element || dragged.some((moving) => moving.contains(element))) continue;
+      const rect = worldRect(element);
+      if (rect.width > 0 && rect.height > 0) targets.push(rect);
+    }
+    return { box, targets };
+  };
   // Undo a drag's preview, leaving the elements as the document rendered them.
   const clearPreview = (current) => {
     if (current.kind === "move") {

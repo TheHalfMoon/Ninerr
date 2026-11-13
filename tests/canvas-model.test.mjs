@@ -5,7 +5,7 @@ import { createDocument } from "../packages/document-model/src/index.mjs";
 import { applyTransaction } from "../packages/history/src/index.mjs";
 import {
   MAX_ZOOM, MIN_ZOOM, clampZoom, createViewport, fitBounds, insertNode, moveBy, normalizeSelection, panBy, removeNodes,
-  reorder, resizeTo, screenToWorld, selectNode, setStyle, setText, worldToScreen, zoomAt,
+  reorder, resizeTo, screenToWorld, selectNode, setStyle, setText, snapMove, worldToScreen, zoomAt,
 } from "../packages/canvas/src/index.mjs";
 
 // PC3 (#146): the canvas's pure parts. Viewport math, selection rules, and commands that turn
@@ -86,4 +86,17 @@ test("commands produce history operations that apply cleanly", () => {
   d = apply(d, removeNodes(d, ["card", "title", "missing"]));
   assert.equal(d.nodes.card, undefined);
   assert.equal(d.nodes.title, undefined);
+});
+
+test("a moving box snaps each axis to the nearest edge or centre within the distance, naming the lines it meets", () => {
+  const box = { x: 0, y: 0, width: 10, height: 10 };
+  // Its right edge (10) is 3 from the target's left (13); nothing is near on y.
+  assert.deepEqual(snapMove(box, [{ x: 13, y: 100, width: 20, height: 20 }], 4), { dx: 3, dy: 0, guides: { x: [13], y: [] } });
+  // The nearest line wins: centre 5 to 6 (1) over left 0 to -2 (2); y snaps on its own.
+  assert.deepEqual(snapMove(box, [{ x: -2, y: 30, width: 16, height: 8 }, { x: 50, y: 11, width: 4, height: 4 }], 4), { dx: 1, dy: 1, guides: { x: [6], y: [11] } });
+  // Every line the snapped box then meets is a guide: two targets share the left edge.
+  assert.deepEqual(snapMove(box, [{ x: 2, y: 40, width: 30, height: 5 }, { x: 2, y: 80, width: 40, height: 5 }], 4).guides.x, [2]);
+  // Beyond the distance, or with no targets, nothing moves.
+  assert.deepEqual(snapMove(box, [{ x: 15, y: 15, width: 5, height: 5 }], 4), { dx: 0, dy: 0, guides: { x: [], y: [] } });
+  assert.deepEqual(snapMove(box, [], 4), { dx: 0, dy: 0, guides: { x: [], y: [] } });
 });
