@@ -103,6 +103,17 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('scripts/desktop/electron.mjs') }}
       - name: Fetch the pinned Electron runtime (SHA-256 verified)
         run: node scripts/fetch-electron.mjs
+      # The suite opens tens of thousands of short local connections, each held in TIME_WAIT
+      # afterwards, and Windows' default 16,384 ephemeral ports ran out mid-run: the editor's
+      # browser tests then failed with net::ERR_NO_BUFFER_SPACE. This widens the runner's range
+      # for this job. A host the system gives a port browsers refuse moves to another
+      # (packages/studio-host/src/ports.ts).
+      - name: Widen the ephemeral port range (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          netsh int ipv4 set dynamicport tcp start=10000 num=55535
+          netsh int ipv4 show dynamicport tcp
       - name: Run checks
         shell: bash
         run: |
