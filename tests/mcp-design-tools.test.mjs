@@ -306,6 +306,7 @@ test("an agent lays out a layer's children in a row or a column, with gap, paddi
       [{ nodeId: frame, mode: "row", gap: "url(x)" }, /could fetch or run something/u],
       [{ nodeId: frame, mode: "free", gap: "4px" }, /gap, padding, align, justify and wrap are for a row or a column/u],
       [{ nodeId: frame, mode: "row", wrap: "yes" }, /wrap is true or false/u],
+      [{ nodeId: frame, mode: "free" }, /has no auto layout to turn off/u],
     ]) assert.match(refusal(await tool("set_layout", args)), message, JSON.stringify(args));
     assert.equal(host.session.document.revision, before);
   });

@@ -390,12 +390,17 @@ const TOOLS: Tool[] = [
   {
     name: "set_layout",
     title: "Set auto layout",
-    description: "Place a layer's children in a row or a column (CSS flex), or freely. With row or column, gap, padding, align (align-items) and justify (justify-content) and wrap may be given; children placed by left and top join the row. free turns auto layout off: children are no longer laid out by it, and those not positioned flow as blocks (the editor's Freely keeps each where it was drawn, which needs the canvas).",
+    description: "Place a layer's children in a row or a column (CSS flex), or freely. With row or column, gap, padding, align (align-items) and justify (justify-content) and wrap may be given; children placed by left and top join the row. free turns a row or column off: children are no longer laid out by it, and those not positioned flow in the page (the editor's Freely keeps each where it was drawn, which needs the canvas).",
     inputSchema: object({ nodeId: { type: "string" }, mode: { type: "string", enum: ["row", "column", "free"] }, gap: { type: "string" }, padding: { type: "string" }, align: { type: "string", enum: ["flex-start", "center", "flex-end", "stretch", "baseline"] }, justify: { type: "string", enum: ["flex-start", "center", "flex-end", "space-between", "space-around", "space-evenly"] }, wrap: { type: "boolean" } }, ["nodeId", "mode"]),
     run: ({ session, edit }, args) => {
       const node = nodeOf(session, args.nodeId);
       if (!(LAYOUT_MODES as readonly string[]).includes(args.mode as string)) throw new ToolError("mode is \"row\", \"column\" or \"free\"");
       if (node.type === "component-instance" || node.type === "text") throw new ToolError(`${node.id} is ${node.type === "text" ? "a text layer" : "an instance"}, which does not lay out children of its own`);
+      if (args.mode === "free" && ["gap", "padding", "align", "justify", "wrap"].some((argument) => args[argument] !== undefined)) {
+        throw new ToolError("gap, padding, align, justify and wrap are for a row or a column");
+      }
+      const display = node.props?.style?.display;
+      if (args.mode === "free" && display !== "flex" && display !== "inline-flex") throw new ToolError(`${node.id} has no auto layout to turn off (display is ${typeof display === "string" ? display : "not set"})`);
       const operations = setLayout(session.document, node.id, args.mode, {}) as any[];
       const extras: Record<string, string | null> = {};
       if (args.mode !== "free") {
@@ -403,7 +408,7 @@ const TOOLS: Tool[] = [
         for (const [argument, property, allowed] of choices) {
           const value = args[argument];
           if (value === undefined) continue;
-          if (typeof value !== "string" || (allowed !== null && !allowed.includes(value))) throw new ToolError(`${argument} is ${allowed === null ? "a CSS length" : allowed.join(", ")}`);
+          if (typeof value !== "string" || (allowed !== null && !allowed.includes(value))) throw new ToolError(`${argument} is ${allowed === null ? "a CSS value" : allowed.join(", ")}`);
           const problem = styleDeclarationProblem(property, value);
           if (problem !== null) throw new ToolError(problem);
           extras[property] = value;
@@ -412,8 +417,6 @@ const TOOLS: Tool[] = [
           if (typeof args.wrap !== "boolean") throw new ToolError("wrap is true or false");
           extras["flex-wrap"] = args.wrap ? "wrap" : null;
         }
-      } else if (["gap", "padding", "align", "justify", "wrap"].some((argument) => args[argument] !== undefined)) {
-        throw new ToolError("gap, padding, align, justify and wrap are for a row or a column");
       }
       const own = operations[0].set.style as Record<string, string>;
       for (const [property, value] of Object.entries(extras)) {
