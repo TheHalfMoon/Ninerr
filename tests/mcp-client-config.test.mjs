@@ -33,14 +33,14 @@ test("Cursor template is stdio and forwards token through environment substituti
   const entry = JSON.parse(read("docs/examples/mcp-clients/cursor.mcp.template.json")).mcpServers.ninerr;
   assert.equal(entry.type, "stdio");
   assert.equal(entry.command, "node");
-  assert.match(entry.args[0], /scripts\\/ninerr-mcp\\.mjs$/);
+  assert.match(entry.args[0], /scripts\/ninerr-mcp\.mjs$/);
   assert.equal(entry.env.NINERR_MCP_TOKEN, "${env:NINERR_MCP_TOKEN}");
 });
 
 test("Gemini template is stdio and keeps client confirmations enabled", () => {
   const entry = JSON.parse(read("docs/examples/mcp-clients/gemini.settings.template.json")).mcpServers.ninerr;
   assert.equal(entry.command, "node");
-  assert.match(entry.args[0], /scripts\\/ninerr-mcp\\.mjs$/);
+  assert.match(entry.args[0], /scripts\/ninerr-mcp\.mjs$/);
   assert.equal(entry.env.NINERR_MCP_TOKEN, "${NINERR_MCP_TOKEN}");
   assert.equal(entry.trust, false);
 });
