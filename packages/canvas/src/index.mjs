@@ -137,6 +137,113 @@ export function moveBy(document, ids, dx, dy, measured = {}) {
   });
 }
 
+// ---------- align and distribute ----------
+
+/** The edges and centres layers align to: left, centre and right; top, middle and bottom. */
+export const ALIGN_EDGES = Object.freeze(["left", "center", "right", "top", "middle", "bottom"]);
+
+/**
+ * How far each box moves so they line up along `edge`, as { id: { dx, dy } }: each box's edge
+ * (or centre) goes to the outermost one among them (the centre of their bounds, for a centre).
+ * `boxes` maps ids to { left, top, width, height } in one coordinate space.
+ */
+export function alignOffsets(boxes, edge) {
+  if (!ALIGN_EDGES.includes(edge)) throw new TypeError(`edge is one of ${ALIGN_EDGES.join(", ")}`);
+  const entries = Object.entries(boxes);
+  if (entries.length < 2) return {};
+  const left = Math.min(...entries.map(([, box]) => box.left));
+  const top = Math.min(...entries.map(([, box]) => box.top));
+  const right = Math.max(...entries.map(([, box]) => box.left + box.width));
+  const bottom = Math.max(...entries.map(([, box]) => box.top + box.height));
+  const target = {
+    left: (box) => ({ dx: left - box.left, dy: 0 }),
+    center: (box) => ({ dx: (left + right) / 2 - (box.left + box.width / 2), dy: 0 }),
+    right: (box) => ({ dx: right - (box.left + box.width), dy: 0 }),
+    top: (box) => ({ dx: 0, dy: top - box.top }),
+    middle: (box) => ({ dx: 0, dy: (top + bottom) / 2 - (box.top + box.height / 2) }),
+    bottom: (box) => ({ dx: 0, dy: bottom - (box.top + box.height) }),
+  }[edge];
+  return Object.fromEntries(entries.map(([id, box]) => [id, target(box)]));
+}
+
+/**
+ * How far each box moves so the gaps between them along `axis` ("horizontal" or "vertical")
+ * are equal: the first and last stay where they are, the others move between them in order.
+ * Three boxes at least; fewer move nowhere.
+ */
+export function distributeOffsets(boxes, axis) {
+  if (axis !== "horizontal" && axis !== "vertical") throw new TypeError("axis is horizontal or vertical");
+  const [start, size, other] = axis === "horizontal" ? ["left", "width", "dx"] : ["top", "height", "dy"];
+  const entries = Object.entries(boxes).sort(([, a], [, b]) => a[start] - b[start] || a[size] - b[size]);
+  if (entries.length < 3) return {};
+  const first = entries[0][1];
+  const last = entries.at(-1)[1];
+  const used = entries.reduce((sum, [, box]) => sum + box[size], 0);
+  const gap = (last[start] + last[size] - first[start] - used) / (entries.length - 1);
+  const offsets = {};
+  if (gap < 0) {
+    // They do not fit side by side (one holds others, or they overlap): their centres are
+    // spaced evenly between the first's and the last's instead.
+    const from = first[start] + first[size] / 2;
+    const step = (last[start] + last[size] / 2 - from) / (entries.length - 1);
+    entries.forEach(([id, box], index) => {
+      offsets[id] = { dx: 0, dy: 0, [other]: from + step * index - (box[start] + box[size] / 2) };
+    });
+    return offsets;
+  }
+  let at = first[start];
+  for (const [id, box] of entries) {
+    offsets[id] = { dx: 0, dy: 0, [other]: at - box[start] };
+    at += box[size] + gap;
+  }
+  return offsets;
+}
+
+/**
+ * One move per layer by its own offset: the history operations, in one change. A layer that does
+ * not move is left out, unless it is in `placed`: one the move takes out of the flow, which must
+ * be positioned where it is, since the others were measured with it so.
+ */
+export function moveEach(document, offsets, measured = {}, placed = new Set()) {
+  return Object.entries(offsets)
+    .filter(([id, { dx, dy }]) => Object.hasOwn(document.nodes, id) && (placed.has(id) || Math.abs(dx) >= 0.01 || Math.abs(dy) >= 0.01))
+    .flatMap(([id, { dx, dy }]) => moveBy(document, [id], dx, dy, measured));
+}
+
+/**
+ * Snap a moving box to other boxes' edges and centres. `box` is where the dragged layers' union
+ * would be ({ x, y, width, height }), `targets` the boxes it may snap to, `threshold` the
+ * largest distance a snap moves it. Each axis snaps on its own, to the nearest line within the
+ * threshold. Returns the extra { dx, dy } to add, and the lines it now meets as guides.
+ */
+export function snapMove(box, targets, threshold) {
+  const lines = (start, size) => [start, start + size / 2, start + size];
+  const axis = (start, size) => {
+    const moving = lines(box[start], box[size]);
+    let best = null;
+    for (const target of targets) {
+      for (const line of lines(target[start], target[size])) {
+        for (const edge of moving) {
+          const delta = line - edge;
+          if (Math.abs(delta) <= threshold && (best === null || Math.abs(delta) < Math.abs(best))) best = delta;
+        }
+      }
+    }
+    if (best === null) return { delta: 0, guides: [] };
+    const placed = moving.map((edge) => edge + best);
+    const guides = new Set();
+    for (const target of targets) {
+      for (const line of lines(target[start], target[size])) {
+        if (placed.some((edge) => Math.abs(edge - line) < 0.5)) guides.add(line);
+      }
+    }
+    return { delta: best, guides: [...guides].sort((a, b) => a - b) };
+  };
+  const x = axis("x", "width");
+  const y = axis("y", "height");
+  return { dx: x.delta, dy: y.delta, guides: { x: x.guides, y: y.guides } };
+}
+
 /**
  * `style` moved by `delta` on `axis`, keeping how it is pinned, or null when that axis is not
  * pinned in pixels (or the centre): such a layer is measured and placed from where it is drawn.
@@ -222,6 +329,50 @@ export function setStyle(document, id, changes) {
   return [{ type: "set-props", nodeId: id, set: { style } }];
 }
 
+/** Auto layout: a layer's children placed in a row or a column (CSS flex), or placed freely. */
+export const LAYOUT_MODES = Object.freeze(["free", "row", "column"]);
+
+/**
+ * Turn auto layout on (row or column) or off (free) for `id`, as one change. Turning it on
+ * makes the layer a flex container in that direction (keeping inline-flex and a reversed
+ * direction), and its children placed by left and top join the row or column in their order.
+ * Turning it off keeps each child where the row or column put it: `measured[child]` = { left,
+ * top, width } is that place, and the child is positioned there absolutely (the layer becomes
+ * their containing block).
+ */
+export function setLayout(document, id, mode, measured = {}) {
+  if (!LAYOUT_MODES.includes(mode)) throw new TypeError(`mode is one of ${LAYOUT_MODES.join(", ")}`);
+  const node = document.nodes[id];
+  if (!node) return [];
+  const style = { ...styleOf(document, id) };
+  if (mode === "free") {
+    for (const name of ["display", "flex-direction", "flex-wrap", "align-items", "justify-content", "gap", "row-gap", "column-gap"]) delete style[name];
+    if (style.position === undefined || style.position === "static") style.position = "relative";
+    const operations = [{ type: "set-props", nodeId: id, set: { style } }];
+    for (const childId of node.children) {
+      const box = measured[childId];
+      if (box === undefined) continue;
+      const child = { ...styleOf(document, childId), position: "absolute", left: px(box.left), top: px(box.top) };
+      for (const name of ["right", "bottom", "inset"]) delete child[name];
+      if (child.width === undefined && Number.isFinite(box.width)) child.width = px(box.width);
+      operations.push({ type: "set-props", nodeId: childId, set: { style: child } });
+    }
+    return operations;
+  }
+  style.display = style.display === "inline-flex" ? "inline-flex" : "flex";
+  const reversed = typeof style["flex-direction"] === "string" && style["flex-direction"].endsWith("-reverse");
+  style["flex-direction"] = reversed ? `${mode}-reverse` : mode;
+  const operations = [{ type: "set-props", nodeId: id, set: { style } }];
+  for (const childId of node.children) {
+    const child = styleOf(document, childId);
+    if (child.position !== "absolute" && child.position !== "fixed") continue;
+    const next = { ...child };
+    for (const name of ["position", "left", "top", "right", "bottom", "inset"]) delete next[name];
+    operations.push({ type: "set-props", nodeId: childId, set: { style: next } });
+  }
+  return operations;
+}
+
 export function setText(id, text) {
   return [{ type: "set-props", nodeId: id, set: { text } }];
 }
@@ -257,6 +408,14 @@ export function insertNode(parentId, index, { id, type = "element", tag, text, s
 
 // A press that moves less than this many screen pixels is a click, not a drag.
 const DRAG_THRESHOLD = 3;
+// A moved layer snaps to another's edge or centre within this many screen pixels. Alt, Control
+// or Command held while dragging moves it freely (some Linux desktops keep Alt+drag for
+// moving windows).
+const SNAP_DISTANCE = 6;
+// At most this many layers are measured as snap targets for one drag: the dragged layers'
+// siblings first, then the rest in document order.
+const MAX_SNAP_TARGETS = 10_000;
+const freeMove = (event) => event.altKey || event.ctrlKey || event.metaKey;
 const OVERLAY_STYLE = "position:absolute;inset:0;pointer-events:none;";
 const STAGE_STYLE = "position:relative;overflow:hidden;width:100%;height:100%;outline:none;background:#e9e9ef;touch-action:none;user-select:none;-webkit-user-select:none;";
 
@@ -364,6 +523,14 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       }
       overlay.appendChild(box);
     }
+    // The lines a snapped move meets, across the whole stage.
+    for (const [axis, at] of drag?.guides ? [...drag.guides.x.map((line) => ["x", line]), ...drag.guides.y.map((line) => ["y", line])] : []) {
+      const guide = owner.createElement("div");
+      guide.dataset.ninerrGuide = axis;
+      const point = worldToScreen(viewport, { x: at, y: at });
+      guide.setAttribute("style", axis === "x" ? `position:absolute;top:0;bottom:0;left:${point.x}px;width:0;border-left:1px solid #ff3d7f;` : `position:absolute;left:0;right:0;top:${point.y}px;height:0;border-top:1px solid #ff3d7f;`);
+      overlay.appendChild(guide);
+    }
     if (target !== null) {
       const element = renderer.elementForTarget(target);
       const rect = element ? worldRect(element) : null;
@@ -420,6 +587,48 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
   const commit = (operations, intent) => {
     if (operations.length > 0) onCommit(operations, intent, { revision: document.revision });
   };
+  // Where layers are on the page, in the frame's CSS pixels (the canvas zoom is outside it).
+  const frameBoxes = (ids) => Object.fromEntries(ids.map((id) => {
+    const box = renderer.elementFor(id).getBoundingClientRect();
+    return [id, { left: box.left, top: box.top, width: box.width, height: box.height }];
+  }));
+  // The selected layers align and distribute can move: drawn and with a box (a hidden layer has
+  // none, and would pull the others to the frame's edge).
+  const alignable = () => (document === null ? [] : normalizeSelection(document, selection)
+    .filter((id) => renderer.elementFor(id)?.getClientRects().length > 0));
+  // Where each would be once every one is positioned absolutely where it is: taking one out of
+  // the flow moves what follows it, so all are taken out together, measured, and put back.
+  const placedBoxes = (ids, measured) => {
+    const changed = [];
+    const placed = new Set();
+    for (const id of ids) {
+      const element = renderer.elementFor(id);
+      const style = styleOf(document, id);
+      if (style.position === "absolute" && numeric(style.left) !== null && numeric(style.top) !== null) continue;
+      const box = measured[id] ?? {};
+      placed.add(id);
+      changed.push([element, ["position", "left", "top", "right", "bottom", "width"].map((name) => [name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)])]);
+      element.style.setProperty("position", "absolute");
+      element.style.setProperty("left", `${box.left ?? 0}px`);
+      element.style.setProperty("top", `${box.top ?? 0}px`);
+      element.style.removeProperty("right");
+      element.style.removeProperty("bottom");
+      if (style.width === undefined && Number.isFinite(box.width)) element.style.setProperty("width", `${box.width}px`);
+    }
+    const boxes = frameBoxes(ids);
+    for (const [element, saved] of changed) {
+      for (const [name, value, priority] of saved) {
+        if (value === "") element.style.removeProperty(name);
+        else element.style.setProperty(name, value, priority);
+      }
+    }
+    return { boxes, placed };
+  };
+  const arrange = (ids, offsetsOf, intent) => {
+    const measured = measuredBoxes(ids);
+    const { boxes, placed } = placedBoxes(ids, measured);
+    commit(moveEach(document, offsetsOf(boxes), measured, placed), intent);
+  };
 
   capture.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || document === null) return;
@@ -465,7 +674,59 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     };
     stage.setPointerCapture?.(event.pointerId);
   });
-  const deltas = (event, current) => ({ dx: (event.clientX - current.startX) / viewport.zoom, dy: (event.clientY - current.startY) / viewport.zoom });
+  // `point` is the pointer's { clientX, clientY } and `free` whether a free move is asked for.
+  const deltas = (point, current, free = false) => {
+    const dx = (point.clientX - current.startX) / viewport.zoom;
+    const dy = (point.clientY - current.startY) / viewport.zoom;
+    if (current.kind !== "move" || !current.moved || free) {
+      if (current.kind === "move") current.guides = null;
+      return { dx, dy };
+    }
+    // The dragged layers' union is measured once, before the preview moves anything; the
+    // targets again after any change to the document mid-drag.
+    current.box ??= draggedBox(current.ids);
+    if (current.box === null) return { dx, dy };
+    current.targets ??= snapTargets(current.ids);
+    const box = current.box;
+    const snapped = snapMove({ ...box, x: box.x + dx, y: box.y + dy }, current.targets, SNAP_DISTANCE / viewport.zoom);
+    current.guides = snapped.guides;
+    return { dx: dx + snapped.dx, dy: dy + snapped.dy };
+  };
+  const draggedBox = (ids) => {
+    const rects = ids.map((id) => renderer.elementFor(id)).filter(Boolean).map(worldRect);
+    if (rects.length === 0) return null;
+    const x = Math.min(...rects.map((rect) => rect.x));
+    const y = Math.min(...rects.map((rect) => rect.y));
+    return { x, y, width: Math.max(...rects.map((rect) => rect.x + rect.width)) - x, height: Math.max(...rects.map((rect) => rect.y + rect.height)) - y };
+  };
+  // Every other drawn layer's box, not one inside a dragged layer: the dragged layers'
+  // siblings first, so a cap never drops the layers beside them.
+  const snapTargets = (ids) => {
+    const dragged = ids.map((id) => renderer.elementFor(id)).filter(Boolean);
+    const siblings = ids.flatMap((id) => document.nodes[document.nodes[id]?.parentId]?.children ?? []);
+    const targets = [];
+    for (const id of new Set([...siblings, ...Object.keys(document.nodes)])) {
+      if (targets.length >= MAX_SNAP_TARGETS) break;
+      const element = renderer.elementFor(id);
+      if (!element || dragged.some((moving) => moving.contains(element))) continue;
+      const rect = worldRect(element);
+      if (rect.width > 0 && rect.height > 0) targets.push(rect);
+    }
+    return targets;
+  };
+  // Draw a move or resize where the pointer and the modifier keys now put it.
+  const preview = (current, point, free) => {
+    const { dx, dy } = deltas(point, current, free);
+    if (current.kind === "move") {
+      for (const id of current.ids) renderer.elementFor(id)?.style.setProperty("translate", `${dx}px ${dy}px`);
+    } else {
+      const element = renderer.elementFor(current.id);
+      if (current.inlineBox) element?.style.setProperty("display", "inline-block");
+      element?.style.setProperty("width", `${Math.max(1, current.width + dx)}px`);
+      element?.style.setProperty("height", `${Math.max(1, current.height + dy)}px`);
+    }
+    drawSelection();
+  };
   // Undo a drag's preview, leaving the elements as the document rendered them.
   const clearPreview = (current) => {
     if (current.kind === "move") {
@@ -507,21 +768,21 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       return;
     }
     if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >= DRAG_THRESHOLD) drag.moved = true;
+    drag.point = { clientX: event.clientX, clientY: event.clientY };
     if (!drag.moved) return;
-    const { dx, dy } = deltas(event, drag);
-    if (drag.kind === "move") {
-      for (const id of drag.ids) renderer.elementFor(id)?.style.setProperty("translate", `${dx}px ${dy}px`);
-    } else {
-      const element = renderer.elementFor(drag.id);
-      if (drag.inlineBox) element?.style.setProperty("display", "inline-block");
-      element?.style.setProperty("width", `${Math.max(1, drag.width + dx)}px`);
-      element?.style.setProperty("height", `${Math.max(1, drag.height + dy)}px`);
-    }
-    drawSelection();
+    preview(drag, drag.point, freeMove(event));
   });
+  // Pressing or letting go of the free-move key mid-drag redraws the move at once, so what is
+  // shown is what a release commits.
+  const freeKeyChanged = (event) => {
+    if (drag?.kind !== "move" || !drag.moved || drag.point === undefined || !["Alt", "Control", "Meta"].includes(event.key)) return;
+    preview(drag, drag.point, freeMove(event));
+  };
+  stage.addEventListener("keydown", freeKeyChanged);
+  stage.addEventListener("keyup", freeKeyChanged);
   stage.addEventListener("pointerup", (event) => {
     if (drag === null || event.pointerId !== drag.pointerId) return;
-    const { dx, dy } = deltas(event, drag);
+    const { dx, dy } = deltas(event, drag, freeMove(event));
     // Measure before the preview is cleared, while the elements are still in place.
     const boxes = drag.kind === "move" ? measuredBoxes(drag.ids) : null;
     let operations = [];
@@ -611,6 +872,7 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     setDocument(next) {
       releaseHeld();
       document = next;
+      if (drag !== null) drag.targets = null;
       // Another document (a project opened): no layer of the last one is a target.
       if (target !== null) {
         target = null;
@@ -626,6 +888,8 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       releaseHeld();
       const before = document === null ? null : designSystemOf(document)?.id ?? null;
       document = next;
+      // A drag under way snaps to the layers where they are now.
+      if (drag !== null) drag.targets = null;
       // The token sheet changes only with the design system (ADR-0004).
       const after = designSystemOf(next)?.id ?? null;
       if (before !== after || affectedNodeIds.includes(after)) renderer.setTokens(compileTokens(next));
@@ -659,6 +923,15 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       viewport = zoomAt(viewport, { x: stage.clientWidth / 2, y: stage.clientHeight / 2 }, factor);
       applyViewport();
     },
+    /** Fit the view to one layer, such as a page: its box on the canvas, with a margin. */
+    showLayer(id) {
+      const element = renderer.elementFor(id);
+      if (!element) return false;
+      const box = element.getBoundingClientRect();
+      viewport = fitBounds({ x: box.left, y: box.top, width: Math.max(1, box.width), height: Math.max(1, box.height) }, stage.clientWidth, stage.clientHeight);
+      applyViewport();
+      return true;
+    },
     fit() {
       const root = frameDocument.querySelector("[data-ninerr-root]");
       viewport = fitBounds({ x: 0, y: 0, width: Math.max(1, root.scrollWidth), height: Math.max(1, frameDocument.documentElement.scrollHeight) }, stage.clientWidth, stage.clientHeight);
@@ -668,8 +941,30 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
      * Move the selection by (dx, dy), or resize the single selected layer by (dw, dh), as
      * a drag would: the single-pointer alternative to dragging (buttons in the editor).
      */
+    /** Where each layer is in its containing block: { left, top, width } (see moveBy). */
+    measure(ids) {
+      return measuredBoxes(ids.filter((id) => renderer.elementFor(id)));
+    },
     nudge(dx, dy) {
       if (document !== null && selection.length > 0) commit(moveBy(document, selection, dx, dy, measuredBoxes(selection)), selection.length === 1 ? "Move layer" : "Move layers");
+    },
+    /**
+     * Line up the selected layers (two or more) along an edge or centre, or space three or more
+     * evenly, as one change. Each moves in its own place, as a drag would move it.
+     */
+    align(edge) {
+      const ids = alignable();
+      if (ids.length >= 2) arrange(ids, (boxes) => alignOffsets(boxes, edge), "Align layers");
+      return ids.length >= 2 ? ids.length : 0;
+    },
+    distribute(axis) {
+      const ids = alignable();
+      if (ids.length >= 3) arrange(ids, (boxes) => distributeOffsets(boxes, axis), "Distribute layers");
+      return ids.length >= 3 ? ids.length : 0;
+    },
+    /** How many selected layers align and distribute would move. */
+    get alignable() {
+      return alignable().length;
     },
     resizeBy(dw, dh) {
       if (document === null || selection.length !== 1 || !renderer.elementFor(selection[0])) return;
