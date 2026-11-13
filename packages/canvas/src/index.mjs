@@ -155,6 +155,16 @@ export function distributeOffsets(boxes, axis) {
   const used = entries.reduce((sum, [, box]) => sum + box[size], 0);
   const gap = (last[start] + last[size] - first[start] - used) / (entries.length - 1);
   const offsets = {};
+  if (gap < 0) {
+    // They do not fit side by side (one holds others, or they overlap): their centres are
+    // spaced evenly between the first's and the last's instead.
+    const from = first[start] + first[size] / 2;
+    const step = (last[start] + last[size] / 2 - from) / (entries.length - 1);
+    entries.forEach(([id, box], index) => {
+      offsets[id] = { dx: 0, dy: 0, [other]: from + step * index - (box[start] + box[size] / 2) };
+    });
+    return offsets;
+  }
   let at = first[start];
   for (const [id, box] of entries) {
     offsets[id] = { dx: 0, dy: 0, [other]: at - box[start] };
@@ -163,10 +173,14 @@ export function distributeOffsets(boxes, axis) {
   return offsets;
 }
 
-/** One move per layer by its own offset: the history operations, in one change. */
-export function moveEach(document, offsets, measured = {}) {
+/**
+ * One move per layer by its own offset: the history operations, in one change. A layer that does
+ * not move is left out, unless it is in `placed`: one the move takes out of the flow, which must
+ * be positioned where it is, since the others were measured with it so.
+ */
+export function moveEach(document, offsets, measured = {}, placed = new Set()) {
   return Object.entries(offsets)
-    .filter(([id, { dx, dy }]) => Object.hasOwn(document.nodes, id) && (Math.abs(dx) >= 0.01 || Math.abs(dy) >= 0.01))
+    .filter(([id, { dx, dy }]) => Object.hasOwn(document.nodes, id) && (placed.has(id) || Math.abs(dx) >= 0.01 || Math.abs(dy) >= 0.01))
     .flatMap(([id, { dx, dy }]) => moveBy(document, [id], dx, dy, measured));
 }
 
@@ -394,6 +408,43 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     const box = renderer.elementFor(id).getBoundingClientRect();
     return [id, { left: box.left, top: box.top, width: box.width, height: box.height }];
   }));
+  // The selected layers align and distribute can move: drawn and with a box (a hidden layer has
+  // none, and would pull the others to the frame's edge).
+  const alignable = () => (document === null ? [] : normalizeSelection(document, selection)
+    .filter((id) => renderer.elementFor(id)?.getClientRects().length > 0));
+  // Where each would be once every one is positioned absolutely where it is: taking one out of
+  // the flow moves what follows it, so all are taken out together, measured, and put back.
+  const placedBoxes = (ids, measured) => {
+    const changed = [];
+    const placed = new Set();
+    for (const id of ids) {
+      const element = renderer.elementFor(id);
+      const style = styleOf(document, id);
+      if (style.position === "absolute" && numeric(style.left) !== null && numeric(style.top) !== null) continue;
+      const box = measured[id] ?? {};
+      placed.add(id);
+      changed.push([element, ["position", "left", "top", "right", "bottom", "width"].map((name) => [name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)])]);
+      element.style.setProperty("position", "absolute");
+      element.style.setProperty("left", `${box.left ?? 0}px`);
+      element.style.setProperty("top", `${box.top ?? 0}px`);
+      element.style.removeProperty("right");
+      element.style.removeProperty("bottom");
+      if (style.width === undefined && Number.isFinite(box.width)) element.style.setProperty("width", `${box.width}px`);
+    }
+    const boxes = frameBoxes(ids);
+    for (const [element, saved] of changed) {
+      for (const [name, value, priority] of saved) {
+        if (value === "") element.style.removeProperty(name);
+        else element.style.setProperty(name, value, priority);
+      }
+    }
+    return { boxes, placed };
+  };
+  const arrange = (ids, offsetsOf, intent) => {
+    const measured = measuredBoxes(ids);
+    const { boxes, placed } = placedBoxes(ids, measured);
+    commit(moveEach(document, offsetsOf(boxes), measured, placed), intent);
+  };
 
   capture.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || document === null) return;
@@ -650,14 +701,18 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
      * evenly, as one change. Each moves in its own place, as a drag would move it.
      */
     align(edge) {
-      const ids = document === null ? [] : normalizeSelection(document, selection).filter((id) => renderer.elementFor(id));
-      if (ids.length < 2) return;
-      commit(moveEach(document, alignOffsets(frameBoxes(ids), edge), measuredBoxes(ids)), "Align layers");
+      const ids = alignable();
+      if (ids.length >= 2) arrange(ids, (boxes) => alignOffsets(boxes, edge), "Align layers");
+      return ids.length >= 2 ? ids.length : 0;
     },
     distribute(axis) {
-      const ids = document === null ? [] : normalizeSelection(document, selection).filter((id) => renderer.elementFor(id));
-      if (ids.length < 3) return;
-      commit(moveEach(document, distributeOffsets(frameBoxes(ids), axis), measuredBoxes(ids)), "Distribute layers");
+      const ids = alignable();
+      if (ids.length >= 3) arrange(ids, (boxes) => distributeOffsets(boxes, axis), "Distribute layers");
+      return ids.length >= 3 ? ids.length : 0;
+    },
+    /** How many selected layers align and distribute would move. */
+    get alignable() {
+      return alignable().length;
     },
     resizeBy(dw, dh) {
       if (document === null || selection.length !== 1 || !renderer.elementFor(selection[0])) return;

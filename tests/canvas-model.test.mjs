@@ -109,6 +109,9 @@ test("distribute keeps the first and last where they are and makes the gaps betw
     { a: { dx: 0, dy: 0 }, c: { dx: 0, dy: 13 }, b: { dx: 0, dy: 0 } });
   assert.deepEqual(distributeOffsets({ a: boxes.a, b: boxes.b }, "horizontal"), {}, "two boxes have one gap: nothing to even out");
   assert.throws(() => distributeOffsets(boxes, "diagonal"), /axis is horizontal or vertical/u);
+  // One box holds the others: they cannot sit side by side, so their centres are spaced evenly.
+  const held = distributeOffsets({ a: { left: 0, top: 0, width: 1000, height: 5 }, b: { left: 100, top: 0, width: 10, height: 5 }, c: { left: 200, top: 0, width: 10, height: 5 } }, "horizontal");
+  assert.deepEqual(held, { a: { dx: 0, dy: 0 }, b: { dx: 247.5, dy: 0 }, c: { dx: 0, dy: 0 } });
 });
 
 test("moveEach moves each layer by its own offset, in one change, and skips what does not move", () => {
@@ -116,4 +119,7 @@ test("moveEach moves each layer by its own offset, in one change, and skips what
   const operations = moveEach(d, { free: { dx: 5, dy: -5 }, card: { dx: 0, dy: 0 }, gone: { dx: 1, dy: 1 } }, {});
   assert.deepEqual(operations, [{ type: "set-props", nodeId: "free", set: { style: { position: "absolute", left: "15px", top: "15px" } } }]);
   assert.equal(applyTransaction(d, { id: "t", actor: "u", operations }).document.nodes.free.props.style.left, "15px");
+  // A layer taken out of the flow to measure the others is positioned too, where it is.
+  const placed = moveEach(d, { card: { dx: 0, dy: 0 } }, { card: { left: 3, top: 4, width: 50 } }, new Set(["card"]));
+  assert.deepEqual(placed.map((operation) => [operation.nodeId, operation.set.style.position, operation.set.style.left, operation.set.style.top]), [["card", "absolute", "3px", "4px"]]);
 });

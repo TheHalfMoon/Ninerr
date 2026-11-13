@@ -70,3 +70,46 @@ test("align and distribute selected layers from the inspector and the keyboard, 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("align measures flow layers as they will be placed, leaves out a hidden layer, and keeps focus on its button", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-align-flow-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("flow");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    const call = client(host.url, host.token);
+    const { document } = await ok(call("GET", "/api/document"), "document");
+    // A heading in the flow, then a card whose place follows it, holding an absolute badge;
+    // and a hidden layer. Taking the heading out of the flow moves the card, and the badge with it.
+    await ok(call("POST", "/api/edit", { baseRevision: document.revision, intent: "Add a page", operations: [
+      { type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: "board", type: "frame", props: { name: "Board", style: { position: "relative", width: "400px", padding: "20px" } } } },
+      { type: "insert-node", parentId: "board", index: 0, node: { id: "heading", type: "frame", props: { name: "heading", style: { height: "30px", width: "100px", background: "#ccc" } } } },
+      { type: "insert-node", parentId: "board", index: 1, node: { id: "card", type: "frame", props: { name: "card", style: { position: "relative", height: "100px", background: "#eee" } } } },
+      { type: "insert-node", parentId: "card", index: 0, node: { id: "badge", type: "frame", props: { name: "badge", style: { position: "absolute", left: "200px", top: "50px", width: "20px", height: "20px", background: "#999" } } } },
+      { type: "insert-node", parentId: "board", index: 2, node: { id: "ghost", type: "frame", props: { name: "ghost", attributes: { hidden: "" }, style: { width: "10px", height: "10px" } } } },
+    ] }), "page");
+    await waitRevision(page, 1);
+    for (const [index, id] of ["heading", "badge", "ghost"].entries()) await page.locator(`#layers [role=treeitem][data-node-id="${id}"] > .row`).click(index === 0 ? {} : { modifiers: ["Control"] });
+    assert.equal(await page.locator("#align-group").getAttribute("aria-label"), "Align 2 layers", "the hidden layer is not counted");
+    await page.locator('#align-group [data-align="top"]').click();
+    await waitRevision(page, 2);
+    const tops = await page.evaluate(() => {
+      const frame = document.querySelector("iframe").contentDocument;
+      const top = (id) => frame.querySelector(`[data-ninerr-id="${id}"]`).getBoundingClientRect().top;
+      return { heading: top("heading"), badge: top("badge") };
+    });
+    assert.ok(Math.abs(tops.heading - tops.badge) < 0.5, `aligned tops: ${JSON.stringify(tops)}`);
+    const { document: after } = await ok(call("GET", "/api/document"), "document");
+    assert.equal(after.nodes.ghost.props.style.position, undefined, "the hidden layer is not moved");
+    await page.waitForFunction(() => document.activeElement?.dataset?.align === "top");
+    assert.match(await page.locator("#status").textContent(), /Align layers/u);
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
