@@ -238,3 +238,31 @@ test("an agent adds a slot and fills an instance's slot with a component, never 
     assert.equal(host.session.document.nodes[cardId].props.properties.find((property) => property.id === other).default, badgeId);
   });
 });
+
+test("an agent sets a layer's classes, text direction and aria attributes, and is refused what the canvas would not draw", async () => {
+  await withAgent(async ({ host, tool, ok }) => {
+    const { nodeId: frame } = await ok("create_frame", { name: "Card", width: 200, height: 100 });
+    const revision = host.session.document.revision;
+    await ok("set_attributes", { updates: [{ nodeId: frame, attributes: { class: "  card  card wide ", dir: "rtl", lang: "ar", "aria-label": "بطاقة" } }] });
+    assert.deepEqual(host.session.document.nodes[frame].props.attributes, { class: "card wide", dir: "rtl", lang: "ar", "aria-label": "بطاقة" }, "classes once each, in order");
+    assert.equal(host.session.document.revision, revision + 1, "one change");
+    // Each refusal names why, and changes nothing.
+    for (const [attributes, message] of [
+      [{ onclick: "x()" }, /onclick is not an attribute the canvas draws/u],
+      [{ style: "color: red" }, /style is not an attribute the canvas draws/u],
+      [{ dir: "sideways" }, /dir is "ltr", "rtl" or "auto"/u],
+      [{ "bad name": "x" }, /is not an attribute name/u],
+      [{ class: 7 }, /must be a string of at most 2000 characters, or null/u],
+    ]) assert.match(refusal(await tool("set_attributes", { updates: [{ nodeId: frame, attributes }] })), message, JSON.stringify(attributes));
+    assert.equal(host.session.document.revision, revision + 1, "nothing refused was stored");
+    // null removes; removing the last attribute leaves none.
+    await ok("set_attributes", { updates: [{ nodeId: frame, attributes: { class: null, dir: null, lang: null, "aria-label": null } }] });
+    assert.equal(host.session.document.nodes[frame].props.attributes, undefined);
+    // An attribute this element does not have (a link on a <main>) is refused too.
+    assert.match(refusal(await tool("set_attributes", { updates: [{ nodeId: frame, attributes: { href: "https://example.com" } }] })), /href="https:\/\/example\.com" is not an attribute the canvas draws on this <main>/u);
+    // An instance draws its component's attributes: they are set on the component.
+    const { componentId } = await ok("create_component", { nodeId: frame, name: "Card" });
+    const { instanceId } = await ok("insert_instance", { componentId, afterId: componentId });
+    assert.match(refusal(await tool("set_attributes", { updates: [{ nodeId: instanceId, attributes: { dir: "rtl" } }] })), /is an instance, which draws its component's attributes/u);
+  });
+});
