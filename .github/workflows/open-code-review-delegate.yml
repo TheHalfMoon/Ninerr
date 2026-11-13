@@ -52,7 +52,19 @@ jobs:
           }
           const entries = preview.reviewable_files ?? preview.reviewableFiles ?? [];
           const paths = entries.map((entry) => typeof entry === 'string' ? entry : entry.path).filter(Boolean);
-          if (paths.length === 0) throw new Error('OCR found no reviewable files');
+          if (paths.length === 0) {
+            // A pull request that changes only Markdown gives OCR nothing to review: that is
+            // recorded, not failed. Any other change with nothing reviewable still fails.
+            const diff = spawnSync('git', ['diff', '--name-only', 'origin/main...HEAD'], { encoding: 'utf8' });
+            if (diff.status !== 0) throw new Error(`git diff failed: ${diff.stderr}`);
+            const changed = diff.stdout.split('\n').filter(Boolean);
+            if (changed.length === 0 || !changed.every((file) => /\.md$/iu.test(file))) throw new Error('OCR found no reviewable files');
+            fs.writeFileSync('ocr-rules.json', `${JSON.stringify({ groups: [], documentation_only: changed })}\n`);
+            const list = changed.join(',').replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+            console.log(`::notice title=OCR delegation evidence::reviewable=0; documentation only: ${list}`);
+            console.log('OCR_REVIEWABLE_COUNT=0');
+            process.exit(0);
+          }
           const result = spawnSync(
             'ocr',
             ['delegate', 'rule', '--format', 'json', ...paths],
