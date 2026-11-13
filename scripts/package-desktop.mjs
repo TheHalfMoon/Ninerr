@@ -176,6 +176,7 @@ async function main() {
   const commit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim() || null;
   const manifest = {
     product: "Ninerr",
+    version: root.version,
     target,
     commit,
     electron: ELECTRON_VERSION,
