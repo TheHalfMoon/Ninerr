@@ -19,5 +19,5 @@ Before broad source exploration, prefer a fresh Graft graph and the bounded navi
 
 Treat `graft/` as a local regenerable cache. It is ignored by Git and must never be committed as evidence. If Graft is unavailable, continue with normal repository tools rather than silently installing or wiring it.
 
-Graft is context/navigation, not correctness or qualification evidence. Continue all repository-required tests, Jev review/qualification where applicable, Alibaba Open Code Review, CI, and security checks. Never fabricate Graft output, tool execution, CI, reviews, or evidence.
+Graft is context/navigation, not correctness or qualification evidence. Continue all repository-required tests, independent review, Alibaba Open Code Review, CI, and security checks. Never fabricate Graft output, tool execution, CI, reviews, or evidence.
 <!-- graft:end -->

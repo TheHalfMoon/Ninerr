@@ -12,3 +12,5 @@ docs/provenance/** text eol=lf
 tests/fixtures/** -text
 # The identity census summary is compared byte for byte by --verify (N0-G1).
 docs/evidence/N0_IDENTITY_CENSUS.json text eol=lf
+# Generated component records are pinned by sha256: never convert their line endings.
+packages/component-sources/src/*-records.mjs -text
