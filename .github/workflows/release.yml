@@ -36,6 +36,13 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+      # Fail before installing dependencies when a release tag is not the product's version.
+      # Manual dispatch and PR qualification never create a release or need a tag.
+      - name: Verify tag matches product and lockfile
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/check-release-tag.mjs "$RELEASE_TAG"
       - run: npm ci --ignore-scripts
       # The bundle is built, verified and uploaded straight after the install, before any later step
       # runs repository, test or dependency code that could change the files attest signs. (The
