@@ -2,7 +2,7 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
-Last updated: 2026-11-13. Canonical main: `d184b15`.
+Last updated: 2026-11-13. Canonical main: `f1bacae`.
 
 ## Completed since P09 (with evidence)
 
@@ -47,6 +47,11 @@ Last updated: 2026-11-13. Canonical main: `d184b15`.
 | Constraints | #432 | `e5682e5` | seven exact-head checks pass |
 | Right-to-left editing: a layer's text direction | #433 | `b14b831` | seven exact-head checks pass; a full local `npm run check` at its head: 1,356 tests, 0 fail, 11 skipped |
 | Reduced motion on the canvas | #444 | `d184b15` | seven exact-head checks pass |
+| Text styles: a layer's typography as a marked class rule of its page, checked against the page's cascade | #446 | `5892562` | seven exact-head checks pass |
+| MCP `set_layout` (row, column, free; gap, padding, alignment, wrap) | #447 | `abf48b4` | seven exact-head checks pass |
+| Soak test: one slow window is not drift (#351, closed) | #448 | `b657d31` | seven exact-head checks pass |
+| Import refusals name no resolved address (#94, closed) | #449 | `f1bacae` | seven exact-head checks pass |
+| P10-6: a recorded disposition for every open issue | #450 | `182d696` | `docs/evidence/P10_ISSUE_DISPOSITIONS_2026-11-13.md` |
 
 Each row's PR has its full check results, its fresh-context review findings and fixes, and its mutation results.
 
@@ -65,7 +70,7 @@ Nothing is in review.
 | P10-3 | Artifacts bound to the candidate. The Electron LGPL corresponding source is checked but not carried alongside the artifacts (route to be confirmed: see Blockers). |
 | P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is open. |
 | P10-5 | Parity dispositions. For #79 (tokens), drift detection remains. #78 (component states bound to code) is not built. |
-| P10-6 | Every open issue resolved or dispositioned (#382 closed by #427; #383 case 2 fixed by #436; #376, #377, #383 have status notes). `CURRENT.md` agrees with this ledger. |
+| P10-6 | Every open issue has a recorded disposition (`docs/evidence/P10_ISSUE_DISPOSITIONS_2026-11-13.md`); none is critical. #382, #94 and #351 are closed. Judged again on the exact candidate. |
 
 **Product scope** (founder directive, 2026-11-13):
 
@@ -76,11 +81,11 @@ Nothing is in review.
 | Constraints | done (#432) |
 | Responsive breakpoints | design proposed (ADR-0008, #441), for the founder |
 | Snapping and guides | done (#430) |
-| Typography: font picker | done (#424); text styles (named, reusable) missing |
+| Typography: font picker and text styles | done (#424, #446) |
 | Pages: add and switch | done (#422) |
 | Export: standalone HTML | done (#418) |
 | Export: Tailwind | done (#434) |
-| Export: PNG, SVG | done (#439); PDF missing |
+| Export: PNG, SVG | done (#439). PDF: needs the founder (where an exported file is written; see blockers) |
 | Prototyping and interactions | missing |
 | RTL editing | done (#433, and MCP `set_attributes` #443): a layer's text direction |
 | Reduced motion | no motion in the editor; the canvas ends a design's motion when the system asks (#444) |
@@ -101,6 +106,7 @@ Nothing is in review.
 5. **Reference-machine performance runs and clean-machine installs** need the founder's hardware.
 6. **Owner-only actions:** the `v1.0.0` tag, publishing the draft release, and removing the unused `TYPESAFE_API_KEY` secret.
 7. **#349 (Windows trusted write):** the fix renames the private replacement through its handle, which adds `SetFileInformationByHandle` to the pinned kernel32 boundary. The alternative refuses a projects folder that is not private to the user. Either changes an established security boundary, so it waits for the founder's choice.
+8. **PDF export:** the clipboard cannot hold a PDF and the desktop app refuses downloads by design, so a PDF needs either a host route that writes export files into the project folder or printing. Either crosses an established boundary, so it waits for the founder.
 
 ## Tests executed (latest, with exact heads)
 
@@ -112,7 +118,7 @@ Nothing is in review.
 
 ## Next engineering actions
 
-1. Verify the latest main's post-merge CI.
-2. The founder's decisions listed above, and ADR-0008 before breakpoints are built.
-3. Text styles, PDF export, and MCP tools for layout and constraints (agents can already set each through `set_styles`).
-4. Remaining issue dispositions toward P10-6, and the P10 qualification records.
+Every product item that needs no decision is built and merged. What remains:
+1. The founder's decisions above (ADR-0008 breakpoints, #349, PDF, network access, preview runner, corresponding source, publishers' permission) and the P10-5 parity dispositions (#78, #79).
+2. P10 qualification on the exact candidate, once the founder names it: the full suite on three platforms, smoke, gate-13 budgets on the reference machine, P08-G4 remeasured, the seven-project dogfooding (which also answers #377), packaged journeys, a clean-machine install, and a real screen-reader pass (#376).
+3. The release gate: the `v1.0.0` tag and publishing are the owner's.
