@@ -87,7 +87,7 @@ test("the native boundary binds only advapi32.dll and kernel32.dll, and starts n
   const source = readFileSync(new URL("../packages/studio-host/src/windows-security.ts", import.meta.url), "utf8");
   assert.deepEqual([...source.matchAll(/koffi\.load\("([^"]+)"\)/gu)].map((match) => match[1]).sort(), ["advapi32.dll", "kernel32.dll"]);
   const bound = [...source.matchAll(/(?:advapi|kernel)\.func\("[^"(]*?(\w+)\(/gu)].map((match) => match[1]).sort();
-  assert.deepEqual(bound, ["CloseHandle", "ConvertStringSecurityDescriptorToSecurityDescriptorW", "CreateFileW", "FlushFileBuffers", "GetAce", "GetAclInformation", "GetCurrentProcess", "GetFileInformationByHandle", "GetFileType", "GetLastError", "GetLengthSid", "GetSecurityInfo", "GetTokenInformation", "IsValidSid", "LocalFree", "OpenProcessToken", "ReadFile", "WriteFile"]);
+  assert.deepEqual(bound, ["CloseHandle", "ConvertStringSecurityDescriptorToSecurityDescriptorW", "CreateFileW", "FlushFileBuffers", "GetAce", "GetAclInformation", "GetCurrentProcess", "GetFileInformationByHandle", "GetFileType", "GetLastError", "GetLengthSid", "GetSecurityInfo", "GetTokenInformation", "IsValidSid", "LocalFree", "OpenProcessToken", "ReadFile", "SetFileInformationByHandle", "WriteFile"]);
   for (const file of ["windows-security.ts", "trusted-file.ts"]) {
     assert.doesNotMatch(readFileSync(new URL(`../packages/studio-host/src/${file}`, import.meta.url), "utf8"), /child_process|spawn|execFile|icacls|whoami|powershell/iu, file);
   }
@@ -116,6 +116,23 @@ test("a file Ninerr writes is private from the start: owned by this user, protec
   // Replaced the same way: still private.
   writeTrustedFile(path, "[]\n");
   assert.equal(readTrustedFile(path, 1024).toString(), "[]\n");
+  // Renamed into place through the handle that wrote it (#349): one file, no temporary left,
+  // and a long replacement whole.
+  const long = `${"x".repeat(100_000)}\n`;
+  writeTrustedFile(path, long);
+  assert.equal(readTrustedFile(path, 200_000).toString(), long);
+  assert.deepEqual(readdirSync(root).filter((name) => name.startsWith(".ninerr-agents")), [".ninerr-agents.json"]);
+}));
+
+test("a replacement whose target cannot be replaced is refused and leaves nothing behind (#349)", onWindows, () => withFolder((root) => {
+  const path = join(root, ".ninerr-agents.json");
+  writeTrustedFile(path, "{}\n");
+  // A folder where the file should be cannot be replaced by a file.
+  const blocked = join(root, "blocked.json");
+  mkdirSync(blocked);
+  assert.throws(() => writeTrustedFile(blocked, "{}\n"), /SetFileInformationByHandle failed/u);
+  assert.deepEqual(readdirSync(root).filter((name) => name.endsWith(".tmp")), [], "the replacement was removed");
+  assert.equal(readTrustedFile(path, 1024).toString(), "{}\n");
 }));
 
 test("in a folder others may change, a file Ninerr did not write is refused, its own is trusted", onWindows, async () => withFolder(async (root) => {

@@ -31,6 +31,10 @@ export interface WindowsTrustedRead {
 
 const GENERIC_READ = 0x80000000;
 const GENERIC_WRITE = 0x40000000;
+// The right to rename or delete the file through the handle that holds it (#349).
+const DELETE = 0x00010000;
+// SetFileInformationByHandle's FileRenameInfo class.
+const FILE_RENAME_INFO_CLASS = 3;
 const READ_CONTROL = 0x00020000;
 const FILE_SHARE_READ = 0x1;
 const OPEN_EXISTING = 3;
@@ -152,6 +156,7 @@ function bind(): Bindings {
     ReadFile: kernel.func("bool __stdcall ReadFile(NINERR_HANDLE h, _Out_ uint8_t *buffer, uint32 size, _Out_ uint32 *read, void *overlapped)"),
     WriteFile: kernel.func("bool __stdcall WriteFile(NINERR_HANDLE h, const uint8_t *buffer, uint32 size, _Out_ uint32 *written, void *overlapped)"),
     FlushFileBuffers: kernel.func("bool __stdcall FlushFileBuffers(NINERR_HANDLE h)"),
+    SetFileInformationByHandle: kernel.func("bool __stdcall SetFileInformationByHandle(NINERR_HANDLE h, int cls, const uint8_t *info, uint32 size)"),
     GetFileInformationByHandle: kernel.func("bool __stdcall GetFileInformationByHandle(NINERR_HANDLE h, _Out_ NINERR_BY_HANDLE_FILE_INFORMATION *info)"),
     GetFileType: kernel.func("uint32 __stdcall GetFileType(NINERR_HANDLE h)"),
     GetSecurityInfo: advapi.func("uint32 __stdcall GetSecurityInfo(NINERR_HANDLE h, int type, uint32 info, _Out_ void **owner, _Out_ void **group, _Out_ void **dacl, _Out_ void **sacl, _Out_ void **descriptor)"),
@@ -284,11 +289,28 @@ export function privateSddl(userSid: string): string {
 }
 
 /**
- * Create `path`'s replacement with the private access list from the start, write `bytes`
- * through to disk, and return the temporary path for the caller to rename into place. No
- * handle to the new file is ever open to anyone else: it is created private.
+ * FILE_RENAME_INFO for `target`, replacing it: a flags word, a null root directory handle, the
+ * name's length in bytes, then the name in UTF-16 with its terminator. The handle field is
+ * pointer-aligned, so the layout follows this process's pointer size.
  */
-export function createPrivateFile(path: string, bytes: Buffer): string {
+function renameInfo(api: ReturnType<typeof bind>, target: string): Buffer {
+  const pointer = api.koffi.sizeof("void *") as number;
+  const name = Buffer.from(`${target}\0`, "utf16le");
+  const nameAt = 2 * pointer + 4;
+  const info = Buffer.alloc(nameAt + name.length);
+  info.writeUInt32LE(1, 0); // ReplaceIfExists
+  info.writeUInt32LE(name.length - 2, 2 * pointer); // FileNameLength, without the terminator
+  name.copy(info, nameAt);
+  return info;
+}
+
+/**
+ * Replace `path` with `bytes`: the replacement is created with the private access list from the
+ * start, written through to disk, and renamed over `path` through the handle that created it,
+ * before that handle closes (#349). No handle to the new file is ever open to anyone else, and
+ * nothing can swap it between the write and the rename, as a rename by path would allow.
+ */
+export function replacePrivately(path: string, bytes: Buffer): void {
   const api = bind();
   const descriptor = [null];
   const size = [0];
@@ -298,17 +320,20 @@ export function createPrivateFile(path: string, bytes: Buffer): string {
   try {
     const temporary = `${resolve(path)}.${randomBytes(8).toString("hex")}.tmp`;
     const attributes = { nLength: api.securityAttributesSize, lpSecurityDescriptor: descriptor[0], bInheritHandle: 0 };
-    const handle = api.CreateFileW(longPath(temporary), GENERIC_WRITE, 0, attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, null);
+    const handle = api.CreateFileW(longPath(temporary), GENERIC_WRITE | DELETE, 0, attributes, CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, null);
     if (isInvalid(api, handle)) throw new WindowsSecurityError("CreateFileW", api.GetLastError());
     let complete = false;
     try {
       const written = [0];
       if (bytes.length > 0 && (!api.WriteFile(handle, bytes, bytes.length, written, null) || written[0] !== bytes.length)) throw new WindowsSecurityError("WriteFile", api.GetLastError());
       if (!api.FlushFileBuffers(handle)) throw new WindowsSecurityError("FlushFileBuffers", api.GetLastError());
+      const info = renameInfo(api, longPath(resolve(path)));
+      if (!api.SetFileInformationByHandle(handle, FILE_RENAME_INFO_CLASS, info, info.length)) throw new WindowsSecurityError("SetFileInformationByHandle", api.GetLastError());
       complete = true;
     } finally {
       api.CloseHandle(handle);
-      // A replacement that could not be written whole is not left behind (from the review of #346).
+      // A replacement that could not be written whole, or put in place, is not left behind
+      // (from the review of #346).
       if (!complete) {
         try {
           unlinkSync(longPath(temporary));
@@ -317,7 +342,6 @@ export function createPrivateFile(path: string, bytes: Buffer): string {
         }
       }
     }
-    return temporary;
   } finally {
     api.LocalFree(descriptor[0]);
   }
