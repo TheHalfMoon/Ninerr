@@ -283,6 +283,22 @@ const HTML_EXPORT_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-in
  */
 export function exportHtml(document: any, nodeId: unknown): { componentName: string; html: string; layers: number; codeParts: number } {
   const { design, componentName, layers, codeParts, stylesheet, tokens } = exportDesign(document, nodeId);
+  // The page's stylesheet applies to the layer that holds it (on the canvas, @scope of that frame).
+  // Exporting that layer, its element is the scope; exporting one inside it, a wrapper stands in.
+  const owner = typeof nodeId === "string" && typeof document.nodes[nodeId]?.props?.stylesheet === "string";
+  const root = design.root;
+  if (stylesheet !== null && owner) root.props = { ...root.props, "data-ninerr-page": "" };
+  // The modes the layer is drawn in on the canvas, set on it or on a layer above it.
+  if (root.props["data-ninerr-mode"] === undefined && typeof nodeId === "string") {
+    for (let id = document.nodes[nodeId]?.parentId ?? null, depth = 0; id !== null && depth <= MAX_EXPORT_DEPTH; depth += 1) {
+      const modes = modeAttribute(document.nodes[id]?.props ?? {});
+      if (modes !== null) {
+        root.props = { ...root.props, "data-ninerr-mode": modes };
+        break;
+      }
+      id = document.nodes[id]?.parentId ?? null;
+    }
+  }
   let markup: string;
   try {
     markup = designToMarkup(design);
@@ -292,8 +308,10 @@ export function exportHtml(document: any, nodeId: unknown): { componentName: str
   const title = typeof document.nodes[nodeId as string]?.props?.name === "string" && document.nodes[nodeId as string].props.name.trim() !== "" ? document.nodes[nodeId as string].props.name.trim() : componentName;
   const escape = (value: string) => value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
   // `</style` inside a style would end it early; the stylesheets are sanitized CSS, which never needs it.
-  const css = [tokens, stylesheet === null ? null : `@scope ([data-ninerr-page]) {\n${stylesheet}\n}`].filter((part) => part !== null).join("\n").replace(/<\/style/giu, "<\\/style");
-  const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta http-equiv="Content-Security-Policy" content="${HTML_EXPORT_CSP}">\n<title>${escape(title)}</title>\n${css === "" ? "" : `<style>\n${css}\n</style>\n`}</head>\n<body>\n<div data-ninerr-page>${markup}</div>\n</body>\n</html>\n`;
+  // The canvas's own defaults, below everything the page says (as on the canvas: a layer first).
+  const base = "@layer ninerr-canvas {\nbody { margin: 0; font-family: system-ui, sans-serif; }\n}";
+  const css = [base, tokens, stylesheet === null ? null : `@scope ([data-ninerr-page]) {\n${stylesheet}\n}`].filter((part) => part !== null).join("\n").replace(/<\/style/giu, "<\\/style");
+  const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta http-equiv="Content-Security-Policy" content="${HTML_EXPORT_CSP}">\n<title>${escape(title)}</title>\n${css === "" ? "" : `<style>\n${css}\n</style>\n`}</head>\n<body>\n${stylesheet !== null && !owner ? `<div data-ninerr-page>${markup}</div>` : markup}\n</body>\n</html>\n`;
   return { componentName, html, layers, codeParts };
 }
 

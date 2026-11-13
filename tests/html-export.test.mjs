@@ -31,6 +31,7 @@ test("the design subset as HTML: escaped, void elements unclosed, React names as
 const PAGE = `<!doctype html><html><head><style>
 body{color:rgb(1, 2, 3);font-family:serif}
 .title{color:rgb(78, 115, 223);font-weight:800;letter-spacing:0.5px}
+body > .title{text-transform:uppercase}
 .note{padding:12px;background:rgb(240, 240, 240);border-radius:6px}
 </style></head><body><h1 class="title">Dashboard</h1><p class="note">Welcome &amp; hello</p><p>Plain</p></body></html>`;
 
@@ -51,6 +52,10 @@ test("the host exports a layer as a page that loads and runs nothing, with its s
   assert.match(page.html, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:">/u);
   assert.match(page.html, /<title>Dashboard<\/title>/u);
   assert.match(page.html, /@scope \(\[data-ninerr-page\]\) \{\n:scope\{color:rgb\(1, 2, 3\);font-family:serif\}/u);
+  // The layer that holds the stylesheet is its scope itself, with no wrapper around it.
+  assert.match(page.html, /<body>\n<[a-z]+ [^>]*data-ninerr-page=""/u);
+  assert.doesNotMatch(page.html, /<div data-ninerr-page>/u);
+  assert.match(page.html, /@layer ninerr-canvas \{\nbody \{ margin: 0; font-family: system-ui, sans-serif; \}\n\}/u);
   assert.match(page.html, /<p class="note">Welcome &amp; hello<\/p>/u);
   assert.doesNotMatch(page.html, /<script|url\(|@import/iu);
   assert.equal((await call("POST", "/api/code/export-html", { nodeId: "no-such-layer" })).status, 404);
@@ -64,7 +69,7 @@ const LOOK = (doc, texts, tags = null) => Object.fromEntries(texts.map((text) =>
   if (!element) return [text, null];
   const style = doc.defaultView.getComputedStyle(element);
   const box = element.getBoundingClientRect();
-  return [text, { tag: element.tagName, color: style.color, fontFamily: style.fontFamily, fontWeight: style.fontWeight, letterSpacing: style.letterSpacing, padding: style.padding, background: style.backgroundColor, radius: style.borderRadius, height: Math.round(box.height) }];
+  return [text, { tag: element.tagName, transform: style.textTransform, color: style.color, fontFamily: style.fontFamily, fontWeight: style.fontWeight, letterSpacing: style.letterSpacing, padding: style.padding, background: style.backgroundColor, radius: style.borderRadius, height: Math.round(box.height) }];
 }));
 const TEXTS = ["Dashboard", "Welcome & hello", "Plain"];
 
@@ -115,6 +120,7 @@ test("the exported page draws in a browser as the canvas draws the layer", brows
     assert.ok(Math.abs(shownHeight - drawnHeight) <= 1, `${text}: ${shownHeight} exported, ${drawnHeight} on the canvas`);
   }
   assert.equal(drawn.Dashboard.color, "rgb(78, 115, 223)");
+  assert.equal(drawn.Dashboard.transform, "uppercase", "a rule for the page's own children applies");
   assert.equal(drawn["Welcome & hello"].padding, "12px");
   assert.equal(drawn.Plain.color, "rgb(1, 2, 3)", "the page's body colour reaches it, on the canvas and in the export");
 });
