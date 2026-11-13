@@ -46,6 +46,8 @@ The evidence bundle's `MANIFEST.json` names that commit as `sourceCommit`, and i
 
 **Determinism.** Two builds of the same commit and lockfile are byte-identical. Nothing in the bundle depends on host paths, time, or which platform binary npm installed. `tests/release-bundle.test.mjs` checks both, the second by building with another platform's binary in place. The bundled text files are checked out with LF line endings on every platform (`.gitattributes`), so a Windows checkout produces the same bytes.
 
+The desktop archives are deterministic too. Packaging the same commit again on the same platform, with the same Node.js release, gives the same archive, byte for byte. `scripts/desktop/archive.mjs` writes the zip (Windows and macOS) with its entries in path order, every time fixed at 1980-01-01, and nothing about the host. The tar.gz (Linux) is GNU tar's, sorted, with fixed times and owners, compressed by `gzip -n`. `tests/desktop-archive.test.mjs` checks that, and that the platform's own tools unpack it to the same files, modes and links. The macOS zip carries no extended attributes. The packaged smoke verifies the app's ad-hoc signature after unpacking it.
+
 **Project license.** Ninerr is licensed under Apache-2.0 (`LICENSE`), and `MANIFEST.json` records `projectLicense: "Apache-2.0"` from `package.json`. The bundle and the desktop app ship `LICENSE` with the third-party notices. The source-rights audit behind the declaration is in `docs/evidence/N0_G7A1_SOURCE_CATEGORIES_2026-10-09.md` and `docs/evidence/N0_G7A_LICENSE_2026-10-09.md`.
 
 ## The Electron runtime's corresponding source

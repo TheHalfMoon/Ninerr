@@ -11,6 +11,7 @@
 // shown to have no effect. The result is printed as one JSON line and the exit code is 0
 // only if every check held.
 import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { basename, join, resolve } from "node:path";
 import { preparePackage, sleep, waitForRevision } from "./desktop/drive.mjs";
 import { NINERR_FUSES, readFuses } from "./desktop/fuses.mjs";
@@ -35,6 +36,11 @@ async function main() {
       ? join(packaged, "Ninerr.app", "Contents", "Frameworks", "Electron Framework.framework", "Versions", "A", "Electron Framework")
       : executable;
     check("fuses are set in the binary", JSON.stringify(readFuses(fusedBinary)) === JSON.stringify(NINERR_FUSES), readFuses(fusedBinary));
+    // The app as unpacked from the archive keeps its signature (an ad-hoc one: macOS will not run an unsigned arm64 app).
+    if (manifest.target.startsWith("darwin-")) {
+      const verified = spawnSync("codesign", ["--verify", "--deep", "--strict", join(packaged, "Ninerr.app")], { encoding: "utf8" });
+      check("the unpacked app's signature verifies", verified.status === 0, verified.status === 0 ? undefined : verified.stderr.slice(-400));
+    }
 
     // First run: a project, a layer, a rename.
     let ninerr = await launch();
