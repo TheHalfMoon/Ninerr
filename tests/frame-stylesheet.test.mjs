@@ -49,6 +49,16 @@ test("the selectors that name the page are renamed to the frame", () => {
     ":scope{margin:0}:scope .a{color:red}:scope{--x:1}:scope,:scope.dark{color:blue}.body{color:green}@media print{:scope{display:none}}",
   );
   assert.equal(frameStylesheet([".a{color:red}", ".b{color:blue}"]), ".a{color:red}\n.b{color:blue}", "in document order");
+  // A reset's :where(html) and :is(html, body) name the page too, inside layers as well (Astryx).
+  assert.equal(
+    frameStylesheet(["@layer reset{:where(html){line-height:1.5}:where(body){margin:0}:is(html, body) .a{color:red}:where(h1, h2){margin:0}:where(html) body{margin:1px}:where(html)>body .b{color:green}}"]),
+    "@layer reset{:where(:scope){line-height:1.5}:where(:scope){margin:0}:is(:scope) .a{color:red}:where(h1, h2){margin:0}:where(:scope){margin:1px}:where(:scope) .b{color:green}}",
+  );
+  // html and body are one element in the frame: what body inherited from html, it already has.
+  assert.equal(
+    frameStylesheet([":where(html){line-height:1.5;color:red}:where(body){margin:0;line-height:inherit;color: INHERIT !important}body .a{color:inherit}html,body{font:inherit}"]),
+    ":where(:scope){line-height:1.5;color:red}:where(:scope){margin:0}:scope .a{color:inherit}:scope,:scope{font:inherit}",
+  );
 });
 
 test("an import's stylesheets go to its page frame, sanitized and scoped", async (t) => {
