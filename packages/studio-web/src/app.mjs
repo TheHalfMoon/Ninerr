@@ -1388,7 +1388,10 @@ async function openCodeDialog() {
             output.select();
             setStatus("The HTML page is in the code box: select it and copy it.");
           }
-        } }, "Copy as an HTML page")),
+        } }, "Copy as an HTML page"),
+        // The same layer as an image, on the clipboard: nothing is downloaded or saved.
+        el("button", { type: "button", id: "code-export-png", onclick: () => copyLayerImage(selected, "png", { output, error }) }, "Copy as PNG"),
+        el("button", { type: "button", id: "code-export-svg", onclick: () => copyLayerImage(selected, "svg", { output, error }) }, "Copy as SVG")),
         // The stylesheet that applies to it (#283), which the canvas applies to its frame alone.
         ...(typeof exported.stylesheet === "string" ? [(() => {
           const sheet = el("textarea", { id: "code-export-css", rows: 6, readonly: true, spellcheck: "false" });
@@ -2694,6 +2697,64 @@ function onInspectorChange(event) {
     const property = input.name.slice(6);
     const normalized = /^-?\d+(\.\d+)?$/u.test(value) && property !== "background" && property !== "color" ? `${value}px` : value;
     commit(setStyle(state.document, nodeId, { [property]: normalized === "" ? null : normalized }), "Change style");
+  }
+}
+
+// The layer drawn as an image from its HTML page (the HTML export): an SVG holding the page in a
+// foreignObject at the size the canvas draws the layer, or that SVG drawn as a PNG at twice that
+// size. The page carries its own styles and only data: images, so nothing is fetched. An SVG
+// holding HTML is drawn by browsers; vector editors may not read it.
+async function layerImage(nodeId, format) {
+  const page = await state.client.post("/api/code/export-html", { nodeId });
+  const rect = canvas.renderer.elementFor(nodeId)?.getBoundingClientRect();
+  const width = Math.max(1, Math.ceil(rect?.width ?? 1));
+  const height = Math.max(1, Math.ceil(rect?.height ?? 1));
+  const parsed = new DOMParser().parseFromString(page.html, "text/html");
+  // The page's body, as the frame it was drawn in: its width, the canvas's defaults below every
+  // rule of the page (its own stylesheet keeps the cascade layer and @scope it was written with).
+  const frame = parsed.createElement("div");
+  frame.setAttribute("style", `width: ${width}px; margin: 0;`);
+  for (const sheet of parsed.querySelectorAll("style")) frame.append(sheet);
+  frame.append(...parsed.body.childNodes);
+  for (const sheet of frame.querySelectorAll("style")) sheet.textContent = sheet.textContent.replace(/\bbody \{ margin: 0; font-family: system-ui, sans-serif; \}/u, "div[data-ninerr-image] { margin: 0; font-family: system-ui, sans-serif; }");
+  frame.setAttribute("data-ninerr-image", "");
+  const markup = new XMLSerializer().serializeToString(frame);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><foreignObject x="0" y="0" width="${width}" height="${height}">${markup}</foreignObject></svg>`;
+  if (format === "svg") return { svg, width, height, layers: page.layers };
+  const image = new Image();
+  image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  await image.decode();
+  const scale = 2;
+  const drawn = document.createElement("canvas");
+  drawn.width = width * scale;
+  drawn.height = height * scale;
+  const context = drawn.getContext("2d");
+  context.scale(scale, scale);
+  context.drawImage(image, 0, 0, width, height);
+  const blob = await new Promise((resolve, reject) => drawn.toBlob((made) => (made ? resolve(made) : reject(new Error("the image could not be made"))), "image/png"));
+  return { blob, width, height, layers: page.layers };
+}
+
+async function copyLayerImage(nodeId, format, { output, error }) {
+  let made;
+  try {
+    made = await layerImage(nodeId, format);
+  } catch (failure) {
+    if (handleSessionEnded(failure)) return;
+    error.textContent = failure instanceof HostError ? describeError(failure) : `The image could not be made: ${failure?.message ?? failure}`;
+    return;
+  }
+  const size = `${made.width} × ${made.height}`;
+  try {
+    if (format === "svg") await navigator.clipboard.writeText(made.svg);
+    else await navigator.clipboard.write([new ClipboardItem({ "image/png": made.blob })]);
+    setStatus(format === "svg" ? `SVG copied: ${size}, the layer's page in a foreignObject.` : `PNG copied: ${size} at twice that resolution.`);
+  } catch {
+    if (format === "svg") {
+      output.value = made.svg;
+      output.select();
+      setStatus("The SVG is in the code box: select it and copy it.");
+    } else setStatus("Copying an image is not allowed here; use Copy as SVG.");
   }
 }
 
