@@ -685,6 +685,7 @@ function openTokensDialog() {
       el("p", {}, "Layers use a token by holding var(--name) in a style value, for example color: var(--brand)."),
       error, body,
       tokenCssSection(),
+      tokenDriftSection(),
       el("div", { class: "actions" }, el("button", { type: "button", onclick: close }, "Close")),
     ];
   });
@@ -753,6 +754,42 @@ function tokenCssSection() {
     );
   });
   section.append(el("label", {}, "CSS file", file), el("div", { class: "actions" }, review), error, planView);
+  return section;
+}
+
+// Token drift (#79): the design system against a stylesheet in the connected codebase, both
+// ways. Read only: it says what differs, and the import above or the code is where it is mended.
+const DRIFT_WORDS = { same: "the same", changed: "different", "only-in-code": "only in the code", "only-in-design": "only in the design" };
+function tokenDriftSection() {
+  const section = el("section", { id: "token-drift", "aria-labelledby": "token-drift-title" }, el("h3", { id: "token-drift-title" }, "Compare tokens with the code"));
+  if (state.client === null || state.project === null) {
+    section.append(el("p", {}, "Open a project to compare its tokens."));
+    return section;
+  }
+  const path = el("input", { id: "token-drift-file", autocomplete: "off", spellcheck: "false", placeholder: "src/theme.css" });
+  const compare = el("button", { type: "button", id: "token-drift-compare" }, "Compare");
+  const error = el("p", { id: "token-drift-error", role: "alert" });
+  const result = el("div", { id: "token-drift-result" });
+  const values = (byMode) => (byMode ? Object.entries(byMode).map(([mode, value]) => `${mode}: ${value}`).join(", ") : "");
+  compare.addEventListener("click", async () => {
+    error.textContent = "";
+    result.replaceChildren();
+    let drift;
+    try {
+      drift = await state.client.post("/api/tokens/drift", { file: path.value.trim() });
+    } catch (failure) {
+      error.textContent = failure.message;
+      return;
+    }
+    const summary = Object.entries(drift.counts).filter(([, count]) => count > 0).map(([status, count]) => `${count} ${DRIFT_WORDS[status]}`).join(", ");
+    const differing = drift.tokens.filter((token) => token.status !== "same");
+    result.replaceChildren(
+      el("p", { id: "token-drift-summary", role: "status" }, drift.drift ? `${drift.file} differs from the design system: ${summary}.` : `${drift.file} and the design system agree${summary ? `: ${summary}` : ""}.`),
+      ...(differing.length === 0 ? [] : [el("ul", { id: "token-drift-tokens" }, ...differing.slice(0, TOKENS_LISTED).map((token) => el("li", {}, `${token.name}: ${DRIFT_WORDS[token.status]}${token.status === "changed" ? ` (design ${values(token.design)}; code ${values(token.code)})` : ""}${token.reason ? ` — ${token.reason}` : ""}`)))]),
+      ...(differing.length > TOKENS_LISTED ? [el("p", { id: "token-drift-more" }, `And ${differing.length - TOKENS_LISTED} more.`)] : []),
+    );
+  });
+  section.append(el("label", { for: path.id }, "Stylesheet in the connected codebase", path), el("div", { class: "actions" }, compare), error, result);
   return section;
 }
 

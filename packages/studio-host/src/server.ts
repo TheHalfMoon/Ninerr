@@ -11,7 +11,8 @@ import { StudioError } from "./errors.ts";
 import { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
 import { MAX_COMPONENT_REQUEST_BYTES, applyComponentImport, planComponentImport, publicPlan } from "./component-import.ts";
 import { MAX_TOKEN_CSS_REQUEST_BYTES, planTokenCss, tokenCssOperations } from "./token-import.ts";
-import { CodebaseLinks, assertFolder, bringIn, keptFields, planWriteBack, removeTemporary, resolveWithFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
+import { tokenDrift } from "./token-drift.ts";
+import { CodebaseLinks, assertFolder, bringIn, keptFields, planWriteBack, readSourceFile, removeTemporary, resolveWithFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 import { ImportDesk, MAX_IMPORT_HTML_BYTES } from "./imports.ts";
 import { ConfirmationBroker, handleMcpMessage } from "./mcp.ts";
 import { ReferenceCatalog } from "./reference-catalog.ts";
@@ -244,6 +245,7 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     "POST /api/components/apply",
     "POST /api/tokens/css/plan",
     "POST /api/tokens/css/apply",
+    "POST /api/tokens/drift",
     "POST /api/references/load",
   ]);
   const assertMadeForOpenProject = (request: IncomingMessage): void => {
@@ -436,6 +438,12 @@ export async function startStudioHost(options: StudioHostOptions): Promise<Studi
     // Design tokens from a CSS file the person chose (Astryx's, or any :root custom properties):
     // a plan first, then exactly that plan as one transaction.
     "POST /api/tokens/css/plan": (body) => planTokenCss(requireSession().document, body).plan,
+    // The design system against a stylesheet in the connected codebase (#79): read, never changed.
+    "POST /api/tokens/drift": (body) => {
+      const current = requireSession();
+      const { file, content } = readSourceFile(connectedFolder(current.name), body?.file, { css: true });
+      return tokenDrift(current.document, content, file);
+    },
     "POST /api/tokens/css/apply": (body) => {
       const current = requireSession();
       const { plan, operations, intent } = tokenCssOperations(current.document, body);
