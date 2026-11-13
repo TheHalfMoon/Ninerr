@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, type DesignDoc, type DesignDocNode } from "@ninerr/code-ir";
+import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, styleToTailwind, type DesignDoc, type DesignDocNode, designToMarkup } from "@ninerr/code-ir";
 import { DRAWN_ID, planElement, withInstancesExpanded } from "@ninerr/renderer";
 import { compileTokens, designSystemOf, isCodePart, modeAttribute, styleValuesOf, tokenReferences } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
@@ -118,7 +118,8 @@ function tokensUsedUnder(document: any, nodeId: string): string | null {
   return null;
 }
 
-export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; stylesheet: string | null; tokens: string | null } {
+// A layer and what it holds as the design subset code-ir writes, as the canvas draws it.
+function exportDesign(document: any, nodeId: unknown): { design: DesignDoc; componentName: string; layers: number; codeParts: number; stylesheet: string | null; tokens: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   // Instances export as the layers they draw (ADR-0005), as the canvas shows them.
   const stored = document;
@@ -257,11 +258,97 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   };
   const componentName = pascal(typeof named.props?.name === "string" ? named.props.name : "", "Layer");
   const design: DesignDoc = { componentName, root: convert(nodeId, 1) };
+  return { design, componentName, layers, codeParts, stylesheet: appliedStylesheet(document, nodeId), tokens: tokensUsedUnder(stored, nodeId) };
+}
+
+const refused = (error: unknown) => new StudioError(422, "export-refused", error instanceof Error ? error.message.slice(0, 300) : "this layer cannot be exported");
+
+export function exportJsx(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; stylesheet: string | null; tokens: string | null } {
+  const { design, ...exported } = exportDesign(document, nodeId);
   try {
-    return { componentName, code: designToCode(design), layers, codeParts, stylesheet: appliedStylesheet(document, nodeId), tokens: tokensUsedUnder(stored, nodeId) };
+    return { ...exported, code: designToCode(design) };
   } catch (error) {
-    throw new StudioError(422, "export-refused", error instanceof Error ? error.message.slice(0, 300) : "this layer cannot be exported");
+    throw refused(error);
   }
+}
+
+/**
+ * A layer as JSX styled with Tailwind classes: each layer's style becomes classes that set exactly
+ * what it says (code-ir's styleToTailwind), added to its className. What no class can carry stays
+ * in its style object. A style is inline, which wins over any rule; a class wins only over less
+ * specific or earlier rules. So a layer keeps its whole style inline when it has classes of its
+ * own, and every layer does when a page stylesheet applies (`stylesheetApplies`): either could
+ * hold a rule for the same property. The page's stylesheet and the design tokens are CSS, as for
+ * the JSX export.
+ */
+export function exportTailwind(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; classes: number; keptAsStyle: number; stylesheetApplies: boolean; stylesheet: string | null; tokens: string | null } {
+  const { design, ...exported } = exportDesign(document, nodeId);
+  const stylesheetApplies = exported.stylesheet !== null;
+  let classes = 0;
+  let keptAsStyle = 0;
+  const visit = (node: DesignDocNode) => {
+    if (node.style !== undefined && (stylesheetApplies || typeof node.props.className === "string")) keptAsStyle += Object.keys(node.style).length;
+    else if (node.style !== undefined) {
+      const converted = styleToTailwind(node.style);
+      classes += converted.classes.length;
+      keptAsStyle += Object.keys(converted.left).length;
+      const own = typeof node.props.className === "string" ? node.props.className : "";
+      const className = [own, ...converted.classes].filter((part) => part !== "").join(" ");
+      if (className !== "") node.props = { ...node.props, className };
+      if (Object.keys(converted.left).length > 0) node.style = converted.left;
+      else delete node.style;
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(design.root);
+  try {
+    return { ...exported, code: designToCode(design), classes, keptAsStyle, stylesheetApplies };
+  } catch (error) {
+    throw refused(error);
+  }
+}
+
+// The page an exported HTML file is: no script, nothing loaded from anywhere, its own styles.
+const HTML_EXPORT_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:";
+
+/**
+ * A layer as a standalone HTML page, as the canvas draws it: its markup, the design tokens it
+ * uses, and its page's stylesheet, which applies inside the page as it does in its frame on the
+ * canvas (@scope, whose root takes what the canvas renamed html, body and :root to). A {…} part
+ * is code and is written as a comment. The page loads nothing and runs nothing.
+ */
+export function exportHtml(document: any, nodeId: unknown): { componentName: string; html: string; layers: number; codeParts: number } {
+  const { design, componentName, layers, codeParts, stylesheet, tokens } = exportDesign(document, nodeId);
+  // The page's stylesheet applies to the layer that holds it (on the canvas, @scope of that frame).
+  // Exporting that layer, its element is the scope; exporting one inside it, a wrapper stands in.
+  const owner = typeof nodeId === "string" && typeof document.nodes[nodeId]?.props?.stylesheet === "string";
+  const root = design.root;
+  if (stylesheet !== null && owner) root.props = { ...root.props, "data-ninerr-page": "" };
+  // The modes the layer is drawn in on the canvas, set on it or on a layer above it.
+  if (root.props["data-ninerr-mode"] === undefined && typeof nodeId === "string") {
+    for (let id = document.nodes[nodeId]?.parentId ?? null, depth = 0; id !== null && depth <= MAX_EXPORT_DEPTH; depth += 1) {
+      const modes = modeAttribute(document.nodes[id]?.props ?? {});
+      if (modes !== null) {
+        root.props = { ...root.props, "data-ninerr-mode": modes };
+        break;
+      }
+      id = document.nodes[id]?.parentId ?? null;
+    }
+  }
+  let markup: string;
+  try {
+    markup = designToMarkup(design);
+  } catch (error) {
+    throw refused(error);
+  }
+  const title = typeof document.nodes[nodeId as string]?.props?.name === "string" && document.nodes[nodeId as string].props.name.trim() !== "" ? document.nodes[nodeId as string].props.name.trim() : componentName;
+  const escape = (value: string) => value.replace(/&/gu, "&amp;").replace(/</gu, "&lt;").replace(/>/gu, "&gt;");
+  // `</style` inside a style would end it early; the stylesheets are sanitized CSS, which never needs it.
+  // The canvas's own defaults, below everything the page says (as on the canvas: a layer first).
+  const base = "@layer ninerr-canvas {\nbody { margin: 0; font-family: system-ui, sans-serif; }\n}";
+  const css = [base, tokens, stylesheet === null ? null : `@scope ([data-ninerr-page]) {\n${stylesheet}\n}`].filter((part) => part !== null).join("\n").replace(/<\/style/giu, "<\\/style");
+  const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta http-equiv="Content-Security-Policy" content="${HTML_EXPORT_CSP}">\n<title>${escape(title)}</title>\n${css === "" ? "" : `<style>\n${css}\n</style>\n`}</head>\n<body>\n${stylesheet !== null && !owner ? `<div data-ninerr-page>${markup}</div>` : markup}\n</body>\n</html>\n`;
+  return { componentName, html, layers, codeParts };
 }
 
 /** Layers for JSX source, inside a new page frame, as one operation. */

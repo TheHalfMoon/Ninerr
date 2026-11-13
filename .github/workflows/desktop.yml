@@ -15,6 +15,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels its older runs; every push to main runs to the end.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   package:
     name: Desktop package (${{ matrix.target }})
