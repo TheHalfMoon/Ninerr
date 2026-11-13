@@ -162,7 +162,7 @@ test("every editor action works from the keyboard, with visible focus", browserT
     // Tab reaches every toolbar control in order, each with a visible focus ring.
     await page.evaluate(() => document.activeElement.blur());
     const order = [];
-    for (let index = 0; index < 18; index += 1) {
+    for (let index = 0; index < 19; index += 1) {
       await page.keyboard.press("Tab");
       const now = await focused();
       order.push(now.id || now.label);

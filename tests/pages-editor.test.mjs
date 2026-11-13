@@ -53,9 +53,22 @@ test("add pages, pick one to show it, and undo an addition in one step", browser
     assert.deepEqual(await options(), [["Page 1", true], ["Page 2", false]]);
     assert.equal(await page.locator(`#layers [role=treeitem][data-node-id="${first}"]`).getAttribute("aria-selected"), "true");
     assert.equal(await inView(first), true, "Page 1 is shown");
-    // One Undo takes the second page away.
-    await page.locator("#action-undo").click();
+    // Back to Page 2 with Show after choosing it; with nothing selected, a new box goes on it.
+    await page.locator("#page-select").selectOption(second);
+    await page.locator("#action-show-page").click();
+    assert.equal(await inView(second), true);
+    await page.locator(`#layers [role=treeitem][data-node-id="${second}"] > .row`).click({ modifiers: ["Control"] });
+    await page.waitForFunction(() => document.querySelectorAll('#layers [aria-selected="true"]').length === 0);
+    await page.locator("#action-insert-box").click();
     await waitRevision(page, 3);
+    const { document: withBox } = await ok(call("GET", "/api/document"), "document");
+    const box = Object.values(withBox.nodes).find((node) => node.id.startsWith("box"));
+    assert.equal(box.parentId, second, "the new box is on the page shown");
+    // Undo takes the box and then the second page away.
+    await page.locator("#action-undo").click();
+    await waitRevision(page, 4);
+    await page.locator("#action-undo").click();
+    await waitRevision(page, 5);
     assert.deepEqual((await options()).map(([name]) => name), ["Page 1"]);
     assert.deepEqual(editor.errors, []);
   } finally {
