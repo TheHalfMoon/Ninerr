@@ -23,12 +23,12 @@ The server identifies itself as `ninerr` and tells the agent to call `guide` fir
 
 ## Tools
 
-`MCP_TOOL_NAMES` is the catalog: the 35 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
+`MCP_TOOL_NAMES` is the catalog: the 36 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
 
 | Class | Tools | Capability required |
 | --- | --- | --- |
 | read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task`, `design_tokens`, `list_components`, `instance_layers`, `search_components`, `get_component` | `read` |
-| write | `create_frame`, `set_text`, `rename_layers`, `set_styles`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance` | `document-write` |
+| write | `create_frame`, `set_text`, `rename_layers`, `set_styles`, `set_attributes`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance` | `document-write` |
 | consequential | `delete_layers`, `delete_token` | `document-write` plus a confirmation |
 | unknown | any other name | denied without consulting a policy |
 

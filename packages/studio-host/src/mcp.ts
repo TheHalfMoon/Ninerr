@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
-import { styleDeclarationProblem } from "@ninerr/renderer";
+import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
 import { componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
 import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
 import { exportHtml, exportJsx, exportTailwind } from "./code.ts";
@@ -242,7 +242,7 @@ const TOOLS: Tool[] = [
         "A Ninerr document is a tree of layers. Each layer has an id, a type (frame, element, text, ...) and props: tag (an HTML element), text, name (the layer name), attributes and style (CSS properties).",
         "Every edit you make is one history transaction attributed to you; the person sees it live on the canvas and can undo it.",
         "Read with project_info, layer_tree, layer_children, layer_details, find_layers and selection; layer_code gives a layer as JSX.",
-        "Edit with create_frame, set_text, rename_layers, set_styles, move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
+        "Edit with create_frame, set_text, rename_layers, set_styles, set_attributes (classes, dir for right-to-left text, aria-*), move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
         "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
         "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
@@ -341,6 +341,50 @@ const TOOLS: Tool[] = [
         return { type: "set-props", nodeId: node.id, set: { style } };
       });
       return edit(operations, "Set styles");
+    },
+  },
+  {
+    name: "set_attributes",
+    title: "Set attributes",
+    description: "Set or remove HTML attributes of layers: class (space-separated), dir (\"ltr\", \"rtl\" or \"auto\", for right-to-left text), lang, title, role, aria-*, data-*, alt, and the others the canvas draws for each element. null removes one. An attribute the canvas would not draw (an event handler, style, a link that is not http, https, mailto or tel) is refused, saying why.",
+    inputSchema: object({ updates: { type: "array", minItems: 1, maxItems: 500, items: object({ nodeId: { type: "string" }, attributes: { type: "object", additionalProperties: { type: ["string", "null"] } } }, ["nodeId", "attributes"]) } }, ["updates"]),
+    run: ({ session, edit }, args) => {
+      if (!Array.isArray(args.updates) || args.updates.length === 0 || args.updates.length > 500) throw new ToolError("updates must be a list of 1-500 updates");
+      const operations = args.updates.map((update: any) => {
+        const node = nodeOf(session, update?.nodeId);
+        if (update.attributes === null || typeof update.attributes !== "object" || Array.isArray(update.attributes)) throw new ToolError("each update needs an attributes object");
+        if (node.type === "component-instance") throw new ToolError(`${node.id} is an instance, which draws its component's attributes: set them on the component, or use set_instance_override`);
+        const attributes: Record<string, string> = { ...(node.props?.attributes && typeof node.props.attributes === "object" ? node.props.attributes : {}) };
+        // The element as the canvas draws it, without attributes: what it drops already (a tag it
+        // does not know) is not counted against an attribute.
+        const element = { type: node.type, props: node.props?.tag === undefined ? {} : { tag: node.props.tag } };
+        const baseline = planElement(element).dropped;
+        for (const [raw, value] of Object.entries(update.attributes)) {
+          const name = raw.toLowerCase();
+          if (!/^[a-z][a-z0-9-]{0,63}$/u.test(name)) throw new ToolError(`${JSON.stringify(raw).slice(0, 80)} is not an attribute name`);
+          // Names match whatever their case (an SVG's viewBox is stored as written); the key already
+          // there keeps its spelling, so a change replaces it and null removes it.
+          const key = Object.keys(attributes).find((existing) => existing.toLowerCase() === name) ?? raw;
+          if (value === null) {
+            delete attributes[key];
+            continue;
+          }
+          if (typeof value !== "string" || value.length > 2000) throw new ToolError(`the value for ${name} must be a string of at most 2000 characters, or null`);
+          const written = name === "class" ? [...new Set(value.split(/[\t\n\f\r ]+/u).filter((part) => part !== ""))].join(" ") : value;
+          if (name === "dir" && !["ltr", "rtl", "auto"].includes(written)) throw new ToolError("dir is \"ltr\", \"rtl\" or \"auto\"");
+          // The canvas's own rule for this element (planElement): what it would not draw is refused,
+          // and what it draws is stored as it draws it (a link trimmed, an input type lowercased).
+          const plan = planElement({ ...element, props: { ...element.props, attributes: { [key]: written } } });
+          if (plan.dropped > baseline) {
+            throw new ToolError(`${name}${name === "href" || name === "src" ? `="${written.slice(0, 60)}"` : ""} is not an attribute the canvas draws on this ${typeof node.props?.tag === "string" ? `<${node.props.tag}>` : node.type}`);
+          }
+          const drawn = Object.values(plan.attributes as Record<string, string>)[0] ?? written;
+          delete attributes[key];
+          if (!(drawn === "" && name === "class")) attributes[key] = drawn;
+        }
+        return { type: "set-props", nodeId: node.id, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) };
+      });
+      return edit(operations, "Set attributes");
     },
   },
   {
