@@ -4,7 +4,7 @@
 // response or the event stream, whichever arrives first), in revision order. A gap or a
 // change that does not apply means the copy is out of date, and it is fetched again.
 
-import { mountCanvas, insertNode, removeNodes, setStyle, setText, setLayout } from "/packages/canvas/src/index.mjs";
+import { mountCanvas, insertNode, removeNodes, setStyle, setText, constraintOf, setConstraint, setLayout } from "/packages/canvas/src/index.mjs";
 import { styleDeclarationProblem } from "/packages/renderer/src/index.mjs";
 import { applyCommittedTransaction } from "/packages/history/src/index.mjs";
 import { isCodePart, textLayerOf } from "/packages/document-model/src/index.mjs";
@@ -2772,6 +2772,8 @@ function renderInspector() {
   }
   const styleFields = STYLE_FIELDS.map(([name, label]) => field(`style:${name}`, label, typeof style[name] === "string" ? style[name] : ""));
   children.push(el("div", { class: "pair" }, styleFields.slice(0, 2)), el("div", { class: "pair" }, styleFields.slice(2, 4)), ...styleFields.slice(4));
+  // How a positioned layer keeps its place when its parent changes size.
+  if (constraintOf(style, "x") !== null) children.push(constraintsSection(style));
   // Auto layout (CSS flex) for a layer that holds others: its children in a row or a column,
   // with the space between them, its padding, and how they line up.
   if (node.type !== "text" && !isCodePart(node)) children.push(layoutSection(style));
@@ -2801,6 +2803,22 @@ function renderInspector() {
     input?.focus();
     if (typing && typing.node === node.id && typing.start !== null) input?.setSelectionRange(typing.start, typing.end);
   }
+}
+
+// The inspector's constraints: which of its parent's edges a positioned layer keeps its distance
+// from, on each axis, or its centre.
+const CONSTRAINTS = {
+  x: [["start", "Left"], ["end", "Right"], ["both", "Left and right"], ["centre", "Centre"]],
+  y: [["start", "Top"], ["end", "Bottom"], ["both", "Top and bottom"], ["centre", "Centre"]],
+};
+function constraintsSection(style) {
+  const select = (axis, label) => {
+    const value = constraintOf(style, axis);
+    const control = el("select", { id: `inspect-constraint-${axis}`, name: `constraint:${axis}` }, ...CONSTRAINTS[axis].map(([option, text]) => el("option", { value: option, selected: option === value }, text)));
+    control.dataset.original = value;
+    return el("label", { for: control.id }, label, control);
+  };
+  return el("fieldset", { id: "inspect-constraints", class: "pair" }, el("legend", {}, "Pin to parent"), select("x", "Horizontally"), select("y", "Vertically"));
 }
 
 // The inspector's auto layout section: how the selected layer places what it holds.
@@ -2886,6 +2904,18 @@ function onInspectorChange(event) {
     if (names === "") delete attributes.class;
     else attributes.class = names;
     commit([{ type: "set-props", nodeId, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) }], names === "" ? "Remove classes" : "Change classes");
+  }
+  else if (input.name === "constraint:x" || input.name === "constraint:y") {
+    const axis = input.name.slice(-1);
+    const measured = canvas.measureConstraint(nodeId, axis);
+    if (measured === null) {
+      // Drawn in the flow or not at all (a class can say so): nothing to pin it by.
+      setStatus("Not changed: this layer is not drawn absolutely positioned, so it cannot be pinned.");
+      renderInspector();
+      return;
+    }
+    const names = Object.fromEntries(CONSTRAINTS[axis]);
+    commit(setConstraint(state.document, nodeId, axis, input.value, measured), `Pin layer: ${names[input.value].toLowerCase()}`);
   }
   else if (input.name === "layout:mode") {
     // Placing them freely keeps each child where the row or column put it.

@@ -80,10 +80,35 @@ export function normalizeSelection(document, selection) {
 // ---------- commands (pure: document state in, history operations out) ----------
 
 const px = (value) => `${Math.round(value * 100) / 100}px`;
+// A length in pixels, or 0, which CSS takes as a length without a unit.
 const numeric = (value) => {
-  const match = typeof value === "string" ? /^(-?\d+(?:\.\d+)?)px$/u.exec(value.trim()) : null;
-  return match ? Number(match[1]) : null;
+  const match = typeof value === "string" ? /^(-?\d+(?:\.\d+)?)px$|^-?(0)(?:\.0+)?$/u.exec(value.trim()) : null;
+  return match ? Number(match[1] ?? match[2]) : null;
 };
+// A layer pinned to its parent's centre: `calc(50% + 12px)` or `calc(50% - 12px)`.
+const CENTRED = /^calc\(50% ([+-]) (\d+(?:\.\d+)?)px\)$/u;
+const centreOffset = (value) => {
+  const match = typeof value === "string" ? CENTRED.exec(value.trim()) : null;
+  return match ? (match[1] === "-" ? -1 : 1) * Number(match[2]) : null;
+};
+const centred = (offset) => {
+  const rounded = Math.round(offset * 100) / 100;
+  return `calc(50% ${rounded < 0 ? "-" : "+"} ${Math.abs(rounded)}px)`;
+};
+// Each axis's properties: where it starts, where it ends, and its size.
+const AXES = { x: ["left", "right", "width"], y: ["top", "bottom", "height"] };
+const set = (value) => typeof value === "string" && value.trim() !== "" && value.trim() !== "auto";
+// `inset` written as its four longhands (one to four values, as CSS reads them), so a pin can be
+// read and changed one edge at a time; a longhand already written wins, as it follows in the
+// canvas's order. A value with a function in it is left as it is.
+function withInsetExpanded(style) {
+  if (typeof style.inset !== "string" || style.inset.includes("(")) return style;
+  const parts = style.inset.trim().split(/\s+/u);
+  if (parts.length < 1 || parts.length > 4 || parts[0] === "") return style;
+  const [top, right = top, bottom = top, left = right] = parts;
+  const { inset: _inset, ...rest } = style;
+  return { top, right, bottom, left, ...rest };
+}
 const styleOf = (document, id) => {
   const style = document.nodes[id]?.props?.style;
   return style !== null && typeof style === "object" && !Array.isArray(style) ? style : {};
@@ -99,8 +124,9 @@ const styleOf = (document, id) => {
 export function moveBy(document, ids, dx, dy, measured = {}) {
   return normalizeSelection(document, ids).map((id) => {
     const style = styleOf(document, id);
-    const positioned = style.position === "absolute" && numeric(style.left) !== null && numeric(style.top) !== null;
-    if (positioned) return { type: "set-props", nodeId: id, set: { style: { ...style, left: px(numeric(style.left) + dx), top: px(numeric(style.top) + dy) } } };
+    // A positioned layer moves by what pins it on each axis (its constraint), which it keeps.
+    const moved = style.position === "absolute" ? movePinned(movePinned(withInsetExpanded(style), "x", dx), "y", dy) : null;
+    if (moved !== null) return { type: "set-props", nodeId: id, set: { style: moved } };
     const box = measured[id] ?? {};
     const next = { ...style, position: "absolute", left: px((box.left ?? 0) + dx), top: px((box.top ?? 0) + dy) };
     // right/bottom would now fight left/top; the measured size replaces what they implied.
@@ -219,13 +245,77 @@ export function snapMove(box, targets, threshold) {
 }
 
 /**
+ * `style` moved by `delta` on `axis`, keeping how it is pinned, or null when that axis is not
+ * pinned in pixels (or the centre): such a layer is measured and placed from where it is drawn.
+ */
+function movePinned(style, axis, delta) {
+  if (style === null) return null;
+  const [start, end] = AXES[axis];
+  const from = numeric(style[start]);
+  const to = numeric(style[end]);
+  const centre = centreOffset(style[start]);
+  if (from !== null) return { ...style, [start]: px(from + delta), ...(to !== null ? { [end]: px(to - delta) } : {}) };
+  if (centre !== null) return { ...style, [start]: centred(centre + delta) };
+  if (to !== null && !set(style[start])) return { ...style, [end]: px(to - delta) };
+  return null;
+}
+
+/**
+ * How a positioned layer is pinned to its parent on `axis` ("x" or "y"): "start" (left or top),
+ * "end" (right or bottom), "both" (both edges: it stretches with its parent) or "centre". Null
+ * for a layer that is not absolutely positioned.
+ */
+export function constraintOf(style, axis) {
+  if (style?.position !== "absolute") return null;
+  const [start, end, size] = AXES[axis];
+  const expanded = withInsetExpanded(style);
+  if (centreOffset(expanded[start]) !== null) return "centre";
+  // With a size of its own as well, its start edge wins (the end inset is ignored): pinned to
+  // the start, not stretched.
+  if (set(expanded[start]) && set(expanded[end])) return set(expanded[size]) ? "start" : "both";
+  if (set(expanded[end])) return "end";
+  return "start";
+}
+
+/**
+ * Pin a positioned layer to its parent on `axis` as `mode` ("start", "end", "both" or
+ * "centre"), keeping where it is drawn now. `measured` is { start, end, size, parent } on that
+ * axis: the inset it has from its parent's start and end edges (what CSS left and right would
+ * be), its CSS size, and its parent's size (the containing block).
+ */
+export function setConstraint(document, id, axis, mode, measured) {
+  const [start, end, size] = AXES[axis];
+  const values = [measured?.start, measured?.end, measured?.size, measured?.parent];
+  if (!AXES[axis] || !["start", "end", "both", "centre"].includes(mode) || !values.every(Number.isFinite)) return [];
+  const style = { ...withInsetExpanded(styleOf(document, id)), position: "absolute" };
+  delete style[start];
+  delete style[end];
+  if (mode === "start" || mode === "both") style[start] = px(measured.start);
+  if (mode === "end" || mode === "both") style[end] = px(measured.end);
+  if (mode === "centre") style[start] = centred(measured.start - measured.parent / 2);
+  // Pinned to both edges its size follows its parent's; pinned to one, it keeps its own.
+  if (mode === "both") delete style[size];
+  else if (style[size] === undefined) style[size] = px(measured.size);
+  return [{ type: "set-props", nodeId: id, set: { style } }];
+}
+
+/**
  * Set `id`'s CSS `width`/`height` (the box its `box-sizing` names), at least 1px. An inline
  * box ignores both, so `{ inline: true }` also makes it `inline-block`, which keeps it in the
  * line while honouring the size.
  */
-export function resizeTo(document, id, width, height, { inline = false } = {}) {
+export function resizeTo(document, id, width, height, { inline = false, from = null } = {}) {
   if (!Number.isFinite(width) || !Number.isFinite(height)) return [];
-  const style = { ...styleOf(document, id), width: px(Math.max(1, width)), height: px(Math.max(1, height)) };
+  const style = withInsetExpanded({ ...styleOf(document, id) });
+  // `from` is its CSS size now. Its start edge stays put: pinned to both edges, it is resized by
+  // its end inset (it has no size of its own); pinned to the end, that inset moves with it.
+  for (const [axis, next, before] of [["x", Math.max(1, width), from?.width], ["y", Math.max(1, height), from?.height]]) {
+    const [, end, size] = AXES[axis];
+    const mode = constraintOf(style, axis);
+    const inset = numeric(style[end]);
+    if ((mode === "both" || mode === "end") && inset !== null && Number.isFinite(before)) style[end] = px(inset - (next - before));
+    if (mode !== "both" || inset === null || !Number.isFinite(before)) style[size] = px(next);
+  }
   if (inline) style.display = "inline-block";
   return [{ type: "set-props", nodeId: id, set: { style } }];
 }
@@ -703,7 +793,7 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
         operations = ids.length > 0 ? moveBy(document, ids, dx, dy, boxes) : [];
         intent = ids.length === 1 ? "Move layer" : "Move layers";
       } else if (Object.hasOwn(document.nodes, drag.id)) {
-        operations = resizeTo(document, drag.id, drag.width + dx, drag.height + dy, { inline: drag.inlineBox });
+        operations = resizeTo(document, drag.id, drag.width + dx, drag.height + dy, { inline: drag.inlineBox, from: { width: drag.width, height: drag.height } });
         intent = "Resize layer";
       }
     }
@@ -881,7 +971,29 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       const element = renderer.elementFor(selection[0]);
       const size = cssSize(element);
       const inline = frameDocument.defaultView.getComputedStyle(element).display === "inline";
-      commit(resizeTo(document, selection[0], size.width + dw, size.height + dh, { inline }), "Resize layer");
+      commit(resizeTo(document, selection[0], size.width + dw, size.height + dh, { inline, from: size }), "Resize layer");
+    },
+    /**
+     * What setConstraint needs to pin layer `id` on `axis` where it is drawn: its insets from
+     * its containing block's edges, its CSS size, and that block's size. Null when it is not
+     * drawn or not absolutely positioned.
+     */
+    measureConstraint(id, axis) {
+      const element = renderer.elementFor(id);
+      if (!element) return null;
+      const computed = frameDocument.defaultView.getComputedStyle(element);
+      const block = element.offsetParent;
+      if (computed.position !== "absolute" || block === null) return null;
+      const [start, end] = AXES[axis];
+      const capital = (name) => name[0].toUpperCase() + name.slice(1);
+      // Its containing block's padding box, and its own margin box in it. The start inset is the
+      // one it is drawn at (auto resolved); the end inset is what is left, since a written end
+      // inset is ignored when the start and the size are set too.
+      const parent = axis === "x" ? block.clientWidth : block.clientHeight;
+      const before = parseFloat(computed[start]);
+      const outer = (axis === "x" ? element.offsetWidth : element.offsetHeight) + parseFloat(computed[`margin${capital(start)}`]) + parseFloat(computed[`margin${capital(end)}`]);
+      const size = cssSize(element)[AXES[axis][2]];
+      return { start: before, end: parent - before - outer, size, parent };
     },
     /** Drop a held drag preview: the caller's commit of it was not applied. */
     clearPreview() {
