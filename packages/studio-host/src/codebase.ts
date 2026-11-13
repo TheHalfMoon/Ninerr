@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, fchmodSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { applyPatch, buildCodeIr, exportedComponents } from "@ninerr/code-ir";
-import { shorthandsFirst } from "@ninerr/renderer";
+import { shorthandsFirst, styleDeclarationProblem } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
 import { LEGACY_CODEBASE_LINKS_FILE, registrySource } from "./legacy.ts";
 import { readTrustedFile, TrustedFileUnavailableError, writeTrustedFile } from "./trusted-file.ts";
@@ -743,8 +743,10 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
       const field = propField(prop);
       const fileProp = symbol.props.find((candidate: any) => candidate.name === prop && typeof candidate.literal.value === "string");
       let mine = layerValue(node, prop);
+      // A style is compared as the layer holds it, not as its joined text reads again (#382).
+      const unchanged = prop === "style" ? layerStyleIs(node, base) : equalProp(prop, mine, base);
       if (!fileProp) {
-        if (!equalProp(prop, mine, base)) conflicts.push({ nodeId: node.id, field, reason: "no longer a literal string in the source" });
+        if (!unchanged) conflicts.push({ nodeId: node.id, field, reason: "no longer a literal string in the source" });
         continue;
       }
       const fileValue: string = fileProp.literal.value;
@@ -752,15 +754,14 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
         notWritten.push({ nodeId: node.id, reason: `removing ${prop} is not written back` });
         continue;
       }
-      // Not changed here: the base stays, so a change made in the file is never undone. A style
-      // is compared as the layer holds it, not as its joined text reads again (#382).
-      if (prop === "style" ? layerStyleIs(node, base) : equalProp(prop, mine, base)) continue;
+      // Not changed here: the base stays, so a change made in the file is never undone.
+      if (unchanged) continue;
       if (fileMatchesLayer(prop, fileValue, mine)) {
         nextBase.props[prop] = fileValue;
         matched.push({ nodeId: node.id, field, value: fileValue });
         continue;
       }
-      const unwritable = propUnwritable(prop, mine, fileValue, base, exclude.has(`${node.id}:${field}`));
+      const unwritable = propUnwritable(prop, mine, fileValue, base, exclude.has(`${node.id}:${field}`), node.props?.style ?? {});
       if (!sameFileValue(prop, fileValue, base) && (!keptAgainst(keep, `${node.id}:${field}`, prop, fileValue) || unwritable !== null)) {
         conflicts.push({ nodeId: node.id, field, reason: unwritable === null ? "changed both here and in the file" : `changed both here and in the file; ${unwritable}`, here: mine, file: fileValue, base, overridable: true, keepable: unwritable === null });
         continue;
@@ -859,11 +860,16 @@ function textUnwritable(mine: string, live: string, excluded: boolean): string |
 }
 
 /** Why a layer's prop value cannot be written into the source, or null. */
-function propUnwritable(prop: string, mine: string, fileValue: string, base: string, excluded: boolean): string | null {
+function propUnwritable(prop: string, mine: string, fileValue: string, base: string, excluded: boolean, style: Record<string, unknown>): string | null {
   if (/[\r\n\u2028\u2029]/u.test(mine)) return `${prop} with a line break is not written`;
-  // The layer's style, joined into text, must read back as the same declarations: a value that
-  // leaves a quote or bracket open would swallow those after it (#382).
-  if (prop === "style" && !plainStyle(mine)) return "a style value that leaves a quote or bracket open, or that Ninerr cannot write exactly, is not written back";
+  // A declaration the canvas does not draw is not written either: one that leaves a quote or
+  // bracket open would swallow those after it in the file (#382).
+  if (prop === "style") {
+    for (const [name, value] of Object.entries(style)) {
+      const problem = styleDeclarationProblem(name, typeof value === "number" ? String(value) : value);
+      if (problem !== null) return `${problem}, so the style is not written back`;
+    }
+  }
   // A write rebuilds the style from the layer's, which is read from the file by
   // styleProperties: a part it does not see would be lost, from the file as it is or, through
   // the layer, from the file as it was brought in (reviews of #291).

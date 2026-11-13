@@ -15,7 +15,7 @@ let clock = 0;
 const now = () => new Date(Date.UTC(2026, 10, 13, 12, 0, 0) + clock++ * 1000).toISOString();
 
 test("a value that leaves a quote or bracket open is never drawn, saying why", () => {
-  for (const value of ["calc(1px", "\"a", "'a", "calc(1px))", "attr(x]", "[a", "var(--a", "a)"]) {
+  for (const value of ["calc(1px", "\"a", "'a", "calc(1px))", "attr(x]", "[a", "var(--a", "a)", "(]", "[)"]) {
     assert.match(styleDeclarationProblem("width", value) ?? "", /leaves a quote or bracket open/u, value);
     assert.deepEqual(planElement({ id: "n", type: "element", props: { tag: "div", style: { width: value, top: "1px" } } }).style, { top: "1px" }, value);
   }
@@ -56,6 +56,22 @@ test("a layer's value that leaves a bracket open is not written back, and the fi
   assert.deepEqual([plan.changes, plan.conflicts], [[], []], JSON.stringify(plan));
   assert.ok(plan.notWritten.some((entry) => /leaves a quote or bracket open/u.test(entry.reason)), JSON.stringify(plan.notWritten));
   assert.equal(readFileSync(file, "utf8"), BADGE);
+});
+
+test("a layer's !important is still written back: only what the canvas does not draw is refused", async (t) => {
+  const { call, file, element, revision } = await broughtIn(t, BADGE, "Badge");
+  await ok(call("POST", "/api/edit", { baseRevision: revision, intent: "Edit", operations: [{ type: "set-props", nodeId: element, set: { style: { color: "red !important", top: "1px" } } }] }), "edit");
+  const plan = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual([plan.changes.map(({ field }) => field), plan.conflicts, plan.notWritten], [["style"], [], []], JSON.stringify(plan));
+  assert.match(plan.changes[0].to, /color: red !important/u);
+  assert.equal(readFileSync(file, "utf8"), BADGE, "a preview writes nothing");
+});
+
+test("an untouched style whose prop became code is not a conflict", async (t) => {
+  const { call, file, element } = await broughtIn(t, BADGE.replace("\"color: green; top: 1px\"", "'top: 1px; font-family: \"a'"), "Badge");
+  writeFileSync(file, BADGE.replace("\"color: green; top: 1px\"", "{{ top: 1 }}"));
+  const plan = await ok(call("POST", "/api/codebase/preview", { nodeId: element }), "preview");
+  assert.deepEqual(plan.conflicts, [], JSON.stringify(plan));
 });
 
 test("an untouched style is not reported unwritten because its joined text reads differently", async (t) => {
