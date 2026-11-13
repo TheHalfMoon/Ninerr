@@ -1376,7 +1376,46 @@ async function openCodeDialog() {
             output.select();
             setStatus("Select the code and copy it.");
           }
-        } }, "Copy code")),
+        } }, "Copy code"),
+        // The same layer as a standalone page: its markup, its tokens and its page's stylesheet.
+        el("button", { type: "button", id: "code-export-html", onclick: async () => {
+          let page;
+          try {
+            page = await state.client.post("/api/code/export-html", { nodeId: selected });
+          } catch (failure) {
+            if (handleSessionEnded(failure)) return;
+            error.textContent = describeError(failure);
+            return;
+          }
+          try {
+            await navigator.clipboard.writeText(page.html);
+            setStatus(`HTML page copied: ${page.layers} layer${page.layers === 1 ? "" : "s"}${page.codeParts > 0 ? `, ${page.codeParts} {…} part${page.codeParts === 1 ? "" : "s"} written as comments` : ""}.`);
+          } catch {
+            output.value = page.html;
+            output.select();
+            setStatus("The HTML page is in the code box: select it and copy it.");
+          }
+        } }, "Copy as an HTML page"),
+        // The same JSX with its styles as Tailwind classes: each one says exactly what the style did.
+        el("button", { type: "button", id: "code-export-tailwind", onclick: async () => {
+          let styled;
+          try {
+            styled = await state.client.post("/api/code/export-tailwind", { nodeId: selected });
+          } catch (failure) {
+            if (handleSessionEnded(failure)) return;
+            error.textContent = describeError(failure);
+            return;
+          }
+          const kept = styled.stylesheetApplies ? "; styles kept inline, since the page's stylesheet applies to these layers" : styled.keptAsStyle > 0 ? `; ${styled.keptAsStyle} declaration${styled.keptAsStyle === 1 ? "" : "s"} kept as style, where a class would not say exactly the same` : "";
+          try {
+            await navigator.clipboard.writeText(styled.code);
+            setStatus(`Tailwind code copied: ${styled.classes} class${styled.classes === 1 ? "" : "es"}${kept}.`);
+          } catch {
+            output.value = styled.code;
+            output.select();
+            setStatus(`The Tailwind code is in the code box: select it and copy it${kept}.`);
+          }
+        } }, "Copy with Tailwind classes")),
         // The stylesheet that applies to it (#283), which the canvas applies to its frame alone.
         ...(typeof exported.stylesheet === "string" ? [(() => {
           const sheet = el("textarea", { id: "code-export-css", rows: 6, readonly: true, spellcheck: "false" });
