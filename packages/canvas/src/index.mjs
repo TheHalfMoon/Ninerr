@@ -80,9 +80,10 @@ export function normalizeSelection(document, selection) {
 // ---------- commands (pure: document state in, history operations out) ----------
 
 const px = (value) => `${Math.round(value * 100) / 100}px`;
+// A length in pixels, or 0, which CSS takes as a length without a unit.
 const numeric = (value) => {
-  const match = typeof value === "string" ? /^(-?\d+(?:\.\d+)?)px$/u.exec(value.trim()) : null;
-  return match ? Number(match[1]) : null;
+  const match = typeof value === "string" ? /^(-?\d+(?:\.\d+)?)px$|^-?(0)(?:\.0+)?$/u.exec(value.trim()) : null;
+  return match ? Number(match[1] ?? match[2]) : null;
 };
 // A layer pinned to its parent's centre: `calc(50% + 12px)` or `calc(50% - 12px)`.
 const CENTRED = /^calc\(50% ([+-]) (\d+(?:\.\d+)?)px\)$/u;
@@ -96,6 +97,18 @@ const centred = (offset) => {
 };
 // Each axis's properties: where it starts, where it ends, and its size.
 const AXES = { x: ["left", "right", "width"], y: ["top", "bottom", "height"] };
+const set = (value) => typeof value === "string" && value.trim() !== "" && value.trim() !== "auto";
+// `inset` written as its four longhands (one to four values, as CSS reads them), so a pin can be
+// read and changed one edge at a time; a longhand already written wins, as it follows in the
+// canvas's order. A value with a function in it is left as it is.
+function withInsetExpanded(style) {
+  if (typeof style.inset !== "string" || style.inset.includes("(")) return style;
+  const parts = style.inset.trim().split(/\s+/u);
+  if (parts.length < 1 || parts.length > 4 || parts[0] === "") return style;
+  const [top, right = top, bottom = top, left = right] = parts;
+  const { inset: _inset, ...rest } = style;
+  return { top, right, bottom, left, ...rest };
+}
 const styleOf = (document, id) => {
   const style = document.nodes[id]?.props?.style;
   return style !== null && typeof style === "object" && !Array.isArray(style) ? style : {};
@@ -112,7 +125,7 @@ export function moveBy(document, ids, dx, dy, measured = {}) {
   return normalizeSelection(document, ids).map((id) => {
     const style = styleOf(document, id);
     // A positioned layer moves by what pins it on each axis (its constraint), which it keeps.
-    const moved = style.position === "absolute" ? movePinned(movePinned(style, "x", dx), "y", dy) : null;
+    const moved = style.position === "absolute" ? movePinned(movePinned(withInsetExpanded(style), "x", dx), "y", dy) : null;
     if (moved !== null) return { type: "set-props", nodeId: id, set: { style: moved } };
     const box = measured[id] ?? {};
     const next = { ...style, position: "absolute", left: px((box.left ?? 0) + dx), top: px((box.top ?? 0) + dy) };
@@ -136,7 +149,7 @@ function movePinned(style, axis, delta) {
   const centre = centreOffset(style[start]);
   if (from !== null) return { ...style, [start]: px(from + delta), ...(to !== null ? { [end]: px(to - delta) } : {}) };
   if (centre !== null) return { ...style, [start]: centred(centre + delta) };
-  if (to !== null && style[start] === undefined) return { ...style, [end]: px(to - delta) };
+  if (to !== null && !set(style[start])) return { ...style, [end]: px(to - delta) };
   return null;
 }
 
@@ -147,11 +160,13 @@ function movePinned(style, axis, delta) {
  */
 export function constraintOf(style, axis) {
   if (style?.position !== "absolute") return null;
-  const [start, end] = AXES[axis];
-  if (centreOffset(style[start]) !== null) return "centre";
-  const pinned = (value) => typeof value === "string" && value.trim() !== "" && value.trim() !== "auto";
-  if (pinned(style[start]) && pinned(style[end])) return "both";
-  if (pinned(style[end])) return "end";
+  const [start, end, size] = AXES[axis];
+  const expanded = withInsetExpanded(style);
+  if (centreOffset(expanded[start]) !== null) return "centre";
+  // With a size of its own as well, its start edge wins (the end inset is ignored): pinned to
+  // the start, not stretched.
+  if (set(expanded[start]) && set(expanded[end])) return set(expanded[size]) ? "start" : "both";
+  if (set(expanded[end])) return "end";
   return "start";
 }
 
@@ -165,7 +180,7 @@ export function setConstraint(document, id, axis, mode, measured) {
   const [start, end, size] = AXES[axis];
   const values = [measured?.start, measured?.end, measured?.size, measured?.parent];
   if (!AXES[axis] || !["start", "end", "both", "centre"].includes(mode) || !values.every(Number.isFinite)) return [];
-  const style = { ...styleOf(document, id), position: "absolute" };
+  const style = { ...withInsetExpanded(styleOf(document, id)), position: "absolute" };
   delete style[start];
   delete style[end];
   if (mode === "start" || mode === "both") style[start] = px(measured.start);
@@ -184,7 +199,7 @@ export function setConstraint(document, id, axis, mode, measured) {
  */
 export function resizeTo(document, id, width, height, { inline = false, from = null } = {}) {
   if (!Number.isFinite(width) || !Number.isFinite(height)) return [];
-  const style = { ...styleOf(document, id) };
+  const style = withInsetExpanded({ ...styleOf(document, id) });
   // `from` is its CSS size now. Its start edge stays put: pinned to both edges, it is resized by
   // its end inset (it has no size of its own); pinned to the end, that inset moves with it.
   for (const [axis, next, before] of [["x", Math.max(1, width), from?.width], ["y", Math.max(1, height), from?.height]]) {
@@ -672,15 +687,18 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       const element = renderer.elementFor(id);
       if (!element) return null;
       const computed = frameDocument.defaultView.getComputedStyle(element);
-      if (computed.position !== "absolute") return null;
+      const block = element.offsetParent;
+      if (computed.position !== "absolute" || block === null) return null;
       const [start, end] = AXES[axis];
       const capital = (name) => name[0].toUpperCase() + name.slice(1);
-      // An absolutely positioned box's computed insets are its used ones, auto included.
+      // Its containing block's padding box, and its own margin box in it. The start inset is the
+      // one it is drawn at (auto resolved); the end inset is what is left, since a written end
+      // inset is ignored when the start and the size are set too.
+      const parent = axis === "x" ? block.clientWidth : block.clientHeight;
       const before = parseFloat(computed[start]);
-      const after = parseFloat(computed[end]);
       const outer = (axis === "x" ? element.offsetWidth : element.offsetHeight) + parseFloat(computed[`margin${capital(start)}`]) + parseFloat(computed[`margin${capital(end)}`]);
       const size = cssSize(element)[AXES[axis][2]];
-      return { start: before, end: after, size, parent: before + outer + after };
+      return { start: before, end: parent - before - outer, size, parent };
     },
     /** Drop a held drag preview: the caller's commit of it was not applied. */
     clearPreview() {

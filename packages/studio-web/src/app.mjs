@@ -2692,8 +2692,14 @@ function onInspectorChange(event) {
   else if (input.name === "constraint:x" || input.name === "constraint:y") {
     const axis = input.name.slice(-1);
     const measured = canvas.measureConstraint(nodeId, axis);
+    if (measured === null) {
+      // Drawn in the flow or not at all (a class can say so): nothing to pin it by.
+      setStatus("Not changed: this layer is not drawn absolutely positioned, so it cannot be pinned.");
+      renderInspector();
+      return;
+    }
     const names = Object.fromEntries(CONSTRAINTS[axis]);
-    commit(measured === null ? [] : setConstraint(state.document, nodeId, axis, input.value, measured), `Pin layer: ${names[input.value].toLowerCase()}`);
+    commit(setConstraint(state.document, nodeId, axis, input.value, measured), `Pin layer: ${names[input.value].toLowerCase()}`);
   }
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);

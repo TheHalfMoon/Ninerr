@@ -105,6 +105,11 @@ test("constraints: read, set, and kept by moves and resizes", () => {
   assert.equal(constraintOf({ position: "absolute", left: "1px", right: "auto" }, "x"), "start");
   assert.equal(constraintOf({ position: "absolute", top: "1px", bottom: "2px" }, "y"), "both");
   assert.equal(constraintOf({ position: "absolute", left: "calc(50% - 80px)" }, "x"), "centre");
+  assert.equal(constraintOf({ position: "absolute", left: "1px", right: "2px", width: "9px" }, "x"), "start", "with a width of its own, its left wins: not stretched");
+  assert.equal(constraintOf({ position: "absolute", left: "auto", right: "2px" }, "x"), "end");
+  assert.equal(constraintOf({ position: "absolute", inset: "0" }, "x"), "both", "inset is read as its four edges");
+  assert.equal(constraintOf({ position: "absolute", inset: "0 auto auto 4px" }, "x"), "start");
+  assert.equal(constraintOf({ position: "absolute", inset: "auto 4px 0 auto" }, "y"), "end");
 
   // Set, keeping the place: a 100-wide box 20 from the left of a 400-wide parent.
   const measured = { start: 20, end: 280, size: 100, parent: 400 };
@@ -124,10 +129,21 @@ test("constraints: read, set, and kept by moves and resizes", () => {
   assert.equal(moved(pin("centre")).left, "calc(50% - 175px)");
   assert.equal(styled(apply(pin("centre"), moveBy(pin("centre"), ["b"], 200, 0))).left, "calc(50% + 20px)", "past the centre the sign turns");
 
+  // auto is no pin: moved, a layer with left: auto keeps its right pin.
+  const autoLeft = box({ position: "absolute", left: "auto", right: "40px", top: "10px" });
+  assert.deepEqual(styled(apply(autoLeft, moveBy(autoLeft, ["b"], 5, 1))), { position: "absolute", left: "auto", right: "35px", top: "11px" });
+  // inset becomes its four edges when a pin is moved or changed, so no edge is left behind.
+  const inset = box({ position: "absolute", inset: "0 10px" });
+  assert.deepEqual(styled(apply(inset, moveBy(inset, ["b"], 5, 2))), { top: "2px", right: "5px", bottom: "-2px", left: "15px", position: "absolute" });
+  assert.deepEqual(styled(apply(inset, setConstraint(inset, "b", "x", "start", measured))), { top: "0", bottom: "0", position: "absolute", left: "20px", width: "100px" });
+
   // A resize keeps its start edge: pinned to both edges by the end inset alone; pinned to the end,
   // that inset moves with the new size.
   const resized = (d) => styled(apply(d, resizeTo(d, "b", 130, 60, { from: { width: 100, height: 50 } })));
   assert.deepEqual([resized(pin("both")).right, resized(pin("both")).width, resized(pin("both")).height], ["250px", undefined, "60px"]);
   assert.deepEqual([resized(pin("end")).right, resized(pin("end")).width], ["250px", "130px"]);
   assert.deepEqual([resized(doc).left, resized(doc).width], ["20px", "130px"], "pinned to the start, as before");
+  // Left, right and a width: the width is what a resize changes (its right is ignored).
+  const over = box({ position: "absolute", left: "10px", right: "10px", width: "100px", top: "0px", height: "50px" });
+  assert.deepEqual([resized(over).width, resized(over).right], ["130px", "10px"]);
 });
