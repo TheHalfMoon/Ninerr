@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
-import { componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
+import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride, setLayout } from "@ninerr/canvas";
 import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
 import { exportHtml, exportJsx, exportTailwind } from "./code.ts";
 import { StudioError } from "./errors.ts";
@@ -242,7 +242,7 @@ const TOOLS: Tool[] = [
         "A Ninerr document is a tree of layers. Each layer has an id, a type (frame, element, text, ...) and props: tag (an HTML element), text, name (the layer name), attributes and style (CSS properties).",
         "Every edit you make is one history transaction attributed to you; the person sees it live on the canvas and can undo it.",
         "Read with project_info, layer_tree, layer_children, layer_details, find_layers and selection; layer_code gives a layer as JSX.",
-        "Edit with create_frame, set_text, rename_layers, set_styles, set_attributes (classes, dir for right-to-left text, aria-*), move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
+        "Edit with create_frame, set_text, rename_layers, set_styles, set_attributes (classes, dir for right-to-left text, aria-*), set_layout (children in a row or column), move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
         "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
         "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
@@ -385,6 +385,45 @@ const TOOLS: Tool[] = [
         return { type: "set-props", nodeId: node.id, ...(Object.keys(attributes).length === 0 ? { set: {}, unset: ["attributes"] } : { set: { attributes } }) };
       });
       return edit(operations, "Set attributes");
+    },
+  },
+  {
+    name: "set_layout",
+    title: "Set auto layout",
+    description: "Place a layer's children in a row or a column (CSS flex), or freely. With row or column, gap, padding, align (align-items) and justify (justify-content) and wrap may be given; children placed by left and top join the row. free turns a row or column off: children are no longer laid out by it, and those not positioned flow in the page (the editor's Freely keeps each where it was drawn, which needs the canvas).",
+    inputSchema: object({ nodeId: { type: "string" }, mode: { type: "string", enum: ["row", "column", "free"] }, gap: { type: "string" }, padding: { type: "string" }, align: { type: "string", enum: ["flex-start", "center", "flex-end", "stretch", "baseline"] }, justify: { type: "string", enum: ["flex-start", "center", "flex-end", "space-between", "space-around", "space-evenly"] }, wrap: { type: "boolean" } }, ["nodeId", "mode"]),
+    run: ({ session, edit }, args) => {
+      const node = nodeOf(session, args.nodeId);
+      if (!(LAYOUT_MODES as readonly string[]).includes(args.mode as string)) throw new ToolError("mode is \"row\", \"column\" or \"free\"");
+      if (node.type === "component-instance" || node.type === "text") throw new ToolError(`${node.id} is ${node.type === "text" ? "a text layer" : "an instance"}, which does not lay out children of its own`);
+      if (args.mode === "free" && ["gap", "padding", "align", "justify", "wrap"].some((argument) => args[argument] !== undefined)) {
+        throw new ToolError("gap, padding, align, justify and wrap are for a row or a column");
+      }
+      const display = node.props?.style?.display;
+      if (args.mode === "free" && display !== "flex" && display !== "inline-flex") throw new ToolError(`${node.id} has no auto layout to turn off (display is ${typeof display === "string" ? display : "not set"})`);
+      const operations = setLayout(session.document, node.id, args.mode, {}) as any[];
+      const extras: Record<string, string | null> = {};
+      if (args.mode !== "free") {
+        const choices: [string, string, readonly string[] | null][] = [["gap", "gap", null], ["padding", "padding", null], ["align", "align-items", ["flex-start", "center", "flex-end", "stretch", "baseline"]], ["justify", "justify-content", ["flex-start", "center", "flex-end", "space-between", "space-around", "space-evenly"]]];
+        for (const [argument, property, allowed] of choices) {
+          const value = args[argument];
+          if (value === undefined) continue;
+          if (typeof value !== "string" || (allowed !== null && !allowed.includes(value))) throw new ToolError(`${argument} is ${allowed === null ? "a CSS value" : allowed.join(", ")}`);
+          const problem = styleDeclarationProblem(property, value);
+          if (problem !== null) throw new ToolError(problem);
+          extras[property] = value;
+        }
+        if (args.wrap !== undefined) {
+          if (typeof args.wrap !== "boolean") throw new ToolError("wrap is true or false");
+          extras["flex-wrap"] = args.wrap ? "wrap" : null;
+        }
+      }
+      const own = operations[0].set.style as Record<string, string>;
+      for (const [property, value] of Object.entries(extras)) {
+        if (value === null) delete own[property];
+        else own[property] = value;
+      }
+      return edit(operations, args.mode === "free" ? "Place children freely" : args.mode === "row" ? "Auto layout in a row" : "Auto layout in a column");
     },
   },
   {

@@ -23,6 +23,7 @@ const CLASSES = Object.freeze({
   rename_layers: "write",
   set_styles: "write",
   set_attributes: "write",
+  set_layout: "write",
   move_layers: "write",
   duplicate_layers: "write",
   delete_layers: "consequential",
