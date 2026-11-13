@@ -252,6 +252,42 @@ test("every call is authorized: names outside the catalog are unknown; payload i
   }, { confirmationWaitMs: 100 });
 });
 
+test("an agent's names carry no hidden or reordering characters, and a refused one never reaches the person (#64)", async () => {
+  await withStudio(async ({ owner, tool, host }) => {
+    const { token } = (await owner("POST", "/api/agents/create", { name: "Agent" })).json;
+    await owner("POST", "/api/projects/create", { name: "p" });
+    const hidden = /name must not contain control or hidden characters/u;
+    const before = host.session.revision;
+    // Bidi overrides and isolates, zero-width space, a tag character, a control, a line separator,
+    // a blank-looking filler, a stray variation selector, and a lone surrogate.
+    for (const name of ["Logo‮gnp.exe", "Pay⁦ment⁩", "Sub​mit", "Home\u{E0041}", "Tab\u0007", "One Two", "ㅤ", "Box️", "Odd\uD800"]) {
+      const result = await tool(token, "create_frame", { name, width: 10, height: 10 });
+      assert.equal(result.isError, true, JSON.stringify(name));
+      assert.match(text(result), hidden, JSON.stringify(name));
+    }
+    assert.equal(host.session.revision, before, "nothing was made");
+    // A label nested in a list is checked too.
+    const frame = (await tool(token, "create_frame", { name: "Card", width: 10, height: 10 })).structuredContent.nodeId;
+    assert.match(text(await tool(token, "rename_layers", { renames: [{ nodeId: frame, name: "Car‎d" }] })), hidden);
+    assert.equal(host.session.document.nodes[frame].props.name, "Card");
+    // So is a dry run's, and a consequential call's, before the person is asked anything.
+    assert.match(text(await tool(token, "create_frame", { name: "‮dry", width: 10, height: 10, dryRun: true })), hidden);
+    assert.match(text(await tool(token, "delete_token", { name: "--a‮" })), hidden);
+    assert.deepEqual((await owner("GET", "/api/confirmations")).json.pending, [], "the person was not asked");
+    // Names in any script, emoji sequences joined by ZWJ, ZWNJ in Persian, and an emoji's presentation selector stay legal.
+    for (const name of ["مرحبا", "שלום", "हिन्दी", "日本語", "👩‍💻 Team", "می‌خواهم", "Heart ❤️", "Ünïcödé"]) {
+      const result = await tool(token, "create_frame", { name, width: 10, height: 10 });
+      assert.equal(result.isError, undefined, `${JSON.stringify(name)}: ${result.isError ? text(result) : ""}`);
+      assert.equal(host.session.document.nodes[result.structuredContent.nodeId].props.name, name);
+    }
+    // A description may break lines; a name may not.
+    assert.equal((await tool(token, "set_token", { name: "--brand", type: "color", values: { default: "#2255ff" }, description: "Primary.\nUse for links." })).isError, undefined);
+    assert.match(text(await tool(token, "set_token", { name: "--brand", values: { default: "#2255ff" }, description: "Primary‮" })), /description must not contain/u);
+    // A person's own edits are not an agent's call, and the read tools take no labels.
+    assert.equal((await tool(token, "find_layers", { query: "Card" })).isError, undefined);
+  }, { confirmationWaitMs: 100 });
+});
+
 test("consequential calls wait for the person's decision, bound to the exact call", async () => {
   await withStudio(async ({ owner, tool, host }) => {
     const { token } = (await owner("POST", "/api/agents/create", { name: "Agent" })).json;

@@ -54,6 +54,36 @@ function onlyArguments(args: unknown, names: string[]): Record<string, unknown> 
   return given;
 }
 
+// Names a person reads and may be asked to approve (layers, components, their properties,
+// tokens, modes, collections and descriptions) look like what they are (#64): an agent's label
+// carries no controls, format characters (bidi reordering, zero-width, tag "smuggling"
+// characters), separators or blank-looking fillers, and variation selectors only where they
+// vary the character before them. ZWNJ and ZWJ stay legal (emoji, complex scripts), and a
+// description may break lines. The rule is decision-assurance's and visual-git's.
+const LABEL_KEYS = new Set(["name", "collection", "description"]);
+const HIDDEN_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{34f}\u{115f}\u{1160}\u{2800}\u{3164}\u{ffa0}]/u;
+const JOINERS = /[\u{200c}\u{200d}]/gu;
+const LINE_BREAKS = /[\t\n\r]/gu;
+const SELECTOR_SMUGGLING = /(?<![\p{Extended_Pictographic}0-9#*])[\u{fe0e}\u{fe0f}]|[\u{fe00}-\u{fe0d}]|(?<!\p{Ideographic})[\u{e0100}-\u{e01ef}]/u;
+const MAX_LABEL_DEPTH = 4;
+
+/** The first label among a call's arguments that hides or reorders what a person reads, as a refusal; null when there is none. */
+function hiddenLabel(value: unknown, depth = 0): string | null {
+  if (depth > MAX_LABEL_DEPTH || value === null || typeof value !== "object") return null;
+  for (const [key, entry] of Object.entries(value)) {
+    if (LABEL_KEYS.has(key) && typeof entry === "string") {
+      const visible = entry.replace(JOINERS, "");
+      const shown = key === "description" ? visible.replace(LINE_BREAKS, "") : visible;
+      if (!entry.isWellFormed() || HIDDEN_TEXT.test(shown) || SELECTOR_SMUGGLING.test(entry)) {
+        return `${key} must not contain control or hidden characters: a person reads it as it is shown`;
+      }
+    }
+    const nested = hiddenLabel(entry, depth + 1);
+    if (nested !== null) return nested;
+  }
+  return null;
+}
+
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
 const idList = { type: "array", items: { type: "string" }, minItems: 1, maxItems: 500 };
 
@@ -1027,6 +1057,8 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       // Before the person is asked to confirm anything.
       const unread = notRead();
       if (unread !== null) return toolResult(unread, true);
+      const hidden = changes ? hiddenLabel(args) : null;
+      if (hidden !== null) return toolResult(hidden, true);
       const before = stale();
       if (before !== null) return toolResult(before, true);
       const confirmation = await confirm(context, session, actor, toolName, args, at);
@@ -1042,6 +1074,8 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
   if (changed !== null) return toolResult(changed, true);
   const unread = notRead();
   if (unread !== null) return toolResult(unread, true);
+  const hidden = changes ? hiddenLabel(args) : null;
+  if (hidden !== null) return toolResult(hidden, true);
   const tool = TOOL_BY_NAME.get(toolName);
   // Unreachable while the server's tools are exactly the catalog (checked at load); fail closed.
   if (tool === undefined) return toolResult(`Ninerr has no tool ${toolName}.`, true);
