@@ -44,7 +44,10 @@ test("only tag pushes sign or publish, and those jobs run no repository code", (
     assert.doesNotMatch(all[name], /actions\/checkout|actions\/setup-node|\bnpm\b|\bnode\b/, `${name} runs no repository or dependency code`);
   }
   assert.doesNotMatch(all.collect, /actions\/checkout|actions\/setup-node|\bnpm\b|\bnode\b/, "collect runs no repository or dependency code");
-  for (const name of ["build", "desktop", "collect"]) assert.ok(!all[name].includes("if: github.event_name"), `${name} runs on every trigger`);
+  // A job-level condition would skip the job on some trigger; a step's own condition (the tag check) does not.
+  for (const name of ["build", "desktop", "collect"]) assert.doesNotMatch(all[name], /^    if:/m, `${name} runs on every trigger`);
+  // The tag check is the one step gated on the trigger, and it refuses a tag that is not the product's version.
+  assert.match(all.build, /- name: Verify tag matches product and lockfile\n {8}if: github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v'\)\n(?: {8}.*\n)* {8}run: node scripts\/check-release-tag\.mjs "\$RELEASE_TAG"\n/);
 });
 
 test("signing and writing are each granted to one job", () => {
