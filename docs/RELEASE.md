@@ -1,5 +1,13 @@
 # Release evidence
 
+## First release target (founder decision, 2026-11-14)
+
+The first public release is **Ninerr v0.1.0** (root product/package version `0.1.0`), **not v1.0.0**. The repository currently contains preparation and candidate evidence, **not an authorized tag, draft or published release**. Private internal workspace versions are independent and need not match the root product version.
+
+The founder retains ownership of the user-facing **Desktop and UI/UX**, clean-machine and real screen-reader acceptance, the Electron corresponding-source distribution commitment, and final release approval. Other engineering continues non-UI code, CI, security, provenance, dependency audits, SBOM, evidence, and release qualification. The dated decision is recorded in `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`.
+
+The candidate qualification must be re-run on the exact final `v0.1.0` source commit. Neither earlier green CI for `079631a` nor this change to version metadata authorizes a tag or publication. P10 and license requirements remain gates, not claims of complete UI parity.
+
 A Ninerr release is a tagged commit together with its signed release files: the desktop app for each supported platform, and an evidence bundle. This page describes how they are produced, and how anyone can check them.
 
 ## What a release contains
