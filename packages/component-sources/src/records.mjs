@@ -83,7 +83,7 @@ export function searchComponents(records, { query = "", category = null, limit =
   const terms = words(String(query).slice(0, 200));
   const scored = [];
   for (const record of records) {
-    if (category !== null && record.category !== category) continue;
+    if (category !== null && String(record.category).toLowerCase() !== String(category).toLowerCase()) continue;
     const name = record.name.toLowerCase();
     let score = 0;
     for (const term of terms) {

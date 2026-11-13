@@ -3,6 +3,7 @@ import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classify
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { styleDeclarationProblem } from "@ninerr/renderer";
 import { componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride } from "@ninerr/canvas";
+import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
 import { exportHtml, exportJsx, exportTailwind } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
@@ -249,6 +250,7 @@ const TOOLS: Tool[] = [
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
+        "Library components: search_components finds components of the component sources Ninerr has records of (Meta Astryx, pinned) by name or purpose; get_component gives one's exact props, variants, accessibility criteria, limitations, import path and provenance. Use only props a record lists. They change nothing and fetch nothing.",
       ].join("\n"),
     }),
   },
@@ -649,6 +651,47 @@ const TOOLS: Tool[] = [
         throw new ToolError(error instanceof Error ? error.message : String(error));
       }
       return { nodeId: detached.rootId, ...(edit(detached.operations, "Detach instance") as object) };
+    },
+  },
+  {
+    name: "search_components",
+    title: "Search library components",
+    description: "Find components of the component sources Ninerr has records of (Meta Astryx, at a pinned commit) by name or purpose, such as \"date picker\" or \"command palette\", optionally in one category (the answer lists the categories). Gives each one's id for get_component.",
+    inputSchema: object({ query: { type: "string", maxLength: 200 }, category: { type: "string", maxLength: 100 }, source: { type: "string", enum: [...RECORD_SOURCES] }, limit: { type: "integer", minimum: 1, maximum: 50 } }),
+    run: async (_context, given) => {
+      const args = onlyArguments(given, ["query", "category", "source", "limit"]);
+      if (args.query !== undefined && (typeof args.query !== "string" || args.query.length > 200)) throw new ToolError("query is text of at most 200 characters");
+      if (args.category !== undefined && (typeof args.category !== "string" || args.category.length > 100)) throw new ToolError("category is text");
+      if (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 50)) throw new ToolError("limit is a whole number from 1 to 50");
+      const sources = args.source === undefined ? RECORD_SOURCES : [args.source];
+      if (!sources.every((id: string) => RECORD_SOURCES.includes(id))) throw new ToolError(`source is one of ${RECORD_SOURCES.join(", ")}`);
+      const snapshots = await Promise.all(sources.map((id: string) => loadComponentRecords(id)));
+      const all = snapshots.flatMap((snapshot: any) => snapshot.components);
+      const found = searchComponents(all, { query: typeof args.query === "string" ? args.query : "", category: typeof args.category === "string" ? args.category : null, limit: Number.isInteger(args.limit) ? args.limit : 20 });
+      return {
+        categories: [...new Set(all.map((record: any) => record.category).filter(Boolean))].sort(),
+        sources: snapshots.map((snapshot: any) => ({ id: snapshot.source, repository: snapshot.repository, commit: snapshot.commit, package: snapshot.package })),
+        components: found.map((record: any) => ({ id: record.id, name: record.name, category: record.category, partOf: record.subComponentOf, description: record.description.slice(0, 300), importPath: record.importPath, rendering: record.rendering })),
+      };
+    },
+  },
+  {
+    name: "get_component",
+    title: "Library component",
+    description: "One library component's record, by its id from search_components: its exact props and variants, accessibility criteria, guidance, examples, limitations, import path and dependencies, and where the record came from (repository, commit, doc file and its sha256, license, and what Ninerr may import from the source).",
+    inputSchema: object({ id: { type: "string", maxLength: 300 } }, ["id"]),
+    run: async (_context, given) => {
+      const args = onlyArguments(given, ["id"]);
+      const source = typeof args.id === "string" && args.id.length <= 300 ? args.id.slice(0, args.id.indexOf(":")) : "";
+      if (!RECORD_SOURCES.includes(source)) throw new ToolError("no such component; take ids from search_components");
+      const snapshot: any = await loadComponentRecords(source);
+      const record = snapshot.components.find((entry: any) => entry.id === args.id);
+      if (!record) throw new ToolError("no such component; take ids from search_components");
+      const catalog: any = UI_COMPONENT_SOURCES.find((entry: any) => entry.id === source);
+      return {
+        component: record,
+        provenance: { repository: snapshot.repository, commit: snapshot.commit, package: snapshot.package, doc: record.doc, license: snapshot.license, importPolicy: catalog?.importPolicy ?? null, rights: catalog?.rights ?? null },
+      };
     },
   },
 ];
