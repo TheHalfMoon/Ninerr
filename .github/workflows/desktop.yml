@@ -15,9 +15,11 @@ on:
 permissions:
   contents: read
 
-# A newer push to a pull request cancels its older runs; every push to main runs to the end.
+# A newer push to a pull request cancels its older runs. On main, a run in progress runs to the
+# end, and of the pushes waiting behind it only the latest runs: it holds every change merged
+# before it, so it verifies them all, and the macOS runners are not spent on each merge in turn.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
