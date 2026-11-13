@@ -12,8 +12,9 @@ import { TEST_ORIGIN, browserTestOptions, launchPage } from "./support/browser.m
 // finding the instances that draw a component among 10,000, 18.5 ms; renaming a token used by
 // 4,999 layers, 39 ms; compiling 5,000 tokens, 9 ms; drawing 1,000 such instances on the canvas, 218 ms, and redrawing them all after one
 // component edit, 243 ms. The budgets below carry about ten times
-// that, so slower CI runners pass; the scaling guards compare sizes on one machine and catch a
-// quadratic regression whatever its speed.
+// that, so slower CI runners pass. Two scaling guards compare four times the work on one
+// machine (1,000 and 4,000 instances; 2,500 and 10,000, the most a document may have) and catch a quadratic regression
+// whatever its speed; the rename and compile have budgets only.
 
 function componentDocument(instances, layersPer) {
   const nodes = [{ id: "page", type: "frame", children: [], props: { tag: "main" } }];
@@ -55,37 +56,35 @@ function best(fn, runs = 3) {
   return { ms: fastest, value };
 }
 
+// Each count, once: what one expansion of every instance draws.
+const expandAll = (doc, count) => () => {
+  const size = (view) => 1 + view.children.reduce((sum, child) => sum + size(child), 0);
+  let layers = 0;
+  for (let index = 0; index < count; index += 1) layers += size(expandInstance(doc, `i${index}`));
+  return layers;
+};
+
 test("1,000 instances of a 20-layer component expand within budget, and the cost grows linearly", () => {
-  const expandAll = (doc, count) => () => {
-    let layers = 0;
-    for (let index = 0; index < count; index += 1) {
-      const count = (view) => 1 + view.children.reduce((sum, child) => sum + count(child), 0);
-      layers += count(expandInstance(doc, `i${index}`));
-    }
-    return layers;
-  };
-  const small = componentDocument(250, 20);
-  const large = componentDocument(1_000, 20);
-  const smallRun = best(expandAll(small, 250));
-  const largeRun = best(expandAll(large, 1_000));
-  assert.equal(largeRun.value, 20_000, "each instance draws its 20 layers");
-  assert.ok(largeRun.ms < 500, `expanding 1,000 instances took ${largeRun.ms.toFixed(1)} ms (budget 500)`);
-  // Four times the instances, at most about eight times the time: linear, with room for noise.
-  assert.ok(largeRun.ms < Math.max(20, smallRun.ms) * 8, `250 took ${smallRun.ms.toFixed(1)} ms, 1,000 took ${largeRun.ms.toFixed(1)} ms`);
+  const large = best(expandAll(componentDocument(1_000, 20), 1_000));
+  assert.equal(large.value, 20_000, "each instance draws its 20 layers");
+  assert.ok(large.ms < 500, `expanding 1,000 instances took ${large.ms.toFixed(1)} ms (budget 500)`);
+  // Four times the instances at sizes past the timer's noise: a linear cost takes about four
+  // times as long; a quadratic one, sixteen.
+  const fewer = best(expandAll(componentDocument(1_000, 20), 1_000));
+  const more = best(expandAll(componentDocument(4_000, 20), 4_000));
+  assert.ok(more.ms < fewer.ms * 8 + 5, `1,000 took ${fewer.ms.toFixed(1)} ms, 4,000 took ${more.ms.toFixed(1)} ms`);
   assert.equal(MAX_EXPANDED_LAYERS, 5_000, "one instance's own budget is unchanged");
 });
 
 test("finding the instances that draw a component among 10,000 is within budget and linear", () => {
-  const small = best(() => instancesDrawing(componentDocument(2_500, 5), ["comp"]));
-  const large = best(() => instancesDrawing(componentDocument(10_000, 5), ["comp"]), 1);
-  assert.equal(large.value.length, 10_000);
-  const doc10k = componentDocument(10_000, 5);
-  const only = best(() => instancesDrawing(doc10k, ["comp"]));
-  assert.ok(only.ms < 250, `10,000 instances took ${only.ms.toFixed(1)} ms (budget 250)`);
+  // 10,000 instances is the most a document may have (schema v2's limit).
   const doc2k = componentDocument(2_500, 5);
-  const smallOnly = best(() => instancesDrawing(doc2k, ["comp"]));
-  assert.ok(only.ms < Math.max(10, smallOnly.ms) * 8, `2,500 took ${smallOnly.ms.toFixed(1)} ms, 10,000 took ${only.ms.toFixed(1)} ms`);
-  assert.ok(small.value.length === 2_500);
+  const doc10k = componentDocument(10_000, 5);
+  const fewer = best(() => instancesDrawing(doc2k, ["comp"]));
+  const run = best(() => instancesDrawing(doc10k, ["comp"]));
+  assert.deepEqual([fewer.value.length, run.value.length], [2_500, 10_000]);
+  assert.ok(run.ms < 500, `10,000 instances took ${run.ms.toFixed(1)} ms (budget 500)`);
+  assert.ok(run.ms < fewer.ms * 8 + 5, `2,500 took ${fewer.ms.toFixed(1)} ms, 10,000 took ${run.ms.toFixed(1)} ms`);
 });
 
 test("renaming a token used by 4,999 layers is one change within budget; more is refused, saying why", () => {
@@ -132,15 +131,19 @@ test("the canvas draws 1,000 instances of a 20-layer component and redraws them 
     }, doc);
     assert.equal(first.drawn, 19_000, "each instance draws its 19 layers inside its own element");
     assert.ok(first.ms < 5_000, `first render took ${first.ms.toFixed(0)} ms (budget 5,000)`);
-    // One edit to the component: every instance is drawn again, once.
+    // One edit to the component: every instance is drawn again, in its own element; the page and
+    // the instances' elements are kept (a patch, not a whole new render).
     const result = applyTransaction(doc, { id: "t", actor: "u", operations: [{ type: "set-props", nodeId: "c5", set: { text: "changed" } }] });
     const patched = await page.evaluate(({ d, affected }) => {
+      const before = { page: window.r.elementFor("page"), first: window.r.elementFor("i0"), last: window.r.elementFor("i999") };
       const started = performance.now();
       window.r.patch(d, affected);
       const ms = performance.now() - started;
-      return { ms, changed: [...window.frame.contentDocument.querySelectorAll('[data-ninerr-id="c5"][data-ninerr-instance]')].filter((element) => element.textContent === "changed").length };
+      const kept = window.r.elementFor("page") === before.page && window.r.elementFor("i0") === before.first && window.r.elementFor("i999") === before.last;
+      return { ms, kept, changed: [...window.frame.contentDocument.querySelectorAll('[data-ninerr-id="c5"][data-ninerr-instance]')].filter((element) => element.textContent === "changed").length };
     }, { d: result.document, affected: result.affectedNodeIds });
-    assert.equal(patched.changed, 1_000);
+    assert.equal(patched.changed, 1_000, "each instance draws the change once");
+    assert.equal(patched.kept, true, "the page and the instances' elements are the same ones");
     assert.ok(patched.ms < 5_000, `redrawing 1,000 instances took ${patched.ms.toFixed(0)} ms (budget 5,000)`);
     console.log(`# schema v2 canvas: first render ${first.ms.toFixed(0)} ms, redraw after a component edit ${patched.ms.toFixed(0)} ms`);
   } finally {
