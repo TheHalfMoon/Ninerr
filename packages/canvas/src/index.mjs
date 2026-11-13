@@ -111,6 +111,79 @@ export function moveBy(document, ids, dx, dy, measured = {}) {
   });
 }
 
+// ---------- align and distribute ----------
+
+/** The edges and centres layers align to: left, centre and right; top, middle and bottom. */
+export const ALIGN_EDGES = Object.freeze(["left", "center", "right", "top", "middle", "bottom"]);
+
+/**
+ * How far each box moves so they line up along `edge`, as { id: { dx, dy } }: each box's edge
+ * (or centre) goes to the outermost one among them (the centre of their bounds, for a centre).
+ * `boxes` maps ids to { left, top, width, height } in one coordinate space.
+ */
+export function alignOffsets(boxes, edge) {
+  if (!ALIGN_EDGES.includes(edge)) throw new TypeError(`edge is one of ${ALIGN_EDGES.join(", ")}`);
+  const entries = Object.entries(boxes);
+  if (entries.length < 2) return {};
+  const left = Math.min(...entries.map(([, box]) => box.left));
+  const top = Math.min(...entries.map(([, box]) => box.top));
+  const right = Math.max(...entries.map(([, box]) => box.left + box.width));
+  const bottom = Math.max(...entries.map(([, box]) => box.top + box.height));
+  const target = {
+    left: (box) => ({ dx: left - box.left, dy: 0 }),
+    center: (box) => ({ dx: (left + right) / 2 - (box.left + box.width / 2), dy: 0 }),
+    right: (box) => ({ dx: right - (box.left + box.width), dy: 0 }),
+    top: (box) => ({ dx: 0, dy: top - box.top }),
+    middle: (box) => ({ dx: 0, dy: (top + bottom) / 2 - (box.top + box.height / 2) }),
+    bottom: (box) => ({ dx: 0, dy: bottom - (box.top + box.height) }),
+  }[edge];
+  return Object.fromEntries(entries.map(([id, box]) => [id, target(box)]));
+}
+
+/**
+ * How far each box moves so the gaps between them along `axis` ("horizontal" or "vertical")
+ * are equal: the first and last stay where they are, the others move between them in order.
+ * Three boxes at least; fewer move nowhere.
+ */
+export function distributeOffsets(boxes, axis) {
+  if (axis !== "horizontal" && axis !== "vertical") throw new TypeError("axis is horizontal or vertical");
+  const [start, size, other] = axis === "horizontal" ? ["left", "width", "dx"] : ["top", "height", "dy"];
+  const entries = Object.entries(boxes).sort(([, a], [, b]) => a[start] - b[start] || a[size] - b[size]);
+  if (entries.length < 3) return {};
+  const first = entries[0][1];
+  const last = entries.at(-1)[1];
+  const used = entries.reduce((sum, [, box]) => sum + box[size], 0);
+  const gap = (last[start] + last[size] - first[start] - used) / (entries.length - 1);
+  const offsets = {};
+  if (gap < 0) {
+    // They do not fit side by side (one holds others, or they overlap): their centres are
+    // spaced evenly between the first's and the last's instead.
+    const from = first[start] + first[size] / 2;
+    const step = (last[start] + last[size] / 2 - from) / (entries.length - 1);
+    entries.forEach(([id, box], index) => {
+      offsets[id] = { dx: 0, dy: 0, [other]: from + step * index - (box[start] + box[size] / 2) };
+    });
+    return offsets;
+  }
+  let at = first[start];
+  for (const [id, box] of entries) {
+    offsets[id] = { dx: 0, dy: 0, [other]: at - box[start] };
+    at += box[size] + gap;
+  }
+  return offsets;
+}
+
+/**
+ * One move per layer by its own offset: the history operations, in one change. A layer that does
+ * not move is left out, unless it is in `placed`: one the move takes out of the flow, which must
+ * be positioned where it is, since the others were measured with it so.
+ */
+export function moveEach(document, offsets, measured = {}, placed = new Set()) {
+  return Object.entries(offsets)
+    .filter(([id, { dx, dy }]) => Object.hasOwn(document.nodes, id) && (placed.has(id) || Math.abs(dx) >= 0.01 || Math.abs(dy) >= 0.01))
+    .flatMap(([id, { dx, dy }]) => moveBy(document, [id], dx, dy, measured));
+}
+
 /**
  * Set `id`'s CSS `width`/`height` (the box its `box-sizing` names), at least 1px. An inline
  * box ignores both, so `{ inline: true }` also makes it `inline-block`, which keeps it in the
@@ -374,6 +447,48 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
   const commit = (operations, intent) => {
     if (operations.length > 0) onCommit(operations, intent, { revision: document.revision });
   };
+  // Where layers are on the page, in the frame's CSS pixels (the canvas zoom is outside it).
+  const frameBoxes = (ids) => Object.fromEntries(ids.map((id) => {
+    const box = renderer.elementFor(id).getBoundingClientRect();
+    return [id, { left: box.left, top: box.top, width: box.width, height: box.height }];
+  }));
+  // The selected layers align and distribute can move: drawn and with a box (a hidden layer has
+  // none, and would pull the others to the frame's edge).
+  const alignable = () => (document === null ? [] : normalizeSelection(document, selection)
+    .filter((id) => renderer.elementFor(id)?.getClientRects().length > 0));
+  // Where each would be once every one is positioned absolutely where it is: taking one out of
+  // the flow moves what follows it, so all are taken out together, measured, and put back.
+  const placedBoxes = (ids, measured) => {
+    const changed = [];
+    const placed = new Set();
+    for (const id of ids) {
+      const element = renderer.elementFor(id);
+      const style = styleOf(document, id);
+      if (style.position === "absolute" && numeric(style.left) !== null && numeric(style.top) !== null) continue;
+      const box = measured[id] ?? {};
+      placed.add(id);
+      changed.push([element, ["position", "left", "top", "right", "bottom", "width"].map((name) => [name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)])]);
+      element.style.setProperty("position", "absolute");
+      element.style.setProperty("left", `${box.left ?? 0}px`);
+      element.style.setProperty("top", `${box.top ?? 0}px`);
+      element.style.removeProperty("right");
+      element.style.removeProperty("bottom");
+      if (style.width === undefined && Number.isFinite(box.width)) element.style.setProperty("width", `${box.width}px`);
+    }
+    const boxes = frameBoxes(ids);
+    for (const [element, saved] of changed) {
+      for (const [name, value, priority] of saved) {
+        if (value === "") element.style.removeProperty(name);
+        else element.style.setProperty(name, value, priority);
+      }
+    }
+    return { boxes, placed };
+  };
+  const arrange = (ids, offsetsOf, intent) => {
+    const measured = measuredBoxes(ids);
+    const { boxes, placed } = placedBoxes(ids, measured);
+    commit(moveEach(document, offsetsOf(boxes), measured, placed), intent);
+  };
 
   capture.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || document === null) return;
@@ -628,6 +743,24 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
     },
     nudge(dx, dy) {
       if (document !== null && selection.length > 0) commit(moveBy(document, selection, dx, dy, measuredBoxes(selection)), selection.length === 1 ? "Move layer" : "Move layers");
+    },
+    /**
+     * Line up the selected layers (two or more) along an edge or centre, or space three or more
+     * evenly, as one change. Each moves in its own place, as a drag would move it.
+     */
+    align(edge) {
+      const ids = alignable();
+      if (ids.length >= 2) arrange(ids, (boxes) => alignOffsets(boxes, edge), "Align layers");
+      return ids.length >= 2 ? ids.length : 0;
+    },
+    distribute(axis) {
+      const ids = alignable();
+      if (ids.length >= 3) arrange(ids, (boxes) => distributeOffsets(boxes, axis), "Distribute layers");
+      return ids.length >= 3 ? ids.length : 0;
+    },
+    /** How many selected layers align and distribute would move. */
+    get alignable() {
+      return alignable().length;
     },
     resizeBy(dw, dh) {
       if (document === null || selection.length !== 1 || !renderer.elementFor(selection[0])) return;

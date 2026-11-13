@@ -4,8 +4,9 @@ import assert from "node:assert/strict";
 import { createDocument } from "../packages/document-model/src/index.mjs";
 import { applyTransaction } from "../packages/history/src/index.mjs";
 import {
-  MAX_ZOOM, MIN_ZOOM, clampZoom, createViewport, fitBounds, insertNode, moveBy, normalizeSelection, panBy, removeNodes,
-  reorder, resizeTo, screenToWorld, selectNode, setLayout, setStyle, setText, worldToScreen, zoomAt,
+  ALIGN_EDGES, MAX_ZOOM, MIN_ZOOM, alignOffsets, clampZoom, createViewport, distributeOffsets, fitBounds, insertNode,
+  moveBy, moveEach, normalizeSelection, panBy, removeNodes, reorder, resizeTo, screenToWorld, selectNode, setLayout,
+  setStyle, setText, worldToScreen, zoomAt,
 } from "../packages/canvas/src/index.mjs";
 
 // PC3 (#146): the canvas's pure parts. Viewport math, selection rules, and commands that turn
@@ -109,4 +110,40 @@ test("auto layout on: a flex row or column, its free children joining the flow; 
   assert.deepEqual(setLayout(reversed, "x", "column")[0].set.style, { display: "inline-flex", "flex-direction": "column-reverse" });
   assert.deepEqual(setLayout(d, "missing", "row"), []);
   assert.throws(() => setLayout(d, "board", "grid"), /mode is one of free, row, column/u);
+});
+
+test("align moves each box to the outermost edge, or to the centre of their bounds", () => {
+  const boxes = { a: { left: 10, top: 0, width: 20, height: 10 }, b: { left: 50, top: 30, width: 40, height: 20 } };
+  assert.deepEqual(alignOffsets(boxes, "left"), { a: { dx: 0, dy: 0 }, b: { dx: -40, dy: 0 } });
+  assert.deepEqual(alignOffsets(boxes, "right"), { a: { dx: 60, dy: 0 }, b: { dx: 0, dy: 0 } });
+  assert.deepEqual(alignOffsets(boxes, "center"), { a: { dx: 30, dy: 0 }, b: { dx: -20, dy: 0 } });
+  assert.deepEqual(alignOffsets(boxes, "top"), { a: { dx: 0, dy: 0 }, b: { dx: 0, dy: -30 } });
+  assert.deepEqual(alignOffsets(boxes, "bottom"), { a: { dx: 0, dy: 40 }, b: { dx: 0, dy: 0 } });
+  assert.deepEqual(alignOffsets(boxes, "middle"), { a: { dx: 0, dy: 20 }, b: { dx: 0, dy: -15 } });
+  assert.deepEqual(alignOffsets({ a: boxes.a }, "left"), {}, "one box aligns with nothing");
+  assert.throws(() => alignOffsets(boxes, "diagonal"), /edge is one of left, center, right, top, middle, bottom/u);
+  assert.deepEqual([...ALIGN_EDGES], ["left", "center", "right", "top", "middle", "bottom"]);
+});
+
+test("distribute keeps the first and last where they are and makes the gaps between them equal", () => {
+  // Widths 10, 30, 20 between 0 and 100: 40 of gaps, 20 each.
+  const boxes = { c: { left: 80, top: 5, width: 20, height: 5 }, a: { left: 0, top: 0, width: 10, height: 5 }, b: { left: 15, top: 9, width: 30, height: 5 } };
+  assert.deepEqual(distributeOffsets(boxes, "horizontal"), { a: { dx: 0, dy: 0 }, b: { dx: 15, dy: 0 }, c: { dx: 0, dy: 0 } });
+  assert.deepEqual(distributeOffsets({ a: { left: 0, top: 0, width: 5, height: 10 }, b: { left: 0, top: 50, width: 5, height: 10 }, c: { left: 0, top: 12, width: 5, height: 10 } }, "vertical"),
+    { a: { dx: 0, dy: 0 }, c: { dx: 0, dy: 13 }, b: { dx: 0, dy: 0 } });
+  assert.deepEqual(distributeOffsets({ a: boxes.a, b: boxes.b }, "horizontal"), {}, "two boxes have one gap: nothing to even out");
+  assert.throws(() => distributeOffsets(boxes, "diagonal"), /axis is horizontal or vertical/u);
+  // One box holds the others: they cannot sit side by side, so their centres are spaced evenly.
+  const held = distributeOffsets({ a: { left: 0, top: 0, width: 1000, height: 5 }, b: { left: 100, top: 0, width: 10, height: 5 }, c: { left: 200, top: 0, width: 10, height: 5 } }, "horizontal");
+  assert.deepEqual(held, { a: { dx: 0, dy: 0 }, b: { dx: 247.5, dy: 0 }, c: { dx: 0, dy: 0 } });
+});
+
+test("moveEach moves each layer by its own offset, in one change, and skips what does not move", () => {
+  const d = doc();
+  const operations = moveEach(d, { free: { dx: 5, dy: -5 }, card: { dx: 0, dy: 0 }, gone: { dx: 1, dy: 1 } }, {});
+  assert.deepEqual(operations, [{ type: "set-props", nodeId: "free", set: { style: { position: "absolute", left: "15px", top: "15px" } } }]);
+  assert.equal(applyTransaction(d, { id: "t", actor: "u", operations }).document.nodes.free.props.style.left, "15px");
+  // A layer taken out of the flow to measure the others is positioned too, where it is.
+  const placed = moveEach(d, { card: { dx: 0, dy: 0 } }, { card: { left: 3, top: 4, width: 50 } }, new Set(["card"]));
+  assert.deepEqual(placed.map((operation) => [operation.nodeId, operation.set.style.position, operation.set.style.left, operation.set.style.top]), [["card", "absolute", "3px", "4px"]]);
 });
