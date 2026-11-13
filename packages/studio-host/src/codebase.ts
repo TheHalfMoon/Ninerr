@@ -445,6 +445,13 @@ function sameOverlapOrder(first: string[], second: string[]): boolean {
   return true;
 }
 
+/** Whether a layer's style holds what a style in the file says, read as import reads it. */
+function layerStyleIs(node: any, text: string): boolean {
+  const mine = Object.entries(node.props?.style ?? {});
+  const theirs = importedStyle({ cssText: text });
+  return mine.length === Object.keys(theirs).length && mine.every(([name, value]) => theirs[name] === String(value).trim());
+}
+
 function equalProp(prop: string, a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   if (prop === "style") {
@@ -745,8 +752,9 @@ export function planWriteBack(document: any, nodeId: unknown, folder: string, ex
         notWritten.push({ nodeId: node.id, reason: `removing ${prop} is not written back` });
         continue;
       }
-      // Not changed here: the base stays, so a change made in the file is never undone.
-      if (equalProp(prop, mine, base)) continue;
+      // Not changed here: the base stays, so a change made in the file is never undone. A style
+      // is compared as the layer holds it, not as its joined text reads again (#382).
+      if (prop === "style" ? layerStyleIs(node, base) : equalProp(prop, mine, base)) continue;
       if (fileMatchesLayer(prop, fileValue, mine)) {
         nextBase.props[prop] = fileValue;
         matched.push({ nodeId: node.id, field, value: fileValue });
@@ -853,6 +861,9 @@ function textUnwritable(mine: string, live: string, excluded: boolean): string |
 /** Why a layer's prop value cannot be written into the source, or null. */
 function propUnwritable(prop: string, mine: string, fileValue: string, base: string, excluded: boolean): string | null {
   if (/[\r\n\u2028\u2029]/u.test(mine)) return `${prop} with a line break is not written`;
+  // The layer's style, joined into text, must read back as the same declarations: a value that
+  // leaves a quote or bracket open would swallow those after it (#382).
+  if (prop === "style" && !plainStyle(mine)) return "a style value that leaves a quote or bracket open, or that Ninerr cannot write exactly, is not written back";
   // A write rebuilds the style from the layer's, which is read from the file by
   // styleProperties: a part it does not see would be lost, from the file as it is or, through
   // the layer, from the file as it was brought in (reviews of #291).
