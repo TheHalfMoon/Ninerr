@@ -39,6 +39,18 @@ const SOURCES = [
     gate: "manual-install",
   },
   {
+    id: "astryx", name: "Astryx", group: "Foundation",
+    purpose: "Meta's open-source React design system: its own accessible components, StyleX styling, design tokens, themes and page templates.",
+    website: "https://astryx.atmeta.com", source: "https://github.com/meta/astryx",
+    usage: "A whole design system with its own primitives: build a project on it rather than beside shadcn, Base UI or Radix components. Ninerr has records of its components at a pinned commit.",
+    install: "npm install @astryxdesign/core",
+    license: "MIT", importPolicy: "allowed",
+    copyright: "Copyright (c) 2026 Meta Platforms, Inc.",
+    registry: null,
+    rights: "MIT, “Copyright (c) 2026 Meta Platforms, Inc.”. Its themes load Google Fonts under their own licences; Ninerr loads none of them.",
+    gate: "manual-install",
+  },
+  {
     id: "sonner", name: "Sonner", group: "Specialist",
     purpose: "Accessible notification toasts and stacked feedback.",
     website: "https://sonner.emilkowal.ski", source: "https://github.com/emilkowalski/sonner",

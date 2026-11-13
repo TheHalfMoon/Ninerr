@@ -9,6 +9,7 @@ import {
   checkLayout,
   importDecision,
   parseRegistryItem,
+  PRIMITIVE_FAMILIES,
   primitiveFamily,
   resolveTarget,
   sourceForRegistryUrl,
@@ -361,10 +362,14 @@ export function planComponentImport(folder: string, request: ComponentImportRequ
     const from = /^https:/u.test(reference) ? sourceForRegistryUrl(reference) : null;
     if (from !== null && from.importPolicy === "permission-required") blockers.push(`It needs ${reference}, from ${from.name}, which Ninerr may not import: ${from.rights}`);
   }
-  if (item.primitives.family === "mixed") blockers.push("The item uses more than one primitive family (Base UI, Radix, React Aria); one component builds on one.");
+  if (item.primitives.family === "mixed") blockers.push("The item uses more than one primitive family (Base UI, Radix, React Aria, Astryx); one component builds on one.");
   if (projectFamily === "mixed") blockers.push("The project already uses more than one primitive family; choose one before importing.");
   else if (item.primitives.family !== "none" && item.primitives.family !== "mixed" && projectFamily !== "none" && projectFamily !== item.primitives.family) {
-    blockers.push(`The project builds on ${projectFamily === "base" ? "Base UI" : projectFamily === "radix" ? "Radix" : "React Aria"}, and this item on ${item.primitives.family === "base" ? "Base UI" : item.primitives.family === "radix" ? "Radix" : "React Aria"}. Choose the item's ${projectFamily} variant.`);
+    const name = (family: string) => (PRIMITIVE_FAMILIES as Record<string, string>)[family] ?? family;
+    // Astryx is a whole design system: another family's item does not become an Astryx one.
+    blockers.push(projectFamily === "astryx" || item.primitives.family === "astryx"
+      ? `The project builds on ${name(projectFamily)}, and this item on ${name(item.primitives.family)}. Astryx brings its own components: use one system for a project.`
+      : `The project builds on ${name(projectFamily)}, and this item on ${name(item.primitives.family)}. Choose the item's ${projectFamily} variant.`);
   }
 
   const seen = new Set<string>();

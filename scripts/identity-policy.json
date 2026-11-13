@@ -355,6 +355,15 @@
       "reason": "Tests of the independently licensed runtimes Ninerr invokes (Impeccable's scanner and browser wrapper, its package in the SBOM and bundle)."
     },
     {
+      "id": "third-party-component-records",
+      "category": "THIRD_PARTY_INDEPENDENT_OBLIGATION",
+      "path": "^packages/component-sources/src/astryx-records\\.mjs$",
+      "terms": [
+        "paper"
+      ],
+      "reason": "Meta Astryx's own component documentation (MIT), recorded as generated: there 'paper' is the common word, a synonym of card, not a donor."
+    },
+    {
       "id": "tests",
       "category": "TEST_FIXTURE",
       "path": "^tests/",

@@ -23,6 +23,40 @@ const ITEM = JSON.stringify({
   cssVars: { light: { notice: "#fff7e6" } },
 });
 
+test("find an Astryx component by purpose and read its props, accessibility and provenance", browserTestOptions(), async () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ninerr-astryx-editor-")));
+  const host = await startStudioHost({ projectsRoot: root, now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("site");
+    await page.locator("#dialog[open] button.primary", { hasText: "Create project" }).click();
+    await waitRevision(page, 0);
+    await page.locator("#action-component-sources").click();
+    await page.locator("#component-source-query").fill("meta design system");
+    await page.locator('#component-source-results [data-source-id="astryx"]').click();
+    await page.locator("#source-component-query").fill("date picker");
+    assert.ok((await page.locator("#source-component-results button").allTextContents()).some((text) => text.startsWith("DateInput")));
+    await page.locator("#source-component-query").fill("button");
+    await page.locator('#source-component-results [data-component-id="astryx:Button"]').click();
+    const rows = await page.locator("#source-component-props tbody tr").evaluateAll((trs) => trs.map((tr) => [...tr.children].map((cell) => cell.textContent)));
+    assert.deepEqual(rows.find(([name]) => name === "variant"), ["variant", "'primary' | 'secondary' | 'ghost' | 'destructive'", "no", "'secondary'"]);
+    assert.deepEqual(rows.find(([name]) => name === "label"), ["label", "string", "yes", ""]);
+    assert.match(await page.locator("#source-component-detail").textContent(), /1\.4\.3 Contrast \(Minimum\), 4\.5:1/u);
+    assert.match(await page.locator("#source-component-provenance").textContent(), /^From packages\/core\/src\/Button\/Button\.doc\.mjs in @astryxdesign\/core 0\.7\.12, commit 2309691dba95\. MIT, Copyright \(c\) 2026 Meta Platforms, Inc\.$/u);
+    // A category narrows the list; every result is in it.
+    await page.locator("#source-component-query").fill("");
+    await page.locator("#source-component-category").selectOption("Overlay");
+    const overlays = await page.locator("#source-component-results button").allTextContents();
+    assert.ok(overlays.length > 3 && overlays.every((text) => text.endsWith("— Overlay")) && overlays.some((text) => text.startsWith("Dialog")));
+    assert.deepEqual(editor.errors, []);
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("review a registry item, create its files and bring its component onto the canvas", browserTestOptions(), async () => {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ninerr-component-editor-")));
   const projects = join(root, "projects");

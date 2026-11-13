@@ -49,6 +49,10 @@ test("one component builds on one primitive family", () => {
   assert.equal(primitiveFamily({ files: files('const m = await import("@base-ui-components/react");') }).family, "base");
   assert.equal(primitiveFamily({ files: files('import { Button } from "react-aria-components";') }).family, "aria");
   assert.equal(primitiveFamily({ files: files('import { cn } from "@/lib/utils";') }).family, "none");
+  // Astryx is a design system with its own primitives; its themes and build tools are not primitives.
+  assert.equal(primitiveFamily({ files: files('import { Button } from "@astryxdesign/core/Button";') }).family, "astryx");
+  assert.equal(primitiveFamily({ dependencies: [parseDependency("@astryxdesign/theme-matcha"), parseDependency("@astryxdesign/build")], files: [] }).family, "none");
+  assert.equal(primitiveFamily({ dependencies: [parseDependency("@astryxdesign/core")], files: files('import "@radix-ui/react-slot";') }).family, "mixed");
   // Icons and colours from Radix are not primitives; React Aria's packages are.
   assert.equal(primitiveFamily({ dependencies: [parseDependency("@base-ui/react"), parseDependency("@radix-ui/react-icons"), parseDependency("@radix-ui/colors")], files: [] }).family, "base");
   assert.equal(primitiveFamily({ files: files('import { useButton } from "@react-aria/button";') }).family, "aria");

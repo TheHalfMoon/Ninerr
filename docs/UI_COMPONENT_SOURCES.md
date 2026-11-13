@@ -1,6 +1,6 @@
 # Ninerr — Component Source System
 
-Status (2026-11-09): **implemented:** the offline catalog with each source's license and import policy; reading a registry item into a checked, bounded form (`@ninerr/component-sources`); and importing an item the person chose into their connected codebase, planned first, then created as new files only, with its component brought onto the canvas through the existing Bring in. **Not yet implemented:** fetching items from a registry, design tokens and component instances on the canvas (they need the document schema the design-platform ADRs propose), an interactive React preview, and three-way updates of an imported item. Each is listed under "What remains" with what it waits on.
+Status (2026-11-10): **implemented:** the offline catalog with each source's license and import policy; Meta Astryx as a first-class source, with records of its components (props, variants, accessibility, provenance) at a pinned commit, searchable in the editor, and its own primitive family (`docs/provenance/ASTRYX_SOURCE_AUDIT.md`); reading a registry item into a checked, bounded form (`@ninerr/component-sources`); and importing an item the person chose into their connected codebase, planned first, then created as new files only, with its component brought onto the canvas through the existing Bring in. **Not yet implemented:** fetching items from a registry, design tokens and component instances on the canvas (they need the document schema the design-platform ADRs propose), an interactive React preview, and three-way updates of an imported item. Each is listed under "What remains" with what it waits on.
 
 ## Required sources
 
@@ -9,6 +9,7 @@ Status (2026-11-09): **implemented:** the offline catalog with each source's lic
 | Foundation | shadcn/ui | Owned source files, design tokens, component composition, registry format |
 | Foundation | Base UI | Default accessible React primitives for **new** generated projects |
 | Foundation | Radix UI | Accessible alternative for existing/imported Radix projects |
+| Foundation | Astryx (Meta) | A whole design system with its own accessible components, StyleX styling, tokens and themes; Ninerr has its components' records at a pinned commit |
 | Specialist | Sonner | Toasts and notifications |
 | Specialist | Vaul | Gesture-driven drawers |
 | Specialist | cmdk | Command palettes and searchable choices |
@@ -25,12 +26,13 @@ The live curated metadata lives in `packages/component-sources/src/catalog.mjs` 
 
 ### Licenses and what Ninerr may import
 
-Checked against each publisher's own license file or terms on 2026-11-09. Nothing from any source is bundled with Ninerr; the catalog names them, and an import puts an item into the person's own project under the item's license. Each catalog entry carries this as `license` and `importPolicy`.
+Checked against each publisher's own license file or terms on 2026-11-09 (Astryx on 2026-11-10). No component source from any of them is bundled with Ninerr; the catalog names them, Astryx's component records ship with its MIT license, and an import puts an item into the person's own project under the item's license. Each catalog entry carries this as `license` and `importPolicy`.
 
 | Source | License | Import policy | Registry items | Evidence |
 | --- | --- | --- | --- | --- |
 | shadcn/ui | MIT, Copyright (c) 2023 shadcn | allowed | `https://ui.shadcn.com/r/styles/<style>/<name>.json` | https://github.com/shadcn-ui/ui/blob/main/LICENSE.md |
 | Base UI | MIT, Copyright (c) 2019 Material-UI SAS | allowed | npm `@base-ui/react` | https://github.com/mui/base-ui/blob/master/LICENSE |
+| Astryx | MIT, Copyright (c) 2026 Meta Platforms, Inc. | allowed | npm `@astryxdesign/core`; no registry items | https://github.com/meta/astryx/blob/main/LICENSE; audit in `docs/provenance/ASTRYX_SOURCE_AUDIT.md` |
 | Radix UI | MIT, Copyright (c) 2022 WorkOS | allowed | npm `radix-ui`, `@radix-ui/react-*` | https://github.com/radix-ui/primitives/blob/main/LICENSE |
 | Sonner | MIT, Copyright (c) 2023 Emil Kowalski | allowed | npm `sonner` | https://github.com/emilkowalski/sonner/blob/main/LICENSE.md |
 | Vaul | MIT, Copyright (c) 2023 Emil Kowalski | allowed | npm `vaul` | https://github.com/emilkowalski/vaul/blob/main/LICENSE.md |
@@ -59,7 +61,7 @@ Ninerr's existing editor is a local-first JavaScript/CSS canvas; these are React
 
 1. **Discover:** offline curated source metadata (implemented); later, explicit opt-in registry browsing and indexing into a locally saved, provenance-aware catalog.
 2. **Inspect:** exact component name, source version or commit SHA, license text, dependency closure, framework, primitive base, CSS, motion, assets and network behavior. Never treat a marketplace listing as a grant.
-3. **Select:** choose one **Base UI or Radix UI** primitive family per project/component. Prefer Base UI for new projects, retain Radix when existing. Do not overwrite modified shadcn components with another library's identically named file.
+3. **Select:** choose one primitive family per project/component: **Base UI or Radix UI** under shadcn, or **Astryx**, a design system with its own primitives. Prefer Base UI for new shadcn projects, retain Radix when existing. Do not overwrite modified shadcn components with another library's identically named file.
 4. **Acquire:** owner-authorized, user-initiated import only; verify source URL and pinned content hash, preserve upstream notices. Never download paid/Pro content without a verified license. No implicit remote call on opening Ninerr, the canvas or the component picker.
 5. **Convert/preview:** build reviewed, offline-compatible output via the existing code IR and renderer. A React component cannot be executed in the existing script-free canvas. Interactive previews require an **isolated, permission-scoped preview runner** with explicit opt-in and no unapproved network, host filesystem or Node integration.
 6. **Apply:** create preview/dry-run and use the **existing one atomic history transaction** for an accepted change; preserve exact inverse, Undo, accessibility and deterministic output.
@@ -76,7 +78,7 @@ In **Component sources**, under *Import a registry item*, the person chooses a s
    - a style, base or font item, which reconfigures a project, and any request for environment variables;
    - CSS variables or rules that hide markup, a URL or an import.
 2. **Judge.** A stated URL must belong to a catalog registry, and that source's import policy decides: Aceternity UI and 21st.dev URLs are recognised and refused, a Notchset item needs the person's word that it is free, and a Rare UI (Swami) item carries its required credit. An item that depends on an item from Aceternity UI or 21st.dev is refused however it was given. Beyond that, an item given as a file is the person's to judge: Ninerr cannot tell where a saved file came from.
-3. **Plan.** `POST /api/components/plan` (`packages/studio-host/src/component-import.ts`) shows every file and where it goes, using the codebase's `components.json` folders when it has one, and whether each is new, already there or in conflict. It lists the packages to add (Ninerr installs nothing), the other items needed, and the design tokens the item defines. It refuses an item that mixes primitive families, or whose family differs from the project's: a Radix project gets Radix items, a Base UI project Base UI items.
+3. **Plan.** `POST /api/components/plan` (`packages/studio-host/src/component-import.ts`) shows every file and where it goes, using the codebase's `components.json` folders when it has one, and whether each is new, already there or in conflict. It lists the packages to add (Ninerr installs nothing), the other items needed, and the design tokens the item defines. It refuses an item that mixes primitive families, or whose family differs from the project's: a Radix project gets Radix items, a Base UI project Base UI items, and an Astryx project no item built on Base UI or Radix. A project that already depends on two families takes no item until it settles on one.
 4. **Create.** `POST /api/components/apply` re-plans and goes ahead only if nothing changed. It creates each new file exclusively, never replacing one, and never through a link; if a write fails, the files and folders it created are removed. Each file starts with a notice of where it came from, its source's license and copyright line, the MIT permission notice for MIT sources, and any credit its license requires; the upstream text follows unchanged. A folder replaced by a link or junction while the import runs is refused before the file is written.
 5. **Tokens.** With *Add its new design tokens* (on by default), the item's CSS variables join the project's design system as one transaction, undone by Undo (ADR-0004, accepted 2026-11-09). Its theme and light values go to the first collection's default mode and its dark values to a Dark mode, added if there is none. A token whose name is taken is never overwritten: the same value is skipped, another value is kept and shown as kept, and a value that is not one safe CSS value is refused. An item with only tokens (a theme) is imported by adding them.
 6. **Bring in.** The components the files export are offered to **Bring in**, the codebase's existing path: one transaction on the canvas, undone by Undo. Undo does not remove the created files, which the editor says.
@@ -91,6 +93,7 @@ Only the person, through the editor's session, plans or applies an import; agent
 - **Interactive preview.** A React component cannot run on the script-free canvas. A preview needs an isolated, permission-scoped runner with React available offline: a separate decision.
 - **Updating an imported item.** Today a changed upstream item conflicts with the created file. A three-way update against the imported version can reuse `threeWayMerge` from `@ninerr/code-ir`.
 - **Aceternity UI and 21st.dev.** Their terms grant no license to import; that needs the publishers' written permission.
+- **Astryx, further milestones** (`docs/provenance/ASTRYX_SOURCE_AUDIT.md`): its token CSS into the design system (milestone D); its components on the canvas from static HTML its own renderer produces (milestone C, which needs a real fixture made outside Ninerr); agents' search and inspection of component records through MCP (milestone E).
 
 ### Default experience once the remaining integration is built
 
@@ -100,12 +103,12 @@ A person searches *Command palette* → Ninerr suggests **cmdk**, shows a source
 
 - [ ] Real authenticated source selection and version-pinned, offline-replayable import. (Import from a file the person chose is implemented; fetching is not.)
 - [ ] Component model covers props, variants, states, slots, styling, motion and dependencies.
-- [x] One primitive family per component and per project: a mixed item, or one whose family differs from the project's, is refused (`tests/component-sources.test.mjs`, `tests/component-import.test.mjs`).
+- [x] One primitive family per component and per project (Base UI, Radix, React Aria or Astryx): a mixed item, or one whose family differs from the project's, is refused (`tests/component-sources.test.mjs`, `tests/component-import.test.mjs`).
 - [ ] Native and generated component previews never bypass Ninerr's script-free canonical canvas.
 - [ ] Accessibility: keyboard, focus, screen-reader, contrast, reduced-motion and RTL.
 - [x] Security for import: no fetch, no path traversal however encoded (including case, 8.3 short names and Unicode forms), no build configuration, lockfile or environment written, no file replaced, no write through a link even one made mid-import, item text treated as data only.
 - [ ] Security for preview and fetch: blocked scripts and assets, no silent egress.
-- [x] Licensing for import: each source's license and import policy with evidence; at the top of each created file, its origin, license, copyright line and, for MIT, the permission notice; no import by URL from, or depending on, a source whose terms grant no license. An item given as a file is the person's to judge. Nothing from any source is distributed with Ninerr.
+- [x] Licensing for import: each source's license and import policy with evidence; at the top of each created file, its origin, license, copyright line and, for MIT, the permission notice; no import by URL from, or depending on, a source whose terms grant no license. An item given as a file is the person's to judge. No component source is distributed with Ninerr; Astryx's records ship with its license, pinned by hash.
 - [ ] Full Windows/macOS/Linux CI and packaged app E2E.
 - [ ] Code ↔ design round trip and undo/redo maintain the single document authority.
 
