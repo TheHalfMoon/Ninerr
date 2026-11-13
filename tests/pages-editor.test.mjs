@@ -57,7 +57,7 @@ test("add pages, pick one to show it, and undo an addition in one step", browser
     await page.locator("#page-select").selectOption(second);
     await page.locator("#action-show-page").click();
     assert.equal(await inView(second), true);
-    await page.locator(`#layers [role=treeitem][data-node-id="${second}"] > .row`).click({ modifiers: ["Control"] });
+    await page.locator(`#layers [role=treeitem][data-node-id="${second}"] > .row`).click({ modifiers: ["Shift"] });
     await page.waitForFunction(() => document.querySelectorAll('#layers [aria-selected="true"]').length === 0);
     await page.locator("#action-insert-box").click();
     await waitRevision(page, 3);
