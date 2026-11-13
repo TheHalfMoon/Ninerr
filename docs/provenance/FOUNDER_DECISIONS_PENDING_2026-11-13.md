@@ -16,7 +16,7 @@ Every product item that needs no decision is built and merged (`docs/COMPLETION_
 - **Cost.** (a) adds a write path to the host, inside the folder it already owns; the desktop's refusal of downloads stays. (b) needs the desktop's print permission and gives a print-quality, not exact, PDF. (c) costs nothing.
 - **Recommendation.** (c) for 1.0, then (a): exports in the project folder are what a designer expects, and the boundary it adds is small and contained.
 
-## 3. #349, the Windows trusted write
+## 3. #349, the Windows trusted write — decided 2026-11-13: (a), merged in #456
 
 - **Question.** Which fix, if any, before 1.0?
 - **Options.** (a) Rename the private replacement through its handle (`SetFileInformationByHandle`), adding one function to the pinned kernel32 list. (b) Refuse a projects folder that other accounts can change. (c) Keep it as it is: the swapped file is refused on the next trusted read, so it fails closed.
