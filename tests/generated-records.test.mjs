@@ -42,7 +42,10 @@ test("an unpinned file, code beside the data, a default export that is not JSON,
   assert.match(check(`${DATA}globalThis.x = 1;\n`).err, /not comment lines then export default <JSON>;/u);
   assert.match(check(DATA.replace("export default {", "export default (() => 1)() || {")).err, /not comment lines then export default <JSON>;/u);
   assert.match(check(`export default {"source":"x"};\n`).err, /has no components list/u);
-  for (const bad of [DATA, `${DATA}x`]) assert.equal(check(bad, bad === DATA ? "0".repeat(64) : undefined).status, 1);
+  // It has the shape, but what follows `export default` is not JSON: code hides there.
+  assert.match(check(`export default {"components":[]}; globalThis.x = 1; y = {};\n`).err, /not comment lines then export default <JSON>;/u);
+  assert.equal(check(DATA, "0".repeat(64)).status, 1);
+  assert.equal(check(`${DATA}x`).status, 1);
 });
 
 test("the repository's own records pass, and npm run check runs the check", () => {

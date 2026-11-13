@@ -7,6 +7,10 @@
 - The generated-records check from #416 moves to `scripts/check-generated-records.mjs`. `npm run check`, and so CI's Foundation checks on Linux, macOS and Windows, runs it on every pull request and on main. It now checks the whole repository rather than only a pull request's diff. Each `packages/component-sources/src/*-records.mjs` must be data only (comment lines, then `export default <JSON>;`), have a components list, and have the sha256 the license register pins. `tests/generated-records.test.mjs` tests it.
 - `CLAUDE.md`, `AGENTS.md` and `CONTRIBUTING.md` no longer require Jev. The change workflow asks for an independent review of the exact candidate (a fresh-context reviewer over the diff) and mutation tests for the rules a change adds, beside the mechanical gate, Open Code Review and CI.
 
+**What is dropped.** The Jev workflow also failed a pull request when Jev judged that it might leak a secret. Nothing replaces that judgment. Secrets stay out of the repository by the existing rules (never print, commit or request a key) and by review. A deterministic secret scanner would be a separate change.
+
+This decision supersedes `docs/provenance/FOUNDER_DECISION_2026-11-10_JEV_GENERATED_DATA.md`. That decision's check now lives in `scripts/check-generated-records.mjs`, and the `tests/jev-workflow.test.mjs` it cites is replaced by `tests/generated-records.test.mjs`.
+
 **What stays.**
 - The license register's pin on each vendored file (`tests/license-register.test.mjs`).
 - Open Code Review evidence on every pull request.
