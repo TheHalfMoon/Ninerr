@@ -55,6 +55,8 @@ const state = {
   // Layers this editor has just added, to select once the change that adds them is applied:
   // { ids, applied } for the latest insert, marked applied when that change selects them.
   selectOnApply: null,
+  // A page just added, to show once the change that adds it is drawn.
+  showOnApply: null,
   collapsed: new Set(),
   focusedLayer: null,
   queue: Promise.resolve(),
@@ -2050,6 +2052,61 @@ function insert(kind) {
   commitAndSelect(operations, kind === "text" ? "Insert text" : "Insert box", id);
 }
 
+// ---------- pages ----------
+
+// A project's pages are its top-level frames, drawn one after another on the canvas.
+const PAGE_STYLE = { position: "relative", width: "800px", height: "600px", background: "#ffffff" };
+const pageName = (doc, id, index) => (typeof doc.nodes[id]?.props?.name === "string" && doc.nodes[id].props.name.trim() !== "" ? doc.nodes[id].props.name.trim() : `Page ${index + 1}`);
+
+/** The page a layer is on: its top-level ancestor. */
+function pageOf(doc, id) {
+  let node = doc?.nodes[id];
+  for (let steps = 0; node && node.parentId !== null && steps <= 1_100; steps += 1) node = doc.nodes[node.parentId];
+  return node ? node.id : null;
+}
+
+/** Add a page after the others, named for its place, select it and show it. */
+function addPage() {
+  if (state.document === null) return;
+  const doc = state.document;
+  const id = newId("page");
+  const pages = layerRoots(doc);
+  // A name no other page has: Page 2, or Page 3 if Page 2 is taken.
+  const taken = new Set(pages.map((pageId, index) => pageName(doc, pageId, index)));
+  let number = pages.length + 1;
+  while (taken.has(`Page ${number}`)) number += 1;
+  const operations = insertNode(null, doc.rootIds.length, { id, type: "frame", tag: "main", style: { ...PAGE_STYLE } });
+  operations[0].node.props.name = `Page ${number}`;
+  state.showOnApply = id;
+  commitAndSelect(operations, "Add page", id);
+}
+
+/** Select a page and fit the canvas to it. */
+function showPage(id) {
+  if (state.document === null || !state.document.nodes[id]) return;
+  selectLayers([id]);
+  canvas.showLayer(id);
+  renderToolbar();
+}
+
+function renderPages() {
+  const select = $("page-select");
+  const doc = state.document;
+  const pages = doc === null ? [] : layerRoots(doc);
+  const current = doc === null ? null : pageOf(doc, state.selection.at(-1) ?? state.focusedLayer ?? pages[0]);
+  const options = pages.map((id, index) => el("option", { value: id, selected: id === current }, pageName(doc, id, index)));
+  // Redrawn only when what it shows changes, so an open list is not reset under the pointer.
+  const key = JSON.stringify([pages.map((id, index) => pageName(doc, id, index)), current]);
+  if (select.dataset.key !== key) {
+    select.replaceChildren(...options);
+    select.dataset.key = key;
+  }
+  select.disabled = pages.length === 0;
+  $("action-add-page").disabled = doc === null;
+  // A page just added is shown once the canvas has drawn it.
+  if (state.showOnApply !== null && doc !== null && Object.hasOwn(doc.nodes, state.showOnApply) && canvas.showLayer(state.showOnApply)) state.showOnApply = null;
+}
+
 /** Commit a change that adds layer `id`, and select it once the change is applied. */
 function commitAndSelect(operations, intent, id) {
   const pending = { ids: [id], applied: false };
@@ -2650,6 +2707,7 @@ function renderToolbar() {
   undoAgent.title = named ?? "";
   $("action-insert-box").disabled = !open;
   $("action-insert-text").disabled = !open;
+  renderPages();
   $("action-delete").disabled = !open || state.selection.length === 0;
   $("action-group").disabled = !open || state.selection.length === 0;
   $("action-save").disabled = !open;
@@ -2756,6 +2814,8 @@ async function main() {
   $("action-redo").addEventListener("click", () => undoRedo("redo"));
   $("action-undo-agent").addEventListener("click", () => undoAgentChange());
   $("action-insert-box").addEventListener("click", () => insert("box"));
+  $("action-add-page").addEventListener("click", addPage);
+  $("page-select").addEventListener("change", (event) => showPage(event.target.value));
   $("action-insert-text").addEventListener("click", () => insert("text"));
   $("action-delete").addEventListener("click", deleteSelection);
   $("action-zoom-in").addEventListener("click", () => { canvas.zoomBy(1.25); renderToolbar(); });

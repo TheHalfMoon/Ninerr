@@ -162,13 +162,13 @@ test("every editor action works from the keyboard, with visible focus", browserT
     // Tab reaches every toolbar control in order, each with a visible focus ring.
     await page.evaluate(() => document.activeElement.blur());
     const order = [];
-    for (let index = 0; index < 16; index += 1) {
+    for (let index = 0; index < 18; index += 1) {
       await page.keyboard.press("Tab");
       const now = await focused();
       order.push(now.id || now.label);
       if (now.id !== "") assert.ok(now.outline, `${now.id} shows focus`);
     }
-    for (const id of ["action-projects", "action-insert-box", "action-insert-text", "action-zoom-out", "action-zoom-in", "action-fit", "action-save", "action-import", "action-code", "action-agents"]) {
+    for (const id of ["action-projects", "action-insert-box", "action-insert-text", "action-add-page", "action-zoom-out", "action-zoom-in", "action-fit", "action-save", "action-import", "action-code", "action-agents"]) {
       assert.ok(order.includes(id), `${id} is reachable by Tab (order: ${order.join(", ")})`);
     }
     // Insert from the toolbar, then work in the layers tree.
