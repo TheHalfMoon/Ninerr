@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "ninerr": {
+        "type": "local",
+        "command": [
+          "node",
+          "D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"
+        ],
+        "environment": {
+          "NINERR_MCP_TOKEN": "{env:NINERR_MCP_TOKEN}"
+        }
+      }
+    }
+  }
+}
