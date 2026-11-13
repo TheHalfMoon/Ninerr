@@ -59,6 +59,10 @@ Ninerr publishes no binary release yet. Before the first one, the project owner 
 
 Pointing at the public repositories at the recorded commits is not one of those methods. The analysis is in `docs/evidence/N0_G7B_ELECTRON_SOURCE_2026-10-09.md`.
 
+## Dependency advisories
+
+The `Dependency Audit` workflow (`.github/workflows/dependency-audit.yml`) checks the locked dependencies against the npm registry's security advisories. It runs on every change to `package.json` or `package-lock.json`, every Monday, and by hand. It installs and runs nothing, and any advisory, whatever its severity, fails it. A release candidate is qualified only with a passing run on its exact commit, started by hand, because an advisory can be published after a version is locked.
+
 ## How a release is signed
 
 The `Release Evidence` workflow (`.github/workflows/release.yml`) has five jobs.
