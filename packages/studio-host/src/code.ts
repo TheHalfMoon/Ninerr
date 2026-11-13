@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, type DesignDoc, type DesignDocNode, designToMarkup } from "@ninerr/code-ir";
+import { buildCodeIr, designToCode, expressionShown, exportedComponents, readStyleObject, styleToTailwind, type DesignDoc, type DesignDocNode, designToMarkup } from "@ninerr/code-ir";
 import { DRAWN_ID, planElement, withInstancesExpanded } from "@ninerr/renderer";
 import { compileTokens, designSystemOf, isCodePart, modeAttribute, styleValuesOf, tokenReferences } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
@@ -267,6 +267,42 @@ export function exportJsx(document: any, nodeId: unknown): { componentName: stri
   const { design, ...exported } = exportDesign(document, nodeId);
   try {
     return { ...exported, code: designToCode(design) };
+  } catch (error) {
+    throw refused(error);
+  }
+}
+
+/**
+ * A layer as JSX styled with Tailwind classes: each layer's style becomes classes that set exactly
+ * what it says (code-ir's styleToTailwind), added to its className. What no class can carry stays
+ * in its style object. A style is inline, which wins over any rule; a class wins only over less
+ * specific or earlier rules. So a layer keeps its whole style inline when it has classes of its
+ * own, and every layer does when a page stylesheet applies (`stylesheetApplies`): either could
+ * hold a rule for the same property. The page's stylesheet and the design tokens are CSS, as for
+ * the JSX export.
+ */
+export function exportTailwind(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number; classes: number; keptAsStyle: number; stylesheetApplies: boolean; stylesheet: string | null; tokens: string | null } {
+  const { design, ...exported } = exportDesign(document, nodeId);
+  const stylesheetApplies = exported.stylesheet !== null;
+  let classes = 0;
+  let keptAsStyle = 0;
+  const visit = (node: DesignDocNode) => {
+    if (node.style !== undefined && (stylesheetApplies || typeof node.props.className === "string")) keptAsStyle += Object.keys(node.style).length;
+    else if (node.style !== undefined) {
+      const converted = styleToTailwind(node.style);
+      classes += converted.classes.length;
+      keptAsStyle += Object.keys(converted.left).length;
+      const own = typeof node.props.className === "string" ? node.props.className : "";
+      const className = [own, ...converted.classes].filter((part) => part !== "").join(" ");
+      if (className !== "") node.props = { ...node.props, className };
+      if (Object.keys(converted.left).length > 0) node.style = converted.left;
+      else delete node.style;
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(design.root);
+  try {
+    return { ...exported, code: designToCode(design), classes, keptAsStyle, stylesheetApplies };
   } catch (error) {
     throw refused(error);
   }
