@@ -2781,7 +2781,7 @@ function renderInspector() {
   // with the space between them, its padding, and how they line up.
   if (node.type !== "text" && !isCodePart(node)) children.push(layoutSection(style));
   // How its words look: the font, its weight, line height, letter spacing and alignment.
-  if (node.type === "text" || textId !== null) children.push(textSection(doc, style));
+  if (node.type === "text" || textId !== null) children.push(textSection(doc, style, node));
   // Moving and resizing without dragging (WCAG 2.5.7): one click per 10-pixel step.
   const step = (label, text, action) => el("button", { type: "button", "aria-label": label, onclick: action }, text);
   children.push(el("div", { class: "steps", role: "group", "aria-label": "Move and resize by 10 pixels" },
@@ -2870,7 +2870,7 @@ function layoutSection(style) {
 const FONT_STACKS = ["system-ui, sans-serif", "Georgia, serif", "ui-monospace, monospace", "Helvetica, Arial, sans-serif", "\"Times New Roman\", serif"];
 const FONT_WEIGHTS = [["", "Default"], ["100", "Thin"], ["200", "Extra light"], ["300", "Light"], ["400", "Regular"], ["500", "Medium"], ["600", "Semibold"], ["700", "Bold"], ["800", "Extra bold"], ["900", "Black"]];
 const TEXT_ALIGN = [["", "Default"], ["start", "Start"], ["center", "Centre"], ["end", "End"], ["justify", "Justify"]];
-function textSection(doc, style) {
+function textSection(doc, style, node) {
   const value = (name) => (typeof style[name] === "string" ? style[name] : "");
   const input = (name, label, extra = {}) => {
     const control = el("input", { id: `inspect-${name.replace(/[^a-z-]/gu, "-")}`, name, value: value(name.slice(6)), autocomplete: "off", ...extra });
@@ -2894,7 +2894,202 @@ function textSection(doc, style) {
     el("legend", {}, "Text"),
     input("style:font-family", "Font", { list: "font-families", spellcheck: "false" }), list,
     el("div", { class: "pair" }, select("style:font-weight", "Weight", FONT_WEIGHTS), select("style:text-align", "Align", TEXT_ALIGN)),
-    el("div", { class: "pair" }, input("style:line-height", "Line height"), input("style:letter-spacing", "Letter spacing")));
+    el("div", { class: "pair" }, input("style:line-height", "Line height"), input("style:letter-spacing", "Letter spacing")),
+    ...textStyleControls(doc, node));
+}
+
+// Text styles: a named set of typography, kept as a class rule in the stylesheet of the page the
+// layer is on (ADR-0002: it is CSS), so export and import carry it as written. A text style is a
+// rule Ninerr wrote, marked by the comment before it, at the top level of that stylesheet: one
+// class, and declarations that are all typography. A page's own classes are never taken for one.
+const TEXT_STYLE_PROPERTIES = new Set(["font-family", "font-size", "font-weight", "font-style", "line-height", "letter-spacing", "text-transform", "text-decoration", "color"]);
+const TEXT_STYLE_NAME = /^[a-z][a-z0-9-]{0,47}$/u;
+const TEXT_STYLE_MARK = "ninerr text style";
+
+/** The layer whose stylesheet applies to `id`: the nearest one holding a stylesheet, or its page. */
+function stylesheetHolder(doc, id) {
+  let page = id;
+  for (let at = id; at !== null && doc.nodes[at]; at = doc.nodes[at].parentId ?? null) {
+    if (typeof doc.nodes[at].props?.stylesheet === "string") return at;
+    page = at;
+  }
+  return page;
+}
+
+/**
+ * A stylesheet read at its top level, strings and comments respected: its rules as { selector,
+ * body, marked } (marked: the comment just before it is TEXT_STYLE_MARK), and its text with
+ * strings and comments blanked, for finding a class name in it.
+ */
+function topLevelRules(css) {
+  const text = typeof css === "string" ? css : "";
+  const rules = [];
+  let plain = "";
+  let depth = 0;
+  let selector = "";
+  let body = "";
+  let marked = false;
+  let pendingMark = false;
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (char === "/" && text[at + 1] === "*") {
+      const close = text.indexOf("*/", at + 2);
+      const comment = close < 0 ? text.slice(at + 2) : text.slice(at + 2, close);
+      if (depth === 0) pendingMark = comment.trim() === TEXT_STYLE_MARK && selector.trim() === "";
+      at = close < 0 ? text.length : close + 1;
+      plain += " ";
+      continue;
+    }
+    if (char === "\"" || char === "'") {
+      let close = at + 1;
+      while (close < text.length && text[close] !== char) close += text[close] === "\\" ? 2 : 1;
+      const quoted = text.slice(at, close + 1);
+      if (depth === 0) selector += quoted;
+      else if (depth === 1) body += quoted;
+      plain += " ".repeat(quoted.length);
+      at = close;
+      continue;
+    }
+    plain += char;
+    if (char === "{") {
+      if (depth === 0) {
+        marked = pendingMark;
+        body = "";
+      } else if (depth >= 1) body += char;
+      depth += 1;
+    } else if (char === "}") {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) {
+        rules.push({ selector: selector.trim(), body, marked });
+        selector = "";
+        pendingMark = false;
+      } else body += char;
+    } else if (char === ";" && depth === 0) {
+      // A statement (@charset, @import, @layer a, b;) ends here: the next rule starts after it.
+      selector = "";
+      pendingMark = false;
+    } else if (depth === 0) selector += char;
+    else body += char;
+  }
+  return { rules, plain };
+}
+
+/** The text styles in a stylesheet, in order: [{ name, declarations: [[property, value]] }]. */
+function textStylesOf(css) {
+  const found = [];
+  for (const { selector, body, marked } of topLevelRules(css).rules) {
+    const match = /^\.([a-z][a-z0-9-]{0,47})$/u.exec(selector);
+    if (!marked || !match || body.includes("{") || found.some((entry) => entry.name === match[1])) continue;
+    const declarations = body.split(";").map((part) => part.trim()).filter((part) => part !== "").map((part) => [part.slice(0, part.indexOf(":")).trim().toLowerCase(), part.slice(part.indexOf(":") + 1).trim()]);
+    if (declarations.length > 0 && declarations.every(([property, value]) => TEXT_STYLE_PROPERTIES.has(property) && value !== "")) found.push({ name: match[1], declarations });
+  }
+  return found;
+}
+
+/** Why a layer cannot have a text style saved or applied, or null. */
+function textStyleRefusal(doc, nodeId) {
+  if (stylesheetHolder(doc, nodeId) === nodeId) return "a text style is kept in the stylesheet of the page around a layer, and this layer is that page (or has none around it)";
+  for (let at = nodeId; at !== null && doc.nodes[at]; at = doc.nodes[at].parentId ?? null) {
+    if (doc.nodes[at].props?.codeSource) return "this layer comes from a codebase file, whose stylesheet is not written back, so its typography stays its own";
+  }
+  return null;
+}
+
+function textStyleControls(doc, node) {
+  if (doc === null || !node || textStyleRefusal(doc, node.id) !== null) return [];
+  const holder = doc.nodes[stylesheetHolder(doc, node.id)];
+  const styles = textStylesOf(holder?.props?.stylesheet);
+  const classes = typeof node.props?.attributes?.class === "string" ? node.props.attributes.class.split(" ") : [];
+  const current = styles.find((entry) => classes.includes(entry.name))?.name ?? "";
+  const picker = el("select", { id: "inspect-text-style-name", name: "textstyle:apply" }, el("option", { value: "", selected: current === "" }, "None"), ...styles.map(({ name }) => el("option", { value: name, selected: name === current }, name)));
+  picker.dataset.original = current;
+  const name = el("input", { id: "inspect-text-style-new", autocomplete: "off", spellcheck: "false", placeholder: "heading" });
+  const save = el("button", { type: "button", id: "inspect-text-style-save", onclick: () => saveTextStyle(node.id, name.value.trim()) }, "Save as text style");
+  return [
+    el("label", { for: picker.id }, "Text style", picker),
+    el("div", { class: "pair" }, el("label", { for: name.id }, "New text style's name", name), save),
+  ];
+}
+
+/**
+ * What would change on the canvas if the layer's own `declarations` gave way to class `name` of
+ * the stylesheet `holderId` holds: tried in the canvas's own document, with the rule scoped as the
+ * renderer scopes the page's sheet and placed after it, so every rule of the page competes as it
+ * would. Returns the properties drawn differently, as "property: before → after".
+ */
+function textStyleDifferences(holderId, nodeId, name, declarations) {
+  const element = canvas.renderer.elementFor(nodeId);
+  if (!element) return ["the layer is not drawn"];
+  const frameDocument = element.ownerDocument;
+  const view = frameDocument.defaultView;
+  const properties = declarations.map(([property]) => property);
+  const read = () => properties.map((property) => view.getComputedStyle(element).getPropertyValue(property));
+  const before = read();
+  const escaped = holderId.replace(/["\\\n\r\f]/gu, (char) => `\\${char.codePointAt(0).toString(16)} `);
+  const probe = frameDocument.createElement("style");
+  probe.textContent = `@scope ([data-ninerr-id="${escaped}"]) {\n.${name} { ${declarations.map(([property, value]) => `${property}: ${value};`).join(" ")} }\n}`;
+  const saved = properties.map((property) => [property, element.style.getPropertyValue(property), element.style.getPropertyPriority(property)]);
+  const hadClass = element.classList.contains(name);
+  frameDocument.head.append(probe);
+  try {
+    for (const property of properties) element.style.removeProperty(property);
+    element.classList.add(name);
+    const after = read();
+    return properties.flatMap((property, index) => (before[index] === after[index] ? [] : [`${property}: ${before[index]} → ${after[index]}`]));
+  } finally {
+    if (!hadClass) element.classList.remove(name);
+    for (const [property, value, priority] of saved) if (value !== "") element.style.setProperty(property, value, priority);
+    probe.remove();
+  }
+}
+
+// The layer's typography becomes a text style of its page: a marked class rule added to the
+// page's stylesheet, the class given to the layer, and those declarations taken off its own
+// style, in one change. Refused when the name is taken, or when a rule of the page would then
+// draw the layer differently (a more specific or important rule, which its own style beat).
+function saveTextStyle(nodeId, name) {
+  const doc = state.document;
+  const node = doc?.nodes[nodeId];
+  if (!node) return;
+  const refusal = textStyleRefusal(doc, nodeId);
+  if (refusal !== null) {
+    setStatus(`Not saved: ${refusal}.`);
+    return;
+  }
+  if (!TEXT_STYLE_NAME.test(name)) {
+    setStatus("Not saved: a text style's name is lowercase letters, digits and hyphens, starting with a letter.");
+    return;
+  }
+  const style = node.props?.style && typeof node.props.style === "object" ? node.props.style : {};
+  const declarations = Object.entries(style).filter(([property]) => TEXT_STYLE_PROPERTIES.has(property));
+  if (declarations.length === 0) {
+    setStatus("Not saved: this layer has no typography of its own to save (font, size, weight, line height, letter spacing, case or colour).");
+    return;
+  }
+  if (declarations.some(([, value]) => value.includes("/*") || value.includes("*/"))) {
+    setStatus("Not saved: a value with a comment in it cannot be written into a stylesheet.");
+    return;
+  }
+  const holderId = stylesheetHolder(doc, nodeId);
+  const sheet = typeof doc.nodes[holderId].props?.stylesheet === "string" ? doc.nodes[holderId].props.stylesheet : "";
+  if (new RegExp(`\\.${name}(?![a-z0-9_-])`, "u").test(topLevelRules(sheet).plain)) {
+    setStatus(`Not saved: the page's stylesheet already has a rule for .${name}.`);
+    return;
+  }
+  const differences = textStyleDifferences(holderId, nodeId, name, declarations);
+  if (differences.length > 0) {
+    setStatus(`Not saved: as a class, a rule of this page would draw it differently (${differences.join("; ")}).`);
+    return;
+  }
+  const rule = `/* ${TEXT_STYLE_MARK} */\n.${name} { ${declarations.map(([property, value]) => `${property}: ${value};`).join(" ")} }`;
+  const own = { ...style };
+  for (const [property] of declarations) delete own[property];
+  const classes = typeof node.props?.attributes?.class === "string" ? node.props.attributes.class.split(" ").filter((part) => part !== "") : [];
+  const attributes = { ...(node.props?.attributes ?? {}), class: [...classes.filter((part) => part !== name), name].join(" ") };
+  commit([
+    { type: "set-props", nodeId: holderId, set: { stylesheet: sheet === "" ? rule : `${sheet}\n${rule}` } },
+    { type: "set-props", nodeId, set: { attributes, style: own } },
+  ], `Save text style ${name}`);
 }
 
 // Values that are numbers without a unit: a bare number stays one (1.5 is a line height, not 1.5px).
@@ -2941,6 +3136,23 @@ function onInspectorChange(event) {
     // Placing them freely keeps each child where the row or column put it.
     const measured = input.value === "free" ? canvas.measure(state.document.nodes[nodeId]?.children ?? []) : {};
     commit(setLayout(state.document, nodeId, input.value, measured), input.value === "free" ? "Place children freely" : input.value === "row" ? "Auto layout in a row" : "Auto layout in a column");
+  }
+  else if (input.name === "textstyle:apply") {
+    // One text style at a time: the page's other text styles come off the layer's classes, and
+    // its own values for what the style sets give way to it.
+    const doc = state.document;
+    const styles = textStylesOf(doc.nodes[stylesheetHolder(doc, nodeId)]?.props?.stylesheet);
+    const names = new Set(styles.map((entry) => entry.name));
+    const node = doc.nodes[nodeId];
+    const attributes = { ...(node.props?.attributes ?? {}) };
+    const classes = (typeof attributes.class === "string" ? attributes.class.split(" ") : []).filter((part) => part !== "" && !names.has(part));
+    if (value !== "") classes.push(value);
+    if (classes.length === 0) delete attributes.class;
+    else attributes.class = classes.join(" ");
+    const sets = new Set(styles.find((entry) => entry.name === value)?.declarations.map(([property]) => property) ?? []);
+    const own = Object.fromEntries(Object.entries(node.props?.style ?? {}).filter(([property]) => !sets.has(property)));
+    const set = { ...(Object.keys(attributes).length === 0 ? {} : { attributes }), ...(sets.size === 0 ? {} : { style: own }) };
+    commit([{ type: "set-props", nodeId, set, ...(Object.keys(attributes).length === 0 ? { unset: ["attributes"] } : {}) }], value === "" ? "Remove text style" : `Apply text style ${value}`);
   }
   else if (input.name.startsWith("style:")) {
     const property = input.name.slice(6);
