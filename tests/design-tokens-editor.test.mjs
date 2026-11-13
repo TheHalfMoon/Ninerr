@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { startTestHost as startStudioHost } from "./support/cleanup.mjs";
 import { browserTestOptions } from "./support/browser.mjs";
@@ -79,6 +80,46 @@ test("create a design system, add a token, and draw a layer with it in each mode
     await page.keyboard.press("Control+z");
     await waitRevision(page, 7);
     assert.equal(await colourOf(page, "hero"), "rgb(255, 0, 0)");
+  } finally {
+    await editor.close();
+    await host.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("import Astryx's token CSS: review it, add it in one change, and draw a layer with an Astryx token in each mode", browserTestOptions(), async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-token-css-editor-")));
+  mkdirSync(join(root, "projects"));
+  const host = await startStudioHost({ projectsRoot: join(root, "projects"), now });
+  const editor = await openEditor(host);
+  try {
+    const { page } = editor;
+    await page.locator("#new-project-name").fill("astryx");
+    await page.keyboard.press("Enter");
+    await waitRevision(page, 0);
+    await page.locator("#action-tokens").click();
+    await page.locator("#token-css-file").setInputFiles(fileURLToPath(new URL("./fixtures/astryx/astryx-tokens.css", import.meta.url)));
+    await page.locator("#token-css-review").click();
+    await page.locator("#token-css-summary").waitFor();
+    assert.equal(await page.locator("#token-css-summary").textContent(), "Astryx tokens from astryx-tokens.css: 247 new.");
+    assert.ok((await page.locator("#token-css-kept li").allTextContents()).includes("--duration-fast: a duration: Ninerr has no motion token type"));
+    assert.equal(await page.locator("#token-css-apply").textContent(), "Add 247 tokens");
+    await page.locator("#token-css-apply").click();
+    await waitRevision(page, 1);
+    await page.locator("#token-css-done").waitFor();
+    // A layer that uses an Astryx token is drawn with its light value, and its dark one in Dark.
+    const call = client(host.url, host.token);
+    const { document } = await ok(call("GET", "/api/document"), "document");
+    await ok(call("POST", "/api/edit", { baseRevision: document.revision, operations: [{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: "accent", type: "frame", props: { name: "Accent", style: { width: "40px", height: "40px", background: "var(--color-accent)" } } } }], intent: "Add a layer" }), "layer");
+    await waitRevision(page, 2);
+    const painted = () => page.evaluate(() => getComputedStyle(document.querySelector("iframe").contentDocument.querySelector('[data-ninerr-id="accent"]')).backgroundColor);
+    assert.equal(await painted(), "rgb(0, 100, 224)");
+    const { document: now2 } = await ok(call("GET", "/api/document"), "document");
+    const system = Object.values(now2.nodes).find((node) => node.type === "design-system");
+    await ok(call("POST", "/api/edit", { baseRevision: now2.revision, operations: [{ type: "set-props", nodeId: "accent", set: { modes: { [system.props.collections[0].id]: "dark" } } }], intent: "Dark" }), "dark");
+    await waitRevision(page, 3);
+    assert.equal(await painted(), "rgb(1, 113, 227)");
+    assert.deepEqual(editor.errors, []);
   } finally {
     await editor.close();
     await host.close();
