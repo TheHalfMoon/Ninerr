@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { chmodSync, closeSync, constants, fstatSync, fsyncSync, openSync, readSync, renameSync, rmSync, writeSync } from "node:fs";
-import { createPrivateFile, currentUserSid, FileBusyError, readWithSecurity, WindowsSecurityError, type WindowsFileSecurity } from "./windows-security.ts";
+import { replacePrivately, currentUserSid, FileBusyError, readWithSecurity, WindowsSecurityError, type WindowsFileSecurity } from "./windows-security.ts";
 
 // The files in the projects folder that Ninerr trusts: the relay discovery file, which tells an
 // MCP relay where to send an agent's credential; the agent registry; and the codebase links. A
@@ -140,22 +140,23 @@ const HARD_LINK = "it has another name elsewhere (a hard link)";
  */
 export function writeTrustedFile(path: string, text: string): void {
   const bytes = Buffer.from(text, "utf8");
+  // On Windows the replacement is renamed into place through its own handle (#349).
+  if (process.platform === "win32") {
+    replacePrivately(path, bytes);
+    return;
+  }
   let temporary: string | null = null;
   try {
-    if (process.platform === "win32") {
-      temporary = createPrivateFile(path, bytes);
-    } else {
-      temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
-      const fd = openSync(temporary, "wx", 0o600);
-      try {
-        writeSync(fd, bytes);
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      // The creation mode is narrowed by the umask, never widened; make it exactly owner-only.
-      chmodSync(temporary, 0o600);
+    temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
+    const fd = openSync(temporary, "wx", 0o600);
+    try {
+      writeSync(fd, bytes);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
     }
+    // The creation mode is narrowed by the umask, never widened; make it exactly owner-only.
+    chmodSync(temporary, 0o600);
     renameSync(temporary, path);
     temporary = null;
   } finally {
