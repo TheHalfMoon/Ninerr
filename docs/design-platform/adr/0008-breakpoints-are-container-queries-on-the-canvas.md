@@ -1,6 +1,6 @@
 # ADR-0008: A page's breakpoints are its media queries, drawn as container queries on its frame
 
-- **Status:** proposed, 2026-11-13.
+- **Status:** accepted by the founder, 2026-11-13 (`docs/provenance/FOUNDER_DECISION_2026-11-13_PENDING_BRIEF.md`), to be built after 1.0 unless a dogfooded page needs it sooner; proposed 2026-11-13.
 - **Context:**
   - Every page is drawn in one canvas frame, sized to its content (`packages/canvas`). A media query in a page's stylesheet is therefore matched against that frame's width, which follows the widest page on the canvas, not against the page's own width. The renderer already draws viewport lengths against a fixed design viewport (`DESIGN_VIEWPORT`, 1024 × 768, #283) for the same reason, and leaves media queries as written.
   - A `breakpoint` token type exists (ADR-0004, schema v2), but nothing reads it yet.
