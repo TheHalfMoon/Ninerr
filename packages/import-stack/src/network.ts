@@ -58,6 +58,13 @@ export function validateNavigationUrl(raw: string, policy: ImportPolicy, network
   return url;
 }
 
+// A failure reason names no address a name resolved to: it reaches whoever asked for the import
+// (an agent, through a tool result), and must not map the network behind it (#94).
+const ADDRESS_LITERAL = /\b\d{1,3}(?:\.\d{1,3}){3}\b|(?:[0-9a-f]{0,4}:){2,7}[0-9a-f.]{0,15}/giu;
+function withoutAddresses(reason: string): string {
+  return reason.replace(ADDRESS_LITERAL, "[address]");
+}
+
 /** Validate the addresses actually used to connect against both policies (DNS-rebinding guard). */
 export function validateResolvedAddresses(url: URL, addresses: readonly string[], policy: ImportPolicy, networkPolicy?: NetworkPolicy): void {
   if (addresses.length === 0) throw new ImportSecurityError("target resolution returned no addresses");
@@ -66,12 +73,12 @@ export function validateResolvedAddresses(url: URL, addresses: readonly string[]
     if (policy.mode === "local-app") {
       if (!isLoopbackAddress(address)) throw new ImportSecurityError("local-app resolution escaped loopback");
     } else if (policy.mode === "remote") {
-      if (isForbiddenRemoteAddress(address)) throw new ImportSecurityError(`remote target resolved to forbidden address ${address}`);
+      if (isForbiddenRemoteAddress(address)) throw new ImportSecurityError("remote target resolved to forbidden address (private, loopback, link-local or reserved)");
     } else {
       throw new ImportSecurityError("offline policy cannot resolve network addresses");
     }
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new ImportSecurityError("resolved target protocol is unsupported");
   const resolved = evaluateResolved(networkDecision(url, networkPolicy), [...addresses]);
-  if (!resolved.allowed) throw new ImportSecurityError(`network policy denied resolved addresses: ${resolved.reason}`);
+  if (!resolved.allowed) throw new ImportSecurityError(`network policy denied resolved addresses: ${withoutAddresses(resolved.reason)}`);
 }
