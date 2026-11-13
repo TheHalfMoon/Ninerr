@@ -43,6 +43,11 @@ async function withHost(callback) {
 test("inline styles become style properties", () => {
   assert.deepEqual(styleProperties({ cssText: "color: #224466; FONT-SIZE: 40px;;bad;x:;background-image:url(a)" }), { color: "#224466", "font-size": "40px", "background-image": "url(a)" });
   assert.deepEqual(styleProperties({ color: "red" }), { color: "red" });
+  // Escaped names are read as a browser reads them (#383); a name that then is not a property, or
+  // holds a code point CSS replaces, is still left out. Values are kept as written.
+  assert.deepEqual(styleProperties({ cssText: "\\width: 3px; c\\6flor: red; to\\70 : 1px; --a\\_b: 1; \\0 x: 2; w\\:x: 3; c\\6F LOR: blue" }), { width: "3px", top: "1px", "--a_b": "1", color: "blue" });
+  assert.deepEqual(styleProperties({ cssText: "content: '\\2014'" }), { content: "'\\2014'" }, "a value keeps its escapes");
+  assert.deepEqual(styleProperties({ cssText: "\\110000 x: 1; \\d800 y: 2; top: 4px" }), { top: "4px" }, "an escape past U+10FFFF or a surrogate is U+FFFD, and does not throw");
   assert.deepEqual(styleProperties(null), {});
 });
 
