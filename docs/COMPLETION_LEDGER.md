@@ -2,7 +2,7 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
-Last updated: 2026-11-13. Canonical main: `5492954`.
+Last updated: 2026-11-13. Canonical main: `d184b15`.
 
 ## Completed since P09 (with evidence)
 
@@ -35,26 +35,24 @@ Last updated: 2026-11-13. Canonical main: `5492954`.
 | Open Code Review records a documentation-only pull request | #437 | `d763701` | seven exact-head checks pass |
 | Typography in the inspector (font with tokens, weight, line height, letter spacing, alignment) | #424 | `c455f38` | seven exact-head checks pass |
 | Tests name a request or evaluation that hangs (#300) | #440 | `5492954` | seven exact-head checks pass |
+| Agents search and read the Astryx component records through MCP (milestone E) | #429 | `97aa9b5` | seven exact-head checks pass |
+| Astryx pages render on the canvas as Astryx renders them; three canvas fixes for every imported page (milestone C) | #435 | `9663ea9` | seven exact-head checks pass |
+| Desktop upgrade and uninstall docs; ADR-0008 (proposed) for breakpoints | #441 | `6251a7c` | seven exact-head checks pass |
+| Copy a layer as PNG or SVG | #439 | `8239ecf` | seven exact-head checks pass |
+| CI: on main, a run in progress finishes and only the latest waiting push runs | #442 | `d895bc6` | seven exact-head checks pass, and the release workflow's dry run |
+| This ledger | #421 | `87d43ca` | seven exact-head checks pass |
+| MCP `set_attributes` (classes, text direction, lang, aria) | #443 | `eabc628` | seven exact-head checks pass |
+| Auto layout panel | #423 | `1179cbd` | seven exact-head checks pass |
+| Snapping and guides | #430 | `187943b` | seven exact-head checks pass |
+| Constraints | #432 | `e5682e5` | seven exact-head checks pass |
+| Right-to-left editing: a layer's text direction | #433 | `b14b831` | seven exact-head checks pass; a full local `npm run check` at its head: 1,356 tests, 0 fail, 11 skipped |
+| Reduced motion on the canvas | #444 | `d184b15` | seven exact-head checks pass |
 
 Each row's PR has its full check results, its fresh-context review findings and fixes, and its mutation results.
 
 ## In review
 
-Each is built, tested, mutation-checked and reviewed by a fresh-context reviewer, with the findings fixed, before its PR opens. Each merges after its seven exact-head checks pass.
-
-| Capability | PR |
-| --- | --- |
-| Agents search and read the Astryx component records through MCP (milestone E) | #429 |
-| Astryx pages render on the canvas as Astryx renders them (milestone C) | #435 (contains #429) |
-| This ledger | #421 |
-| Auto layout panel | #423 |
-| Snapping and guides | #430 (contains #423) |
-| Constraints | #432 (contains #430) |
-| Right-to-left editing: a layer's text direction | #433 (contains #432) |
-| Copy a layer as PNG or SVG | #439 |
-| Desktop upgrade and uninstall docs; ADR-0008 (proposed) for breakpoints | #441 |
-| CI: on main, only the latest waiting push runs | #442 |
-| Reduced motion on the canvas | built and reviewed; opens after #435 |
+Nothing is in review.
 
 ## Remaining requirements
 
@@ -74,18 +72,18 @@ Each is built, tested, mutation-checked and reviewed by a fresh-context reviewer
 | Capability | State |
 | --- | --- |
 | Align and distribute | done (#419) |
-| Auto layout (flex) editing | in review (#423) |
-| Constraints | in review (#432) |
+| Auto layout (flex) editing | done (#423) |
+| Constraints | done (#432) |
 | Responsive breakpoints | design proposed (ADR-0008, #441), for the founder |
-| Snapping and guides | in review (#430) |
+| Snapping and guides | done (#430) |
 | Typography: font picker | done (#424); text styles (named, reusable) missing |
 | Pages: add and switch | done (#422) |
 | Export: standalone HTML | done (#418) |
 | Export: Tailwind | done (#434) |
-| Export: PNG, SVG | in review (#439); PDF missing |
+| Export: PNG, SVG | done (#439); PDF missing |
 | Prototyping and interactions | missing |
-| RTL editing | in review (#433): a layer's text direction |
-| Reduced motion | no motion in the editor; the canvas ends a design's motion when the system asks (opens after #435) |
+| RTL editing | done (#433, and MCP `set_attributes` #443): a layer's text direction |
+| Reduced motion | no motion in the editor; the canvas ends a design's motion when the system asks (#444) |
 | Component sources | |
 | ↳ three-way update of an imported item | missing |
 | ↳ preview, beyond static HTML | needs a decision (live React preview runner) |
@@ -114,7 +112,7 @@ Each is built, tested, mutation-checked and reviewed by a fresh-context reviewer
 
 ## Next engineering actions
 
-1. Merge the open pull requests as their checks pass, in their chains' order (#429 then #435; #423, #430, #432, #433), then open reduced motion. Verify the latest main's post-merge CI.
+1. Verify the latest main's post-merge CI.
 2. The founder's decisions listed above, and ADR-0008 before breakpoints are built.
-3. Text styles, PDF export, and MCP tools for layout, constraints and direction (agents can already set each through `set_styles` and attributes).
+3. Text styles, PDF export, and MCP tools for layout and constraints (agents can already set each through `set_styles`).
 4. Remaining issue dispositions toward P10-6, and the P10 qualification records.
