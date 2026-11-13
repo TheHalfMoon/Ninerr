@@ -7,9 +7,9 @@ import {
   searchUiComponentSources,
 } from "../packages/component-sources/src/catalog.mjs";
 
-test("all twelve requested UI ecosystems and two same-name alternatives have stable unique IDs", () => {
-  assert.equal(UI_COMPONENT_SOURCES.length, 14);
-  assert.equal(new Set(UI_COMPONENT_SOURCES.map(({ id }) => id)).size, 14);
+test("all twelve requested UI ecosystems, two same-name alternatives and Astryx have stable unique IDs", () => {
+  assert.equal(UI_COMPONENT_SOURCES.length, 15);
+  assert.equal(new Set(UI_COMPONENT_SOURCES.map(({ id }) => id)).size, 15);
   assert.deepEqual(new Set(UI_COMPONENT_SOURCES.map(({ group }) => group)),
     new Set(["Foundation", "Specialist", "Gallery", "Marketplace"]));
   assert.equal(UI_COMPONENT_SOURCE_GROUPS[0], "All");
@@ -48,7 +48,7 @@ test("each source states its license and what Ninerr may import from it", () => 
   // Commons Clause and an attribution condition; free items only for Notchset.
   assert.equal(policy["rareui-swami"], "allowed-with-attribution");
   assert.equal(policy["beautiful-ui-notchset"], "free-items-only");
-  for (const id of ["shadcn", "base-ui", "radix-ui", "sonner", "vaul", "cmdk", "numberflow", "beautiful-ui", "rareui", "magic-ui"]) {
+  for (const id of ["shadcn", "base-ui", "radix-ui", "astryx", "sonner", "vaul", "cmdk", "numberflow", "beautiful-ui", "rareui", "magic-ui"]) {
     assert.equal(policy[id], "allowed", id);
     assert.equal(UI_COMPONENT_SOURCES.find((item) => item.id === id).license, "MIT", id);
   }
