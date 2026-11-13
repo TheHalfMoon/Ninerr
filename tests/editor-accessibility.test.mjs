@@ -1023,7 +1023,7 @@ test("the inspector audits clean with the Align group for three selected layers"
     const box = (id, left) => ({ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id, type: "frame", props: { name: id, style: { position: "absolute", left: `${left}px`, top: "0px", width: "40px", height: "40px" } } } });
     await ok(call("POST", "/api/edit", { baseRevision: document.revision, operations: [box("one", 0), box("two", 60), box("three", 200)], intent: "Add boxes" }), "boxes");
     await waitRevision(page, 1);
-    for (const [index, id] of ["one", "two", "three"].entries()) await page.locator(`#layers [role=treeitem][data-node-id="${id}"] > .row`).click(index === 0 ? {} : { modifiers: ["Control"] });
+    for (const [index, id] of ["one", "two", "three"].entries()) await page.locator(`#layers [role=treeitem][data-node-id="${id}"] > .row`).click(index === 0 ? {} : { modifiers: ["Shift"] });
     await page.locator("#align-group").waitFor();
     assert.equal(await page.locator("#align-group button").count(), 8);
     await audit(page, "the inspector with three layers selected");

@@ -41,9 +41,9 @@ test("align and distribute selected layers from the inspector and the keyboard, 
     assert.equal(await page.locator("#align-group").count(), 0);
     await page.locator('#layers [role=treeitem][data-node-id="a"] > .row').click();
     assert.equal(await page.locator("#align-group").count(), 0);
-    await page.locator('#layers [role=treeitem][data-node-id="b"] > .row').click({ modifiers: ["Control"] });
+    await page.locator('#layers [role=treeitem][data-node-id="b"] > .row').click({ modifiers: ["Shift"] });
     assert.equal(await page.locator("#align-group button", { hasText: "Space evenly" }).count(), 0);
-    await page.locator('#layers [role=treeitem][data-node-id="c"] > .row').click({ modifiers: ["Control"] });
+    await page.locator('#layers [role=treeitem][data-node-id="c"] > .row').click({ modifiers: ["Shift"] });
     assert.equal(await page.locator("#align-group").getAttribute("aria-label"), "Align 3 layers");
 
     await page.locator("#align-group button", { hasText: "Align top" }).click();
@@ -92,7 +92,7 @@ test("align measures flow layers as they will be placed, leaves out a hidden lay
       { type: "insert-node", parentId: "board", index: 2, node: { id: "ghost", type: "frame", props: { name: "ghost", attributes: { hidden: "" }, style: { width: "10px", height: "10px" } } } },
     ] }), "page");
     await waitRevision(page, 1);
-    for (const [index, id] of ["heading", "badge", "ghost"].entries()) await page.locator(`#layers [role=treeitem][data-node-id="${id}"] > .row`).click(index === 0 ? {} : { modifiers: ["Control"] });
+    for (const [index, id] of ["heading", "badge", "ghost"].entries()) await page.locator(`#layers [role=treeitem][data-node-id="${id}"] > .row`).click(index === 0 ? {} : { modifiers: ["Shift"] });
     assert.equal(await page.locator("#align-group").getAttribute("aria-label"), "Align 2 layers", "the hidden layer is not counted");
     await page.locator('#align-group [data-align="top"]').click();
     await waitRevision(page, 2);
