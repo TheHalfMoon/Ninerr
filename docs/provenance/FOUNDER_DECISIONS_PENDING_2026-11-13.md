@@ -1,5 +1,7 @@
 # Decisions pending the founder, 2026-11-13
 
+**Superseding update (2026-11-14):** The first release target changed to **v0.1.0**, and the founder reserved all Desktop/UI implementation and human-facing acceptance. See `FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`. The earlier `v1.0.0` wording below is the historical plan, **not** permission to tag or publish v1.0.0. The third-party corresponding-source obligation and other release gates still apply.
+
 **Decided 2026-11-13:** the founder took this brief as written (`FOUNDER_DECISION_2026-11-13_PENDING_BRIEF.md`). Each decision below is its recommendation.
 
 Every product item that needs no decision is built and merged (`docs/COMPLETION_LEDGER.md`). What remains on the path to `v1.0.0` waits on the decisions below. Each gives the options, what each costs, and a recommendation, so it can be answered in a line. None is taken by engineering: each changes scope, a security boundary, a network policy, a release artifact, or a third party's rights.

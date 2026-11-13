@@ -1,6 +1,10 @@
 # Ninerr — Canonical Program State
 
-Last updated: 2026-11-13 (canonical main `338e463`)
+Latest founder decision: **2026-11-14**. For the current `main` commit, consult GitHub; the older SHA references below are historical evidence anchors.
+
+**New first release target: v0.1.0**, superseding all earlier references to v1.0.0 as the first public release. The founder retains the Desktop and UI implementation, clean-machine and real screen-reader acceptance, legal source-offer adoption and final release decision. Engineering continues non-UI implementation, security, test infrastructure, release provenance and CI without autonomous Desktop/UI edits. No release tag or publication is authorized. The source of authority is `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`; earlier program descriptions below remain as historical evidence.
+
+Prior canonical state recorded: 2026-11-13 (main `338e463`)
 
 ## Since 2026-11-07
 
@@ -66,12 +70,12 @@ The seven-project dogfooding was run again on `1987c77` with the same outcomes a
 
 This is the normal merge commit for PR #391 (M05). It is the latest commit whose post-merge run was verified when this page was updated: CI and Desktop completed `SUCCESS` on that exact SHA. Later commits may exist: check the live branch.
 
-## Before the v1 tag
+## Before the first release tag (now v0.1.0)
 1. **License.** Resolved: Ninerr is Apache-2.0 (`LICENSE`), after the A/B source-rights audit (`docs/evidence/N0_G7A_LICENSE_2026-10-09.md`).
 2. **Private vulnerability reporting.** Resolved: it is enabled and verified (`SECURITY.md`).
 3. **Publisher signing.** Decided: the release may ship without publisher signing or notarization, stated as such, with checksums and Sigstore build provenance (#139).
 4. **LGPL corresponding source.** The binding is done (`docs/provenance/ELECTRON_CORRESPONDING_SOURCE.json`), and the release workflow verifies it live (`docs/evidence/N0_G7B_ELECTRON_SOURCE_2026-10-09.md`). Decided: the release carries that source alongside its artifacts.
-5. **The tag.** `v1.0.0` is created only after the exact candidate passes every P10 criterion, and its release is published only after the release gate has checked it (`docs/MASTER_PLAN.md`). No tag exists.
+5. **The tag.** Under the founder's 2026-11-14 update, the first tag is `v0.1.0`, not `v1.0.0`. It requires final Desktop/UI and human acceptance, an approved corresponding-source route, the exact candidate's P10 evidence and separate founder authorization. No tag exists.
 
 ## Canonical facts
 - Product: **Ninerr**, licensed under Apache-2.0. The repository is `TheHalfMoon/Ninerr`.
