@@ -196,7 +196,6 @@ test("stale revisions are refused, and a damaged project is refused rather than 
   await agent.stop();
 }));
 
-<<<<<<< HEAD
 test("an agent reads history, undoes and redoes its own change, and exports code and a preview into the project", () => withProjects(async (projects) => {
   const agent = engine(projects);
   await agent.initialize();
@@ -239,7 +238,7 @@ test("an agent reads history, undoes and redoes its own change, and exports code
   assert.equal((await agent.call("project_history")).structuredContent.revision, 5, "exporting changes nothing in the design");
   await agent.stop();
 }));
-=======
+
 test("a client that goes away while a delete waits for the person leaves nothing deleted and the project released", () => withProjects(async (projects) => {
   const agent = engine(projects, { elicitation: true, onAsk: () => null });
   await agent.initialize();
@@ -306,4 +305,3 @@ test("a question the person never answers is no approval, and asking again asks 
     rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
->>>>>>> impl/headless-engine
