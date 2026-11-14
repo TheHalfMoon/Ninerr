@@ -63,7 +63,15 @@ test("the release is a draft for an existing tag, and every collected file is si
   assert.doesNotMatch(release, /git tag|git push|gh release edit|--draft=false|gh api/);
   assert.match(all.attest, /subject-path: \|\n {12}dist\/release\/\*\*\n {12}dist\/out\/\*\n/);
   for (const target of ["linux-x64", "darwin-arm64", "win32-x64"]) assert.ok(all.collect.includes(target), `collect checks the ${target} archive`);
-  assert.match(all.collect, /if \[ "\$count" -ne 7 \]/, "collect refuses a set missing any file");
+  // The release is the evidence bundle and the engine's tarball (founder, 2026-11-14): the
+  // desktop archives are checked, in a folder of their own, and are not released.
+  assert.match(all.collect, /if \[ "\$count" -ne 2 \]/, "collect refuses a set missing any file");
+  assert.match(all.collect, /name: ninerr-engine-\$\{\{ github\.sha \}\}\n {10}path: out\n/, "the engine goes into the release");
+  assert.equal((all.collect.match(/^ {10}path: desktop$/gm) ?? []).length, 3, "each desktop archive goes into desktop/, not out/");
+  assert.doesNotMatch(all.collect, /"out\/Ninerr-|out\/\$archive/, "no desktop archive is read from the release folder");
+  assert.match(all.collect, /engine="out\/ninerr-\$version\.tgz"/);
+  assert.match(all.collect, /if \[ "\$\(ls out \| wc -l\)" -ne 1 \] \|\| \[ ! -f "\$engine" \]; then [^\n]*exit 1; fi/, "only the engine's tarball is in its artifact");
+  assert.match(all.collect, /if \[ "\$\(tar -xzOf "\$engine" package\/package\.json \| jq -r '\.name \+ "@" \+ \.version'\)" != "ninerr@\$version" \]; then [^\n]*exit 1; fi/, "it is ninerr at the bundle's version");
   // One commit and one version across the set: the bundle's, which must be this run's commit and, on a tag, the tag's version.
   assert.match(all.collect, /commit=\$\(jq -r '\.sourceCommit' evidence\/MANIFEST\.json\)/);
   assert.match(all.collect, /if \[ "\$commit" != "\$GITHUB_SHA" \]; then [^\n]*exit 1; fi/);
@@ -87,7 +95,10 @@ test("what is signed is uploaded as built, before any later step runs", () => {
   const build = steps(all.build);
   const install = build.findIndex((step) => step.startsWith("run: npm ci --ignore-scripts"));
   assert.ok(install >= 0, "the build installs with npm ci --ignore-scripts");
-  const [made, verified, uploaded] = build.slice(install + 1, install + 4);
+  const [made, verified, uploaded, engineBuilt, engineUploaded] = build.slice(install + 1, install + 6);
+  // Then the engine's tarball, built and uploaded as built, still before any test code runs.
+  assert.match(engineBuilt ?? "", /^name: Build the engine package\n {8}run: node scripts\/build-engine\.mjs --out dist\/engine --pack\n/);
+  assert.match(engineUploaded ?? "", /^uses: actions\/upload-artifact@[0-9a-f]{40} # v4\.6\.2\n {8}with:\n {10}name: ninerr-engine-\$\{\{ github\.sha \}\}\n {10}path: dist\/ninerr-\*\.tgz\n/);
   assert.ok(made?.startsWith("name: Build the release bundle\n"), "the bundle is built straight after the install");
   assert.ok(verified?.startsWith("name: Verify the bundle against its manifest\n"), "then verified");
   assert.match(uploaded ?? "", /^uses: actions\/upload-artifact@[0-9a-f]{40} # v4\.6\.2\n {8}with:\n {10}name: ninerr-release-evidence-\$\{\{ github\.sha \}\}\n/, "then uploaded");
