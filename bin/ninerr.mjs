@@ -33,4 +33,10 @@ try {
   fail(`cannot use the projects folder ${projectsRoot}: ${error instanceof Error ? error.message : String(error)}`);
 }
 process.stderr.write(`ninerr: headless engine on stdio, projects folder ${projectsRoot}\n`);
+// A client that goes away closes stdin, which ends the engine and closes the open project.
+// A stopped client (a signal) or a closed stdout ends it the same way.
+const stop = () => process.stdin.destroy();
+process.on("SIGINT", stop);
+process.on("SIGTERM", stop);
+process.stdout.on("error", stop);
 await runHeadless({ projectsRoot, input: process.stdin, output: process.stdout });

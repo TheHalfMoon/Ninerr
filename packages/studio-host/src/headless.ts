@@ -5,6 +5,7 @@ import type { Readable, Writable } from "node:stream";
 import { LEGACY_PROJECT_DIRECTORY, PROJECT_FILES } from "@ninerr/persistence";
 import { AGENT_CAPABILITIES } from "./agents.ts";
 import { StudioError } from "./errors.ts";
+import { prepareProjectsFolder } from "./projects-folder.ts";
 import { ConfirmationBroker, handleMcpMessage, type McpContext, type PendingConfirmation } from "./mcp.ts";
 import { ReferenceCatalog } from "./reference-catalog.ts";
 import { StudioSession, assertProjectName, type StudioActor } from "./session.ts";
@@ -74,6 +75,7 @@ export class HeadlessEngine {
   #session: StudioSession | null = null;
   #actor: StudioActor = localAgentActor(undefined);
   #canAsk = false;
+  #initialized = false;
   #nextRequest = 1;
   readonly #asked = new Set<string>();
   readonly #answers = new Map<string | number, (message: any) => void>();
@@ -101,7 +103,9 @@ export class HeadlessEngine {
       return null;
     }
     const { id, method, params } = (message ?? {}) as Record<string, any>;
-    if (method === "initialize" && params !== null && typeof params === "object") {
+    // Who the agent is, and whether its client can ask the person, are set once, by the first initialize.
+    if (method === "initialize" && !this.#initialized && params !== null && typeof params === "object") {
+      this.#initialized = true;
       this.#actor = localAgentActor(params?.clientInfo?.name);
       this.#canAsk = params?.capabilities?.elicitation !== undefined && params?.capabilities?.elicitation !== null;
     }
@@ -122,8 +126,16 @@ export class HeadlessEngine {
     return handleMcpMessage(this.#context(), this.#actor, message);
   }
 
+  /** The client has gone: nothing waiting for the person can be approved now. */
+  endInput(): void {
+    this.#confirmations.drop(() => true);
+    for (const resolve of this.#answers.values()) resolve({ error: { message: "the client has gone" } });
+    this.#answers.clear();
+  }
+
   /** Close the open project, if any. */
   close(): void {
+    this.endInput();
     this.#closeSession();
   }
 
@@ -149,6 +161,7 @@ export class HeadlessEngine {
       if (name === "create_project" || name === "open_project") {
         const project = assertProjectName(args.name);
         if (args.title !== undefined && typeof args.title !== "string") throw new StudioError(400, "invalid-arguments", "title must be text");
+        if (name === "open_project" && this.#session?.name === project) this.#closeSession();
         const next = StudioSession.open({ projectsRoot: this.#projectsRoot, name: project, owner: OWNER, now: this.#now, ...(name === "create_project" ? { create: { title: args.title } } : {}) });
         this.#closeSession();
         next.setAgentGrants([{ principalKind: "actor", principalId: this.#actor.actorId, capabilities: [...AGENT_CAPABILITIES] }]);
@@ -189,6 +202,7 @@ export class HeadlessEngine {
       if (this.#asked.has(item.id)) continue;
       this.#asked.add(item.id);
       const decide = (approve: boolean) => {
+        this.#asked.delete(item.id);
         try {
           this.#confirmations.decide(item.id, approve, this.#now());
         } catch {
@@ -200,7 +214,13 @@ export class HeadlessEngine {
         continue;
       }
       const id = `ninerr-ask-${this.#nextRequest++}`;
+      // No answer before the call stops waiting is no approval: the request is declined, and a retry asks again.
+      const unanswered = setTimeout(() => {
+        if (this.#answers.delete(id)) decide(false);
+      }, Math.max(0, this.#waitMs - 500));
+      unanswered.unref?.();
       this.#answers.set(id, (answer) => {
+        clearTimeout(unanswered);
         const result = answer?.result;
         decide(answer?.error === undefined && result?.action === "accept" && result?.content?.approve === true);
       });
@@ -222,6 +242,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<void> {
   const write = (message: unknown) => {
     options.output.write(`${JSON.stringify(message)}\n`);
   };
+  prepareProjectsFolder(options.projectsRoot);
   const engine = new HeadlessEngine({ projectsRoot: options.projectsRoot, write, ...(options.now ? { now: options.now } : {}), ...(options.confirmationWaitMs ? { confirmationWaitMs: options.confirmationWaitMs } : {}) });
   const lines = createInterface({ input: options.input, crlfDelay: Infinity });
   const inflight = new Set<Promise<void>>();
@@ -249,6 +270,9 @@ export async function runHeadless(options: HeadlessOptions): Promise<void> {
       }).finally(() => inflight.delete(task));
       inflight.add(task);
     }
+    // The client has gone: what waits for the person is denied, so every call settles and the
+    // project is closed, releasing its lock, rather than left locked by an engine that exits.
+    engine.endInput();
     await Promise.all(inflight);
   } finally {
     engine.close();
