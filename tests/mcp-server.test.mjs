@@ -101,10 +101,11 @@ test("the MCP protocol: initialize, tools/list, notifications and errors", async
     assert.deepEqual(init.result.capabilities, { tools: { listChanged: false } });
     assert.match(init.result.instructions, /Call guide first/u);
     assert.equal(init.result.serverInfo.name, "ninerr");
+    assert.equal(init.result.serverInfo.version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version, "the server reports the product version");
     assert.equal((await mcp(token, "initialize", { protocolVersion: "1999-01-01" })).json.result.protocolVersion, "2025-06-18", "an unknown version gets the latest");
     assert.equal((await mcp(token, "notifications/initialized", undefined, { notification: true })).status, 202);
     const { tools } = (await mcp(token, "tools/list")).json.result;
-    assert.equal(tools.length, 37);
+    assert.equal(tools.length, 41);
     assertMCPToolSurface({ tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
     assert.deepEqual(tools.map((tool) => tool.name), [...MCP_TOOL_NAMES], "the server lists the catalog, in its order");
     for (const tool of tools) {
@@ -298,6 +299,29 @@ test("an agent's names carry no hidden or reordering characters, and a refused o
     // The read tools take no labels.
     assert.equal((await tool(token, "find_layers", { query: "Card" })).isError, undefined);
   }, { confirmationWaitMs: 100 });
+});
+
+test("what the person is asked to approve shows hidden characters as themselves, not as what they do", async () => {
+  await withStudio(async ({ owner, tool }) => {
+    const { token } = (await owner("POST", "/api/agents/create", { name: "Agent" })).json;
+    await owner("POST", "/api/projects/create", { name: "p" });
+    // A person may name a layer anything; an imported page or an older project may hold such a name too.
+    await owner("POST", "/api/edit", { baseRevision: 0, intent: "Add", operations: [
+      { type: "insert-node", node: { id: "spoof", type: "element", props: { tag: "div", name: "Logo\u202Egnp.exe" } }, index: 0 },
+      { type: "insert-node", node: { id: "quiet", type: "text", props: { tag: "p", text: "Keep\u200Bme \u{E0041}\u2066ok\u2069 \u{1F469}\u200D\u{1F4BB}" } }, index: 1 },
+    ] });
+    await tool(token, "project_info", {});
+    const asked = tool(token, "delete_layers", { nodeIds: ["spoof", "quiet"] });
+    let pending = [];
+    for (let tries = 0; tries < 100 && pending.length === 0; tries += 1) {
+      pending = (await owner("GET", "/api/confirmations")).json.pending;
+      if (pending.length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].summary, "Delete 2 layers: Logo[U+202E]gnp.exe (div), \u201CKeep[U+200B]me [U+E0041][U+2066]ok[U+2069] \u{1F469}\u200D\u{1F4BB}\u201D (p)");
+    await owner("POST", "/api/confirmations/decide", { id: pending[0].id, approve: false });
+    await asked;
+  }, { confirmationWaitMs: 2000 });
 });
 
 test("consequential calls wait for the person's decision, bound to the exact call", async () => {

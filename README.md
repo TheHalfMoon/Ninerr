@@ -1,8 +1,12 @@
 # Ninerr
 
-**First release target: v0.1.0 (not published).** The founder is developing Desktop and UI/UX directly; engineering continues the remaining non-UI core, security, CI, packaging evidence and release infrastructure. A tagged release is not authorized yet. See [the release decision](docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md) and [release requirements](docs/RELEASE.md).
+**First release target: v0.1.0 (not published): Ninerr as an agent-first, headless design engine.** Agents use Ninerr over MCP from Codex, Claude Code, OpenCode, Cursor, Gemini CLI and other clients, with no desktop app or browser needed, locally and at no cloud cost. The desktop app and web editor stay in the repository, working but frozen. See [the decision](docs/provenance/FOUNDER_DECISION_2026-11-14_AGENT_FIRST_HEADLESS.md) and [the headless plan](docs/HEADLESS.md). No tag, npm package or release is authorized yet.
 
 Ninerr is a local-first design workspace for interfaces that are code. A design is a document of real HTML and CSS. Code components are first-class layers, and changes move both ways between the canvas and a codebase. People and AI agents edit the same document, and every change is an attributed history transaction.
+
+## Use it with your agent
+
+Build and install the Ninerr Engine, check it with `ninerr doctor`, and add it to Codex, Claude Code, OpenCode, Cursor or Gemini CLI as an MCP server: `docs/ENGINE.md` has each step. No editor, browser, desktop app or account is needed.
 
 ## What is in this repository
 - **The studio host** (`packages/studio-host`) is the single writer of an open project. It serves the editor on a loopback-only HTTP API, keeps history with undo and redo, and hosts the MCP endpoint for agents.

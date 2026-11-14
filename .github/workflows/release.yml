@@ -126,8 +126,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Every archive must come from the bundle's commit and carry its version.
+          commit=$(jq -r '.sourceCommit' evidence/MANIFEST.json)
+          version=$(jq -r '.version' evidence/MANIFEST.json)
+          if [ "$commit" != "$GITHUB_SHA" ]; then echo "::error::the bundle is for $commit, this run is $GITHUB_SHA"; exit 1; fi
+          case "$version" in ""|null) echo "::error::the bundle names no version"; exit 1 ;; esac
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then echo "::error::tag $GITHUB_REF_NAME is not v$version"; exit 1; fi
           for target in linux-x64 darwin-arm64 win32-x64; do
             manifest="out/Ninerr-$target.json"
+            if [ "$(jq -r '.commit' "$manifest")" != "$commit" ]; then echo "::error::$manifest is not from $commit"; exit 1; fi
+            if [ "$(jq -r '.version' "$manifest")" != "$version" ]; then echo "::error::$manifest is not version $version"; exit 1; fi
             archive=$(jq -r '.archive' "$manifest")
             expected=$(jq -r '.archiveSha256' "$manifest")
             case "$archive" in "Ninerr-$target.tar.gz"|"Ninerr-$target.zip") ;; *) echo "::error::$manifest names $archive"; exit 1 ;; esac

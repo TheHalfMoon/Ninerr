@@ -2,6 +2,8 @@
 
 ## First release target (founder decision, 2026-11-14)
 
+**Superseding update, agent-first (2026-11-14):** v0.1.0 is the headless engine with its CLI and stdio MCP server (`docs/provenance/FOUNDER_DECISION_2026-11-14_AGENT_FIRST_HEADLESS.md`). Desktop archives are not part of v0.1.0. The release workflow is to build the engine's artifact in their place, with the same SBOM, notices, checksums and provenance (`docs/HEADLESS.md`, increment 5). Until then, the workflow below still builds desktop archives, which are kept as CI evidence for the frozen Desktop code. The rest of this section is the earlier direction.
+
 The first public release is **Ninerr v0.1.0** (root product/package version `0.1.0`), **not v1.0.0**. The repository currently contains preparation and candidate evidence, **not an authorized tag, draft or published release**. Private internal workspace versions are independent and need not match the root product version.
 
 The founder retains ownership of the user-facing **Desktop and UI/UX**, clean-machine and real screen-reader acceptance, the Electron corresponding-source distribution commitment, and final release approval. Other engineering continues non-UI code, CI, security, provenance, dependency audits, SBOM, evidence, and release qualification. The dated decision is recorded in `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`.
@@ -15,7 +17,7 @@ A Ninerr release is a tagged commit together with its signed release files: the 
 | File | What it is |
 | --- | --- |
 | `Ninerr-linux-x64.tar.gz`, `Ninerr-darwin-arm64.zip`, `Ninerr-win32-x64.zip` | The desktop app (`docs/DESKTOP.md` says how to install it). Each is packaged on its own platform's runner from the tagged commit, smoke-tested, and taken through the release-candidate journey before it is collected. |
-| `Ninerr-<platform>.json` | Each archive's package manifest: its SHA-256, the Electron runtime and its pinned archive, its corresponding-source binding, the fuses, and whether it is publisher-signed (it is not: the release is unsigned by a publisher, by the founder's decision of 2026-10-13). |
+| `Ninerr-<platform>.json` | Each archive's package manifest: the product version, the commit it was packaged from, its SHA-256, the Electron runtime and its pinned archive, its corresponding-source binding, the fuses, and whether it is publisher-signed (it is not: the release is unsigned by a publisher, by the founder's decision of 2026-10-13). |
 | `ninerr-release-evidence-<sha>.tar.gz` | The evidence bundle below, as one archive. |
 | `SHA256SUMS` | The SHA-256 of each file above. |
 
@@ -42,9 +44,11 @@ The evidence bundle's `MANIFEST.json` names that commit as `sourceCommit`, and i
 | `docs/DONORS.md`, `docs/provenance/*` | Donor and authorization provenance (every tracked file under `docs/provenance`). |
 | `SECURITY.md`, `docs/DESKTOP.md`, `docs/MCP.md`, `docs/MIGRATION.md`, `docs/RELEASE.md` | The release documents. |
 | `smoke-report.json` | The offline smoke-test report for this commit (`npm run smoke`). |
-| `MANIFEST.json` | The product, the source commit, the lockfile sha256, the project license, and the sha256 of every other file. |
+| `MANIFEST.json` | The product, its version from `package.json`, the source commit, the lockfile sha256, the project license, and the sha256 of every other file. |
 
 **Determinism.** Two builds of the same commit and lockfile are byte-identical. Nothing in the bundle depends on host paths, time, or which platform binary npm installed. `tests/release-bundle.test.mjs` checks both, the second by building with another platform's binary in place. The bundled text files are checked out with LF line endings on every platform (`.gitattributes`), so a Windows checkout produces the same bytes.
+
+The desktop archives are deterministic too. Packaging the same commit again on the same platform, with the same Node.js release, gives the same archive, byte for byte. `scripts/desktop/archive.mjs` writes the zip (Windows and macOS) with its entries in path order, every time fixed at 1980-01-01, and nothing about the host. The tar.gz (Linux) is GNU tar's, sorted, with fixed times and owners, compressed by `gzip -n`. `tests/desktop-archive.test.mjs` checks that, and that the platform's own tools unpack it to the same files, modes and links. The macOS zip carries no extended attributes. The packaged smoke verifies the app's ad-hoc signature after unpacking it.
 
 **Project license.** Ninerr is licensed under Apache-2.0 (`LICENSE`), and `MANIFEST.json` records `projectLicense: "Apache-2.0"` from `package.json`. The bundle and the desktop app ship `LICENSE` with the third-party notices. The source-rights audit behind the declaration is in `docs/evidence/N0_G7A1_SOURCE_CATEGORIES_2026-10-09.md` and `docs/evidence/N0_G7A_LICENSE_2026-10-09.md`.
 
@@ -86,7 +90,7 @@ The `Release Evidence` workflow (`.github/workflows/release.yml`) has five jobs.
 - **`desktop`** is the Desktop workflow (`.github/workflows/desktop.yml`) itself, the same one every pull request runs. It packages each archive on its own platform's runner and uploads it at once, before anything runs from it. It then smoke-tests the archive and runs the release-candidate journey through it. It cannot request an OIDC token either.
 - **`collect`** runs no repository or dependency code. It:
   1. downloads the bundle and the three archives with their manifests;
-  2. checks each archive against the SHA-256 its manifest records;
+  2. checks that the bundle is for this run's commit, that every archive was packaged from that commit with the bundle's version, and, for a tag, that the tag names that version; then checks each archive against the SHA-256 its manifest records;
   3. puts the bundle in one archive and writes `SHA256SUMS`;
   4. uploads the seven files and `SHA256SUMS` as `ninerr-release-<sha>`, kept for 90 days.
 - **`attest`** runs only for a pushed tag matching `v[0-9]*`. It downloads the bundle and the collected files and signs every file with `actions/attest-build-provenance`. These are keyless Sigstore attestations through GitHub OIDC, so no signing key is stored anywhere. It runs no repository or dependency code.

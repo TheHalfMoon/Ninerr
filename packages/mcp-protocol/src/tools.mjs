@@ -47,6 +47,12 @@ const CLASSES = Object.freeze({
   // Component sources' records (Meta Astryx at a pinned commit): read only, from Ninerr itself.
   search_components: "read",
   get_component: "read",
+  // The project's history, and the calling agent's own undo and redo.
+  project_history: "read",
+  undo_change: "write",
+  redo_change: "write",
+  // Code and a preview written into the project's own exports folder; the document is unchanged.
+  export_design: "write",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

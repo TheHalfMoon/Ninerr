@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
@@ -6,6 +8,7 @@ import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInsta
 import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
 import { exportHtml, exportJsx, exportTailwind } from "./code.ts";
 import { StudioError } from "./errors.ts";
+import { writeTrustedFile } from "./trusted-file.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
@@ -21,7 +24,21 @@ import type { StudioActor, StudioSession } from "./session.ts";
 // the editor (the host's own confirmation flow), never from the client (#82, P06 G8).
 
 export const MCP_PROTOCOL_VERSIONS = Object.freeze(["2025-06-18", "2025-03-26", "2024-11-05"]);
-const SERVER_INFO = Object.freeze({ name: "ninerr", title: "Ninerr", version: "0.0.0" });
+// The product's version: from the nearest package.json above this module that is Ninerr's own,
+// the root of the source tree, the app inside a desktop package, or an installed engine.
+function productVersion(): string {
+  for (let folder = new URL("./", import.meta.url), depth = 0; depth < 8; folder = new URL("../", folder), depth += 1) {
+    try {
+      const found = JSON.parse(readFileSync(new URL("package.json", folder), "utf8"));
+      if (found?.name === "ninerr" && typeof found.version === "string") return found.version;
+    } catch {
+      // No package.json here: look further up.
+    }
+  }
+  throw new Error("Ninerr's package.json was not found above the MCP server");
+}
+const PRODUCT_VERSION = productVersion();
+const SERVER_INFO = Object.freeze({ name: "ninerr", title: "Ninerr", version: PRODUCT_VERSION });
 const MAX_RESULT_NODES = 500;
 const MAX_TREE_DEPTH = 12;
 const MAX_DUPLICATED_NODES = 5_000;
@@ -45,6 +62,8 @@ interface ToolContext {
   selection: () => string[];
   references: ReferenceCatalog;
   edit: (operations: unknown[], intent: string) => Json;
+  /** The call is a dry run: a tool that does not change the document through `edit` must not act. */
+  dryRun: boolean;
 }
 
 /** Tool arguments are the schema's and nothing else: no directory, URL, tenant or token gets through. */
@@ -79,6 +98,7 @@ const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   rename_token: ["to"],
   delete_token: ["name", "replacement.token"],
   set_layer_modes: ["collection"],
+  export_design: ["name"],
 });
 const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
 
@@ -95,6 +115,15 @@ function valuesAt(value: unknown, path: string): unknown[] {
     });
   }
   return values;
+}
+
+// What the person is asked to approve shows every character as itself: a control, format or
+// blank-looking character in a layer's name or text (one an agent could not give, but an
+// imported page or an older project could hold) is written out as [U+XXXX], so it can neither
+// hide nor reorder the words around it. ZWNJ and ZWJ stay, as they join what they sit in.
+const HIDDEN_GLOBAL = /(?![\u{200c}\u{200d}])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{34f}\u{115f}\u{1160}\u{2800}\u{3164}\u{ffa0}]|\p{Cs}/gu;
+function shownPlainly(text: string): string {
+  return text.replace(HIDDEN_GLOBAL, (character) => `[U+${character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}]`);
 }
 
 /** The first of a call's labels that hides or reorders what a person reads, as a refusal; null when there is none. */
@@ -165,6 +194,27 @@ const strings = (value: unknown, label: string): string[] => {
   if (!Array.isArray(value) || value.length === 0 || value.length > 500 || value.some((item) => typeof item !== "string")) throw new ToolError(`${label} must be a list of 1-500 node ids`);
   return value as string[];
 };
+
+// What export_design writes: a file per format, in the project's own exports folder.
+const EXPORT_FORMATS = Object.freeze({ html: "html", jsx: "jsx", tailwind: "jsx" });
+const EXPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
+const MAX_HISTORY = 200;
+
+/** A change as an agent reads it in history. */
+const historyLine = (entry: any) => ({
+  revision: entry.revision,
+  transactionId: entry.transactionId,
+  actor: entry.actor,
+  actorKind: entry.actorKind,
+  ...(typeof entry.actorName === "string" ? { actorName: entry.actorName } : {}),
+  intent: entry.intent,
+  tool: entry.tool,
+  affectedNodeIds: entry.affectedNodeIds.slice(0, 20),
+  ...(entry.undoOf ? { undoOf: entry.undoOf } : {}),
+  ...(entry.redoOf ? { redoOf: entry.redoOf } : {}),
+  ...(entry.revertOf ? { revertOf: entry.revertOf } : {}),
+  ...(entry.earlier ? { earlier: true } : {}),
+});
 
 const TOOLS: Tool[] = [
   {
@@ -318,6 +368,7 @@ const TOOLS: Tool[] = [
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
         "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
         "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
+        "project_history lists the latest changes and who made them; undo_change and redo_change undo and redo your own latest change. export_design writes a layer into the project's exports folder as html (a complete, script-free preview page), jsx or tailwind, and returns the file's path for the person.",
         "Every tool that changes the document takes dryRun: true, which checks the change and says what it would touch (wouldChange) without making it or asking the person anything (a created layer's id there is not the one a real call makes), and baseRevision, the revision you read (project_info gives it): a change to a document that has moved on since is refused, so read it again.",
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
@@ -849,6 +900,87 @@ const TOOLS: Tool[] = [
       };
     },
   },
+  {
+    name: "project_history",
+    title: "History",
+    description: "The project's latest changes, newest last: who made each (a person or an agent), with which tool, and its intent. Changes made before the project was opened are marked earlier.",
+    inputSchema: object({ limit: { type: "integer", minimum: 1, maximum: MAX_HISTORY } }),
+    run: ({ session }, args) => {
+      const limit = Number.isSafeInteger(args.limit) && args.limit >= 1 && args.limit <= MAX_HISTORY ? args.limit : 50;
+      const log = session.log;
+      return { revision: session.revision, total: log.length, changes: log.slice(-limit).map(historyLine) } as Json;
+    },
+  },
+  {
+    name: "undo_change",
+    title: "Undo",
+    description: "Undo your own latest change in this session (a person's or another agent's changes are never undone by you). redo_change puts it back.",
+    inputSchema: object({}),
+    run: ({ session, actor, dryRun }) => {
+      if (dryRun) {
+        if (!session.canUndo(actor)) throw new ToolError("there is nothing of yours to undo");
+        return { dryRun: true, wouldUndo: "your latest change in this session (project_history lists it)", revision: session.revision } as Json;
+      }
+      const event = session.undo(actor);
+      return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds, undoOf: event.undoOf ?? null } as Json;
+    },
+  },
+  {
+    name: "redo_change",
+    title: "Redo",
+    description: "Redo your own change you last undid with undo_change.",
+    inputSchema: object({}),
+    run: ({ session, actor, dryRun }) => {
+      if (dryRun) {
+        if (!session.canRedo(actor)) throw new ToolError("there is nothing of yours to redo");
+        return { dryRun: true, wouldRedo: "your change you last undid", revision: session.revision } as Json;
+      }
+      const event = session.redo(actor);
+      return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds, redoOf: event.redoOf ?? null } as Json;
+    },
+  },
+  {
+    name: "export_design",
+    title: "Export a design",
+    description: "Write a layer as code or a preview into the project's exports folder, and return the file's path: html is a complete, script-free page to open in any browser (a preview); jsx is a React component; tailwind is a React component styled with Tailwind classes. The design itself does not change.",
+    inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: Object.keys(EXPORT_FORMATS) }, name: { type: "string", maxLength: 64, description: "The file's name without extension: letters, digits, - and _. Defaults to the layer's component name." }, replace: { type: "boolean", description: "Replace a file of that name already in exports (it may have been edited since). Without it, an existing file is refused." } }, ["nodeId", "format"]),
+    run: ({ session, dryRun }, args) => {
+      if (args.replace !== undefined && typeof args.replace !== "boolean") throw new ToolError("replace is true or false");
+      if (!Object.hasOwn(EXPORT_FORMATS, args.format)) throw new ToolError(`format is one of ${Object.keys(EXPORT_FORMATS).join(", ")}`);
+      nodeOf(session, args.nodeId);
+      if (args.name !== undefined && (typeof args.name !== "string" || !EXPORT_NAME.test(args.name))) throw new ToolError("name is 1-64 letters, digits, - or _, starting with a letter or digit");
+      let text: string;
+      let componentName: string;
+      let layers: number;
+      if (args.format === "html") {
+        const page = exportHtml(session.document, args.nodeId);
+        ({ componentName, layers } = page);
+        text = page.html;
+      } else {
+        const code = args.format === "jsx" ? exportJsx(session.document, args.nodeId) : exportTailwind(session.document, args.nodeId);
+        ({ componentName, layers } = code);
+        // A component's stylesheet and tokens go with it, in the file, where an import would need them.
+        const css = [code.tokens, code.stylesheet].filter((part): part is string => typeof part === "string" && part !== "").join("\n");
+        text = css === "" ? code.code : `${code.code}\n\n/* Its stylesheet:\n${css.replace(/\*\//gu, "* /")}\n*/\n`;
+      }
+      const base = args.name ?? (EXPORT_NAME.test(componentName) ? componentName : "design");
+      const folder = join(session.root, "exports");
+      const path = join(folder, `${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}`);
+      // Case-insensitive, as a Windows or macOS disk is: another file of that name is the same file there.
+      const taken = existsSync(folder) && readdirSync(folder).some((entry) => entry.toLowerCase() === `${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}`.toLowerCase());
+      if (taken && args.replace !== true) throw new ToolError(`exports already has ${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}; pass replace: true to replace it, or give another name`);
+      if (dryRun) return { dryRun: true, wouldWrite: path, replaces: taken, format: args.format, componentName, layers, bytes: Buffer.byteLength(text) } as Json;
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+      // The folder must be the project's own: not a link or junction to somewhere else, which a
+      // project from a clone, an archive or a shared drive could carry.
+      const entry = lstatSync(folder);
+      if (entry.isSymbolicLink() || !entry.isDirectory() || realpathSync(folder) !== join(realpathSync(session.root), "exports")) {
+        throw new ToolError("the project's exports folder is a link to somewhere else, so nothing was written; make it an ordinary folder");
+      }
+      writeTrustedFile(path, text);
+      return { path, format: args.format, componentName, layers, bytes: Buffer.byteLength(text), replaced: taken } as Json;
+    },
+  },
 ];
 
 const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
@@ -1031,10 +1163,16 @@ export interface McpContext {
    * not looked at (#260).
    */
   lastRead: Map<string, string>;
+  /**
+   * Why the person cannot be asked to approve a consequential call here, or null when they can.
+   * The headless engine says so when its client cannot ask (no MCP elicitation): the call is then
+   * refused, never approved without the person.
+   */
+  confirmationUnavailable?: () => string | null;
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
-const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers"]);
+const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history"]);
 
 const rpcError = (id: Json, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 const toolResult = (value: Json, isError = false) => ({
@@ -1139,6 +1277,7 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       session,
       actor,
       toolName,
+      dryRun: dryRun === true,
       selection: context.selection,
       references: context.references,
       edit: (operations, intent) => {
@@ -1198,6 +1337,8 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
   const key = { agentId: actor.actorId, toolName, documentId: session.documentId, argumentsSha256, subjectSha256 };
   const approvedAt = context.confirmations.takeApproval(key);
   if (approvedAt !== null) return { documentId: session.documentId, toolName, argumentsSha256, actorId: actor.ownerActorId!, confirmedAt: approvedAt };
+  const unavailable = context.confirmationUnavailable?.() ?? null;
+  if (unavailable !== null) return unavailable;
   const ids = Array.isArray((args as any)?.nodeIds) ? [...new Set((args as any).nodeIds.filter((id: unknown) => typeof id === "string"))] as string[] : [];
   const document = session.document as any;
   // What the person is shown: each layer's name or text and its kind, and how many layers
@@ -1231,7 +1372,7 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
     const aliased = aliases.length === 0 ? "" : `, aliased by ${aliases.slice(0, 5).join(", ")}${aliases.length > 5 ? ", …" : ""}`;
     return `Delete token ${shown}, used by ${values} value${values === 1 ? "" : "s"} on ${uses.length} layer${uses.length === 1 ? "" : "s"}${aliased}, ${by}`;
   };
-  const summary = toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`;
+  const summary = shownPlainly(toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`);
   const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
   // What was approved must still be what runs: a token changed while the call waited is asked about again.
   if (decision.outcome === "approved" && subjectOf() !== subjectSha256) return "What this would delete changed while it waited for the person; call again to ask them about it as it is now.";
