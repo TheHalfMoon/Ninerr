@@ -79,17 +79,45 @@ async function doctor() {
   }
   // The engine itself, end to end, in a scratch folder: create a project, design in it, read it back.
   const scratch = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-doctor-")));
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const answers = new Map();
+  const lines = createInterface({ input: output });
   try {
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const answers = new Map();
-    createInterface({ input: output }).on("line", (line) => {
-      const message = JSON.parse(line);
-      answers.get(message.id)?.(message);
+    const RPC_TIMEOUT_MS = 10_000;
+    let protocolError;
+    lines.on("line", (line) => {
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        protocolError = new Error("engine returned invalid JSON");
+        for (const pending of answers.values()) pending.reject(protocolError);
+        answers.clear();
+        return;
+      }
+      if (message && Object.hasOwn(message, "id")) {
+        const pending = answers.get(message.id);
+        if (pending) {
+          answers.delete(message.id);
+          pending.resolve(message);
+        }
+      }
     });
     const running = runHeadless({ projectsRoot: scratch, input, output });
-    const rpc = (id, method, params) => new Promise((resolve) => {
-      answers.set(id, resolve);
+    // A rejected engine task must be observed even if its RPC never answered.
+    running.catch(() => {});
+    // A broken engine must never leave doctor waiting indefinitely for a reply.
+    const rpc = (id, method, params) => new Promise((resolve, reject) => {
+      if (protocolError) return reject(protocolError);
+      const timer = setTimeout(() => {
+        answers.delete(id);
+        reject(new Error(`MCP ${method} timed out after ${RPC_TIMEOUT_MS}ms`));
+      }, RPC_TIMEOUT_MS);
+      answers.set(id, {
+        resolve: (message) => { clearTimeout(timer); resolve(message); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
       input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     });
     await rpc(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "ninerr doctor", version: VERSION } });
@@ -103,6 +131,9 @@ async function doctor() {
   } catch (error) {
     say(false, "the engine creates a project, designs in it and writes a preview", error instanceof Error ? error.message : String(error));
   } finally {
+    input.destroy();
+    lines.close();
+    output.destroy();
     rmSync(scratch, { recursive: true, force: true, maxRetries: 5 });
   }
   // How an MCP client starts the engine: this Node.js and this command, by absolute paths.
