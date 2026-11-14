@@ -417,7 +417,7 @@ const SNAP_DISTANCE = 6;
 const MAX_SNAP_TARGETS = 10_000;
 const freeMove = (event) => event.altKey || event.ctrlKey || event.metaKey;
 const OVERLAY_STYLE = "position:absolute;inset:0;pointer-events:none;";
-const STAGE_STYLE = "position:relative;overflow:hidden;width:100%;height:100%;outline:none;background:#e9e9ef;touch-action:none;user-select:none;-webkit-user-select:none;";
+const STAGE_STYLE = "position:relative;overflow:hidden;width:100%;height:100%;outline:none;background:#e8ecea;touch-action:none;user-select:none;-webkit-user-select:none;";
 
 /**
  * Mount a canvas in `container`. `onCommit(operations, intent, { revision })` receives every
@@ -514,11 +514,11 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
       const topLeft = worldToScreen(viewport, rect);
       const box = owner.createElement("div");
       box.dataset.ninerrSelection = id;
-      box.setAttribute("style", `position:absolute;left:${topLeft.x}px;top:${topLeft.y}px;width:${rect.width * viewport.zoom}px;height:${rect.height * viewport.zoom}px;outline:2px solid #6d4aff;outline-offset:-1px;`);
+      box.setAttribute("style", `position:absolute;left:${topLeft.x}px;top:${topLeft.y}px;width:${rect.width * viewport.zoom}px;height:${rect.height * viewport.zoom}px;outline:2px solid #0a7d69;outline-offset:-1px;`);
       if (selection.length === 1) {
         const handle = owner.createElement("div");
         handle.dataset.ninerrHandle = "resize";
-        handle.setAttribute("style", "position:absolute;right:-5px;bottom:-5px;width:10px;height:10px;background:#fff;border:2px solid #6d4aff;pointer-events:auto;cursor:nwse-resize;");
+        handle.setAttribute("style", "position:absolute;right:-5px;bottom:-5px;width:10px;height:10px;background:#fff;border:2px solid #0a7d69;pointer-events:auto;cursor:nwse-resize;");
         box.appendChild(handle);
       }
       overlay.appendChild(box);
@@ -539,7 +539,7 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
         const topLeft = worldToScreen(viewport, rect);
         const box = owner.createElement("div");
         box.dataset.ninerrTarget = target.nodeId;
-        box.setAttribute("style", `position:absolute;left:${topLeft.x}px;top:${topLeft.y}px;width:${rect.width * viewport.zoom}px;height:${rect.height * viewport.zoom}px;outline:2px dashed #6d4aff;outline-offset:1px;`);
+        box.setAttribute("style", `position:absolute;left:${topLeft.x}px;top:${topLeft.y}px;width:${rect.width * viewport.zoom}px;height:${rect.height * viewport.zoom}px;outline:2px dashed #0a7d69;outline-offset:1px;`);
         overlay.appendChild(box);
       }
     }
@@ -824,7 +824,7 @@ export async function mountCanvas(container, { onCommit = () => {}, onSelect = (
   // A visible focus ring when the canvas is reached from the keyboard (WCAG 2.4.7).
   stage.addEventListener("focus", () => {
     // Drawn on the overlay, the top layer, so the design never covers it.
-    if (stage.matches(":focus-visible")) overlay.style.boxShadow = "inset 0 0 0 3px #1a5fd0";
+    if (stage.matches(":focus-visible")) overlay.style.boxShadow = "inset 0 0 0 3px #0a7d69";
   });
   stage.addEventListener("blur", () => {
     overlay.style.boxShadow = "";

@@ -2200,7 +2200,7 @@ function insert(kind) {
   const id = newId(kind === "text" ? "text" : "box");
   operations.push(...(kind === "text"
     ? insertNode(parentId, index, { id, type: "text", tag: "p", text: "Text", style: { position: "absolute", left: "32px", top: "32px", margin: "0px", "font-size": "16px" } })
-    : insertNode(parentId, index, { id, type: "element", tag: "div", style: { position: "absolute", left: "32px", top: "32px", width: "160px", height: "100px", background: "#d9d2ff" } })));
+    : insertNode(parentId, index, { id, type: "element", tag: "div", style: { position: "absolute", left: "32px", top: "32px", width: "160px", height: "100px", background: "#d7f5ee" } })));
   commitAndSelect(operations, kind === "text" ? "Insert text" : "Insert box", id);
 }
 
