@@ -1,5 +1,7 @@
 # Ninerr and MCP
 
+**Direction (2026-11-14):** MCP is now Ninerr's main interface. A headless stdio engine, which needs no editor open, is being built (`docs/HEADLESS.md`). What follows describes the MCP server as it runs inside the studio host today, which the engine reuses.
+
 Ninerr runs an MCP server so that an agent can read and edit the open design document. This page covers what the server offers, how an agent connects to it, and how each call is authorized.
 
 ## Status

@@ -2,6 +2,8 @@
 
 Latest founder decision: **2026-11-14**. For the current `main` commit, consult GitHub; the older SHA references below are historical evidence anchors.
 
+**Agent-first (founder, 2026-11-14, latest):** v0.1.0 is a headless design engine for agents over MCP and a CLI (`docs/provenance/FOUNDER_DECISION_2026-11-14_AGENT_FIRST_HEADLESS.md`). The migration plan and the reclassified release gates are in `docs/HEADLESS.md`. The Desktop and web editor are frozen, not removed. The paragraph below is the earlier, Desktop-first direction of the same day, kept as history.
+
 **New first release target: v0.1.0**, superseding all earlier references to v1.0.0 as the first public release. The founder retains the Desktop and UI implementation, clean-machine and real screen-reader acceptance, legal source-offer adoption and final release decision. Engineering continues non-UI implementation, security, test infrastructure, release provenance and CI without autonomous Desktop/UI edits. No release tag or publication is authorized. The source of authority is `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`; earlier program descriptions below remain as historical evidence.
 
 The human gates have written protocols: a clean-machine install and a real screen-reader pass, each run on the exact candidate and recorded in `docs/evidence/` (`docs/ACCEPTANCE.md`). The last P10 run, on test candidate `079631a`, passed every check it could run (`docs/evidence/P10_CANDIDATE_TEST_079631a_2026-11-14.md`); it is not evidence for a later commit.

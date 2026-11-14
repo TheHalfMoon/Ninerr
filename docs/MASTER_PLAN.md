@@ -17,6 +17,8 @@ Ninerr is an AI-native, web-semantic design environment where humans, software a
 
 ## Current program
 
+**2026-11-14 founder decision, agent-first:** v0.1.0 is an agent-first, headless design engine used over MCP and a CLI, with no graphical interface required (`docs/provenance/FOUNDER_DECISION_2026-11-14_AGENT_FIRST_HEADLESS.md`). It supersedes the Desktop-first release direction recorded below. The Desktop and web editor are kept and frozen. The P10 gates are reclassified for the engine in `docs/HEADLESS.md`: security, privacy, licensing and correctness gates still apply, and the desktop-distribution gates are not v0.1.0 gates.
+
 **2026-11-14 founder update:** Ninerr's first public release target is **v0.1.0**, superseding the previous v1.0.0 target. The founder owns Desktop and UI implementation and the human-facing acceptance of those surfaces. Engineering continues all independent non-UI core, security, CI, provenance, release-infrastructure and documentation work. The P10 security, privacy, accessibility and evidence gates are not relaxed. See `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`. A tagged or published release still needs separate explicit approval.
 
 The founder set the order on 2026-10-08, when the product was renamed to Ninerr:
