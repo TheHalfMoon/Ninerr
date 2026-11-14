@@ -218,7 +218,7 @@ export class HeadlessEngine {
       const unanswered = setTimeout(() => {
         if (this.#answers.delete(id)) decide(false);
       }, Math.max(0, this.#waitMs - 500));
-      unanswered.unref?.();
+      // Not unref'd: a call waiting for the person is work in progress; the answer, or the client going, clears it.
       this.#answers.set(id, (answer) => {
         clearTimeout(unanswered);
         const result = answer?.result;

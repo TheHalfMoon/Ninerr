@@ -16,10 +16,11 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ELECTRON_LICENSE_SHA256, ELECTRON_VERSION, WINDOWS_TAR, currentTarget, electronDirectory, fetchElectron } from "./desktop/electron.mjs";
+import { ELECTRON_LICENSE_SHA256, ELECTRON_VERSION, currentTarget, electronDirectory, fetchElectron } from "./desktop/electron.mjs";
 import { RECORD_PATH, readRecord, validateRecord } from "./desktop/corresponding-source.mjs";
 import { classifyChromiumLicenses } from "./desktop/chromium-licenses.mjs";
 import { NINERR_FUSES, writeFuses } from "./desktop/fuses.mjs";
+import { writeTarGz, writeZip } from "./desktop/archive.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const BUNDLE_ID = "io.github.thehalfmoon.ninerr";
@@ -198,12 +199,12 @@ async function main() {
   };
   writeFileSync(join(staging, "ninerr-package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
-  // The archive: a zip on macOS and Windows, a tar.gz on Linux (which keeps the modes).
+  // The archive: a zip on macOS and Windows, a tar.gz on Linux (which keeps the modes). Either is
+  // deterministic (scripts/desktop/archive.mjs): the same commit packaged again gives the same bytes.
   const archive = join(out, `${name}.${target.startsWith("linux-") ? "tar.gz" : "zip"}`);
   rmSync(archive, { force: true });
-  if (target.startsWith("darwin-")) run("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", staging, archive]);
-  else if (target.startsWith("win32-")) run(WINDOWS_TAR, ["-a", "-c", "-f", archive, "-C", out, name]);
-  else run("tar", ["-czf", archive, "-C", out, name]);
+  if (target.startsWith("linux-")) writeTarGz(out, name, archive);
+  else writeZip(out, name, archive);
   const archiveSha256 = createHash("sha256").update(readFileSync(archive)).digest("hex");
   writeFileSync(join(out, `${name}.json`), `${JSON.stringify({ ...manifest, archive: relative(out, archive), archiveSha256 }, null, 2)}\n`);
   log(`Packaged Ninerr for ${target}: ${archive} (sha256 ${archiveSha256})`);
