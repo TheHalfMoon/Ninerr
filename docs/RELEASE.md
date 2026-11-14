@@ -2,6 +2,8 @@
 
 ## First release target (founder decision, 2026-11-14)
 
+**Superseding update, agent-first (2026-11-14):** v0.1.0 is the headless engine with its CLI and stdio MCP server (`docs/provenance/FOUNDER_DECISION_2026-11-14_AGENT_FIRST_HEADLESS.md`). Desktop archives are not part of v0.1.0. The release workflow is to build the engine's artifact in their place, with the same SBOM, notices, checksums and provenance (`docs/HEADLESS.md`, increment 5). Until then, the workflow below still builds desktop archives, which are kept as CI evidence for the frozen Desktop code. The rest of this section is the earlier direction.
+
 The first public release is **Ninerr v0.1.0** (root product/package version `0.1.0`), **not v1.0.0**. The repository currently contains preparation and candidate evidence, **not an authorized tag, draft or published release**. Private internal workspace versions are independent and need not match the root product version.
 
 The founder retains ownership of the user-facing **Desktop and UI/UX**, clean-machine and real screen-reader acceptance, the Electron corresponding-source distribution commitment, and final release approval. Other engineering continues non-UI code, CI, security, provenance, dependency audits, SBOM, evidence, and release qualification. The dated decision is recorded in `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`.
