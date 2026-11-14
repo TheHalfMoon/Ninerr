@@ -2,10 +2,12 @@
 
 This is the persistent record of what is complete, what remains and what blocks it, with the evidence for each. Every pull request that changes the state below updates it. The program's phases and criteria are in `docs/MASTER_PLAN.md`; the founder's 2026-11-13 directive is in `docs/provenance/FOUNDER_DIRECTIVE_2026-11-13_COMPLETE_PRODUCT.md`.
 
+**Founder decision, 2026-11-14 (agent-first, latest):** v0.1.0 is a headless design engine for agents over MCP and a CLI (`docs/provenance/FOUNDER_DECISION_2026-11-14_AGENT_FIRST_HEADLESS.md`). The audit, design, increments and reclassified gates are in `docs/HEADLESS.md`. The Desktop-first ownership update below is superseded for release scope, and kept as history.
+
 **Founder update, 2026-11-14:** The target for the **first public release** is now **v0.1.0** (superseding v1.0.0), and all Desktop/UI implementation and visual/user-facing acceptance are reserved to the founder. Engineering owns the remaining non-UI core, CI, testing infrastructure, security, release provenance, docs and safe packaging qualification, without altering the Desktop/UI surface. This is a division of labor, not a waiver of P10, accessibility, clean-install, third-party-source or human-approval gates. See `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`. Historical references below to `1.0` are the prior plan and must not be mistaken for the next tag.
 
 
-Last updated: 2026-11-14. Canonical main: `2cbb625`.
+Last updated: 2026-11-14. Canonical main: `2c6e730`.
 
 ## Completed since P09 (with evidence)
 
@@ -133,6 +135,10 @@ Decided and closed: #349 (#456), breakpoints (ADR-0008, after 1.0), PDF, network
 
 ## Next engineering actions
 
-1. When the owner's details are in, merge #457 and record the route in `THIRD_PARTY_NOTICES.md` and `docs/RELEASE.md`.
-2. When the founder names the v0.1.0 candidate: run P10 on it (the full suite on three platforms, smoke, packaged journeys and resilience, the dogfooding, the security and offline qualification, and the release-evidence bundle), and write the P10 records.
-3. After 1.0: breakpoints (ADR-0008), PDF export into the project folder, registry fetching through the network policy.
+The headless engine, in the increments of `docs/HEADLESS.md`:
+1. The stdio engine: lifecycle tools, local agent identity, consequential calls by client confirmation or denial, history, undo and redo.
+2. Exports and previews into the project's `exports/` folder, and validation reports.
+3. The `ninerr` CLI, `ninerr doctor`, and client configuration, building on #468.
+4. Qualification in real Codex, Claude Code and OpenCode sessions on three platforms, and the release workflow building the engine artifact.
+
+Not v0.1.0 gates under the decision: the desktop packages as release artifacts, the clean-machine desktop install, and the editor's screen-reader pass (#376). Electron's written offer (#457) is needed only if Electron binaries are distributed; that is for the founder to confirm.
