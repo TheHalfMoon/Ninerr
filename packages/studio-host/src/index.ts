@@ -10,5 +10,6 @@ export { CONFIRMATION_WAIT_MS, ConfirmationBroker, MCP_PROTOCOL_VERSIONS, handle
 export { assertLoopbackUrl, discoverMcpUrl, runRelay, type RelayOptions } from "./relay.ts";
 export { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
 export { prepareProjectsFolder, resolveProjectsFolder } from "./projects-folder.ts";
+export { HeadlessEngine, localAgentActor, runHeadless, type HeadlessOptions } from "./headless.ts";
 export { CodebaseLinks, MAX_SCAN_DEPTH, MAX_SCAN_ENTRIES, MAX_SCAN_FILES, MAX_SOURCE_BYTES, assertFolder, bringIn, planWriteBack, readSourceFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 export { type CodeSource, type ImportJsxOptions } from "./code.ts";

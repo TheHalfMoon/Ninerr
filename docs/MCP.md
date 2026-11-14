@@ -14,6 +14,17 @@ Ninerr runs an MCP server so that an agent can read and edit the open design doc
 | The MCP server: loopback HTTP inside the studio host, and its tools | Implemented | `packages/studio-host/src/mcp.ts`, `tests/mcp-server.test.mjs` |
 | The stdio relay | Implemented | `packages/studio-host/src/relay.ts`, `scripts/ninerr-mcp.mjs`, `tests/mcp-relay.test.mjs` |
 
+## The headless engine (no editor needed)
+
+`node bin/ninerr.mjs mcp [--projects <folder>]` runs Ninerr as an MCP server on stdio, for an agent's own client to start. No editor, browser or desktop app, no account and no network is needed (`docs/HEADLESS.md`). The projects folder is `--projects`, or `NINERR_PROJECTS`, or "Ninerr Projects" in your home folder.
+
+- **Lifecycle tools,** which belong to the engine: `list_projects`, `create_project`, `open_project`, `save_project` and `close_project`. A project's name is its folder's name inside the projects folder, never a path. Opening holds the project's lock, as the editor does, so a project open in the editor or in another agent's engine is refused until it is released. Ending the client's session closes the project.
+- **Every document tool** below works the same as in the editor's server. It goes through the same single writer, authorization, revision checks, dry runs and history.
+- **Identity.** Only the client that started the process can speak to it, so no token is needed. The agent is `agent-local-<client>`, named from the client's `initialize`, and History shows it as "<client> (local agent)". It is granted read and document-write on the project it opens, and nothing else.
+- **Deleting** (`delete_layers`, `delete_token`) is put to the person through the client, with MCP elicitation, showing the same plain summary the editor shows and bound to the exact call. Only an answer that approves deletes. Declining, cancelling, an error or no answer deletes nothing. A client that cannot ask (it did not declare elicitation) is refused with an explanation, and a question left unanswered is declined. The engine cannot tell who answers in the client: an approval is only as trustworthy as the client's own prompt, so a client set to approve requests automatically, or an agent that is its own client, approves for the person. Use a client that shows the question to you.
+- **The agent's name** comes from the client's first `initialize`. Clients with the same name share one identity in History.
+- **Ending.** When the client goes away (its input closes, or the engine is stopped), anything waiting for the person is denied and the open project is closed, releasing its lock.
+
 ## Connecting an agent
 
 1. In Ninerr, connect an agent. Ninerr shows its credential once.
