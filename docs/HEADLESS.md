@@ -55,4 +55,4 @@ A new stdio MCP server, the **headless engine**, runs in the agent client's own 
 | Gate 13 performance | The agent-edit and persistence budgets apply. The editor's browser budgets stay measured, but are not a v0.1.0 gate. |
 | Desktop packages: smoke, journey, resilience, clean-machine desktop install | **Not a v0.1.0 gate.** They keep running in CI to keep the frozen code working. A clean-machine install of the CLI replaces the desktop install. |
 | Screen-reader pass of the editor (#376) | **Not a v0.1.0 gate** while the editor is frozen. It returns with the Desktop product. |
-| Electron's LGPL corresponding source (#457) | Arises only if Electron binaries are distributed. If v0.1.0 ships no desktop archive, it is not needed for v0.1.0. That is for the founder to confirm. #457 stays a draft. |
+| Electron's LGPL corresponding source (#457) | **Not a v0.1.0 gate** (founder, 2026-11-14, `docs/provenance/FOUNDER_DECISION_2026-11-14_NO_WRITTEN_OFFER_FOR_V0_1_0.md`): v0.1.0 distributes no Electron binary. A later release that ships Electron needs the written offer. |

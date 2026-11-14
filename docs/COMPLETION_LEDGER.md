@@ -115,7 +115,7 @@ Nothing is in review.
 
 Under the agent-first decision (`docs/provenance/FOUNDER_DECISION_2026-11-14_AGENT_FIRST_HEADLESS.md`):
 1. **Real Claude Code and Codex sessions** (the decision's minimum): Claude Code's sign-in has expired (the person signs in again), and Codex's usage limit is reached until 2026-11-17. Gemini CLI's tier no longer supports that client. OpenCode passed (`docs/evidence/HEADLESS_CLIENTS_2026-11-14.md`).
-2. **The written offer (#457):** needed only if Electron binaries are distributed. The release workflow now publishes none (#474), so the founder confirms whether #457 is still needed for v0.1.0.
+2. **The written offer (#457):** decided by the founder on 2026-11-14: not needed for v0.1.0, which distributes no Electron binary (`docs/provenance/FOUNDER_DECISION_2026-11-14_NO_WRITTEN_OFFER_FOR_V0_1_0.md`). #457 is closed; a later release that ships Electron needs it.
 3. **The candidate:** the founder names the commit; engineering then qualifies it (the full suite and the engine install on three platforms, the engine's offline guarantee, the client sessions, the release evidence).
 4. **Owner-only actions:** the `v0.1.0` tag, publishing the draft release or an npm package, enabling Dependabot alerts, and removing the unused `TYPESAFE_API_KEY` secret.
 5. **PR #471** (the desktop restyle) is open against the UI freeze; the founder decides whether it stays.
