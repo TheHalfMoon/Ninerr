@@ -15,7 +15,7 @@ A Ninerr release is a tagged commit together with its signed release files: the 
 | File | What it is |
 | --- | --- |
 | `Ninerr-linux-x64.tar.gz`, `Ninerr-darwin-arm64.zip`, `Ninerr-win32-x64.zip` | The desktop app (`docs/DESKTOP.md` says how to install it). Each is packaged on its own platform's runner from the tagged commit, smoke-tested, and taken through the release-candidate journey before it is collected. |
-| `Ninerr-<platform>.json` | Each archive's package manifest: its SHA-256, the Electron runtime and its pinned archive, its corresponding-source binding, the fuses, and whether it is publisher-signed (it is not: the release is unsigned by a publisher, by the founder's decision of 2026-10-13). |
+| `Ninerr-<platform>.json` | Each archive's package manifest: the product version, the commit it was packaged from, its SHA-256, the Electron runtime and its pinned archive, its corresponding-source binding, the fuses, and whether it is publisher-signed (it is not: the release is unsigned by a publisher, by the founder's decision of 2026-10-13). |
 | `ninerr-release-evidence-<sha>.tar.gz` | The evidence bundle below, as one archive. |
 | `SHA256SUMS` | The SHA-256 of each file above. |
 
@@ -42,7 +42,7 @@ The evidence bundle's `MANIFEST.json` names that commit as `sourceCommit`, and i
 | `docs/DONORS.md`, `docs/provenance/*` | Donor and authorization provenance (every tracked file under `docs/provenance`). |
 | `SECURITY.md`, `docs/DESKTOP.md`, `docs/MCP.md`, `docs/MIGRATION.md`, `docs/RELEASE.md` | The release documents. |
 | `smoke-report.json` | The offline smoke-test report for this commit (`npm run smoke`). |
-| `MANIFEST.json` | The product, the source commit, the lockfile sha256, the project license, and the sha256 of every other file. |
+| `MANIFEST.json` | The product, its version from `package.json`, the source commit, the lockfile sha256, the project license, and the sha256 of every other file. |
 
 **Determinism.** Two builds of the same commit and lockfile are byte-identical. Nothing in the bundle depends on host paths, time, or which platform binary npm installed. `tests/release-bundle.test.mjs` checks both, the second by building with another platform's binary in place. The bundled text files are checked out with LF line endings on every platform (`.gitattributes`), so a Windows checkout produces the same bytes.
 
@@ -69,6 +69,10 @@ Ninerr publishes no binary release yet. Before the first one, the project owner 
 
 Pointing at the public repositories at the recorded commits is not one of those methods. The analysis is in `docs/evidence/N0_G7B_ELECTRON_SOURCE_2026-10-09.md`.
 
+## Dependency advisories
+
+The `Dependency Audit` workflow (`.github/workflows/dependency-audit.yml`) checks the locked dependencies against the npm registry's security advisories. It runs on every change to `package.json` or `package-lock.json`, every Monday, and by hand. It installs and runs nothing, and any advisory, whatever its severity, fails it. A release candidate is qualified only with a passing run on its exact commit, started by hand, because an advisory can be published after a version is locked.
+
 ## How a release is signed
 
 The `Release Evidence` workflow (`.github/workflows/release.yml`) has five jobs.
@@ -84,7 +88,7 @@ The `Release Evidence` workflow (`.github/workflows/release.yml`) has five jobs.
 - **`desktop`** is the Desktop workflow (`.github/workflows/desktop.yml`) itself, the same one every pull request runs. It packages each archive on its own platform's runner and uploads it at once, before anything runs from it. It then smoke-tests the archive and runs the release-candidate journey through it. It cannot request an OIDC token either.
 - **`collect`** runs no repository or dependency code. It:
   1. downloads the bundle and the three archives with their manifests;
-  2. checks each archive against the SHA-256 its manifest records;
+  2. checks that the bundle is for this run's commit, that every archive was packaged from that commit with the bundle's version, and, for a tag, that the tag names that version; then checks each archive against the SHA-256 its manifest records;
   3. puts the bundle in one archive and writes `SHA256SUMS`;
   4. uploads the seven files and `SHA256SUMS` as `ninerr-release-<sha>`, kept for 90 days.
 - **`attest`** runs only for a pushed tag matching `v[0-9]*`. It downloads the bundle and the collected files and signs every file with `actions/attest-build-provenance`. These are keyless Sigstore attestations through GitHub OIDC, so no signing key is stored anywhere. It runs no repository or dependency code.

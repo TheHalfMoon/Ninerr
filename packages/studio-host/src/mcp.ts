@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
@@ -21,7 +22,9 @@ import type { StudioActor, StudioSession } from "./session.ts";
 // the editor (the host's own confirmation flow), never from the client (#82, P06 G8).
 
 export const MCP_PROTOCOL_VERSIONS = Object.freeze(["2025-06-18", "2025-03-26", "2024-11-05"]);
-const SERVER_INFO = Object.freeze({ name: "ninerr", title: "Ninerr", version: "0.0.0" });
+// The product's version, from the package.json at the root of the source tree, or of the app inside a desktop package.
+const PRODUCT_VERSION: string = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version;
+const SERVER_INFO = Object.freeze({ name: "ninerr", title: "Ninerr", version: PRODUCT_VERSION });
 const MAX_RESULT_NODES = 500;
 const MAX_TREE_DEPTH = 12;
 const MAX_DUPLICATED_NODES = 5_000;
@@ -52,6 +55,87 @@ function onlyArguments(args: unknown, names: string[]): Record<string, unknown> 
   const given = (args ?? {}) as Record<string, unknown>;
   for (const name of Object.keys(given)) if (!names.includes(name)) throw new ToolError(`this tool takes no argument ${JSON.stringify(name.slice(0, 40))}`);
   return given;
+}
+
+// Names a person reads and may be asked to approve (layers, components, their properties and
+// variant options, tokens, modes, collections and descriptions) look like what they are (#64):
+// an agent's label carries no controls, format characters (bidi reordering, zero-width, tag
+// "smuggling" characters), separators or blank-looking fillers, and variation selectors only
+// where they vary the character before them. ZWNJ and ZWJ stay legal (emoji, complex scripts),
+// and a description may break lines. The rule is decision-assurance's and visual-git's. Text
+// content and CSS values are not labels: text may need bidi marks, and CSS has its own rules.
+const HIDDEN_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{34f}\u{115f}\u{1160}\u{2800}\u{3164}\u{ffa0}]/u;
+const JOINERS = /[\u{200c}\u{200d}]/gu;
+const LINE_BREAKS = /[\t\n\r]/gu;
+const SELECTOR_SMUGGLING = /(?<![\p{Extended_Pictographic}0-9#*])[\u{fe0e}\u{fe0f}]|[\u{fe00}-\u{fe0d}]|(?<!\p{Ideographic})[\u{e0100}-\u{e01ef}]/u;
+
+// Each tool's labels, as paths into its arguments: `a[]` is every item of the list a, and
+// `a[].b` each item's b. A write tool whose schema has a label-like field must list it here
+// (checked when the module loads), so a new tool cannot take a label unchecked.
+const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  create_frame: ["name"],
+  rename_layers: ["renames[].name"],
+  create_component: ["name"],
+  add_component_property: ["name", "options[]", "default"],
+  set_token: ["name", "collection", "description"],
+  add_token_mode: ["collection", "name"],
+  rename_token: ["to"],
+  delete_token: ["name", "replacement.token"],
+  set_layer_modes: ["collection"],
+});
+const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
+
+/** The values at a label path in a call's arguments. */
+function valuesAt(value: unknown, path: string): unknown[] {
+  let values = [value];
+  for (const segment of path.split(".")) {
+    const list = segment.endsWith("[]");
+    const key = list ? segment.slice(0, -2) : segment;
+    values = values.flatMap((entry) => {
+      if (entry === null || typeof entry !== "object" || !Object.hasOwn(entry, key)) return [];
+      const next = (entry as Record<string, unknown>)[key];
+      return list ? (Array.isArray(next) ? next : []) : [next];
+    });
+  }
+  return values;
+}
+
+// What the person is asked to approve shows every character as itself: a control, format or
+// blank-looking character in a layer's name or text (one an agent could not give, but an
+// imported page or an older project could hold) is written out as [U+XXXX], so it can neither
+// hide nor reorder the words around it. ZWNJ and ZWJ stay, as they join what they sit in.
+const HIDDEN_GLOBAL = /(?![\u{200c}\u{200d}])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{34f}\u{115f}\u{1160}\u{2800}\u{3164}\u{ffa0}]|\p{Cs}/gu;
+function shownPlainly(text: string): string {
+  return text.replace(HIDDEN_GLOBAL, (character) => `[U+${character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}]`);
+}
+
+/** The first of a call's labels that hides or reorders what a person reads, as a refusal; null when there is none. */
+function hiddenLabel(toolName: string, args: unknown): string | null {
+  for (const path of LABELS[toolName] ?? []) {
+    const field = path.replace(/\[\]/gu, "").split(".").at(-1);
+    for (const entry of valuesAt(args, path)) {
+      if (typeof entry !== "string") continue;
+      const visible = entry.replace(JOINERS, "");
+      const shown = field === "description" ? visible.replace(LINE_BREAKS, "") : visible;
+      if (!entry.isWellFormed() || HIDDEN_TEXT.test(shown) || SELECTOR_SMUGGLING.test(entry)) {
+        return `${field} must not contain control or hidden characters: a person reads it as it is shown`;
+      }
+    }
+  }
+  return null;
+}
+
+/** The label-like fields of a tool's schema, as label paths. */
+function labelLikeFields(schema: any, prefix = ""): string[] {
+  const fields: string[] = [];
+  for (const [key, property] of Object.entries<any>(schema?.properties ?? {})) {
+    const path = `${prefix}${key}`;
+    const items = property?.type === "array" ? property.items : undefined;
+    if (LABEL_LIKE.has(key)) fields.push(items === undefined ? path : `${path}[]`);
+    if (items?.type === "object") fields.push(...labelLikeFields(items, `${path}[].`));
+    if (property?.type === "object") fields.push(...labelLikeFields(property, `${path}.`));
+  }
+  return fields;
 }
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
@@ -783,6 +867,18 @@ const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
 // The definitions the server announces must satisfy the MCP contract validators and be exactly
 // the tools of Ninerr's catalog, which carries the classification each tool is authorized by.
 assertMCPToolSurface({ tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+for (const tool of TOOLS) {
+  const kind = classifyTool(tool.name);
+  if (kind !== "write" && kind !== "consequential") continue;
+  for (const field of labelLikeFields(tool.inputSchema)) {
+    if (!(LABELS[tool.name] ?? []).includes(field)) throw new Error(`${tool.name} takes ${field}, which is not among its checked labels`);
+  }
+}
+for (const [name, paths] of Object.entries(LABELS)) {
+  const tool = TOOL_BY_NAME.get(name);
+  const fields = tool === undefined ? [] : labelLikeFields(tool.inputSchema);
+  for (const path of paths) if (!fields.includes(path)) throw new Error(`${name} has no label ${path}`);
+}
 
 // Every tool that changes the document also takes these: a dry run checks the change and says
 // what it would touch, changing nothing; baseRevision refuses the call if the document has moved
@@ -1027,6 +1123,8 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       // Before the person is asked to confirm anything.
       const unread = notRead();
       if (unread !== null) return toolResult(unread, true);
+      const hidden = changes ? hiddenLabel(toolName, args) : null;
+      if (hidden !== null) return toolResult(hidden, true);
       const before = stale();
       if (before !== null) return toolResult(before, true);
       const confirmation = await confirm(context, session, actor, toolName, args, at);
@@ -1042,6 +1140,8 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
   if (changed !== null) return toolResult(changed, true);
   const unread = notRead();
   if (unread !== null) return toolResult(unread, true);
+  const hidden = changes ? hiddenLabel(toolName, args) : null;
+  if (hidden !== null) return toolResult(hidden, true);
   const tool = TOOL_BY_NAME.get(toolName);
   // Unreachable while the server's tools are exactly the catalog (checked at load); fail closed.
   if (tool === undefined) return toolResult(`Ninerr has no tool ${toolName}.`, true);
@@ -1143,7 +1243,7 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
     const aliased = aliases.length === 0 ? "" : `, aliased by ${aliases.slice(0, 5).join(", ")}${aliases.length > 5 ? ", …" : ""}`;
     return `Delete token ${shown}, used by ${values} value${values === 1 ? "" : "s"} on ${uses.length} layer${uses.length === 1 ? "" : "s"}${aliased}, ${by}`;
   };
-  const summary = toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`;
+  const summary = shownPlainly(toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`);
   const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
   // What was approved must still be what runs: a token changed while the call waited is asked about again.
   if (decision.outcome === "approved" && subjectOf() !== subjectSha256) return "What this would delete changed while it waited for the person; call again to ask them about it as it is now.";
