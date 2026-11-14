@@ -1,54 +1,53 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+
+// The client templates (docs/MCP_CLIENTS.md) start Ninerr's headless engine on stdio: node, the
+// engine's bin/ninerr.mjs, `mcp`. They carry no credential, since only the client that started
+// the engine can reach it, and none points at the frozen editor's relay.
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const ENGINE = /\/bin\/ninerr\.mjs$/u;
 
-test("Codex template forwards only the environment variable name", () => {
-  const config = read("docs/examples/mcp-clients/codex.template.toml");
-  assert.match(config, /\[mcp_servers\.ninerr\]/);
-  assert.match(config, /env_vars\s*=\s*\["NINERR_MCP_TOKEN"\]/);
-  assert.match(config, /scripts\/ninerr-mcp\.mjs/);
-  assert.doesNotMatch(config, /^\s*NINERR_MCP_TOKEN\s*=/m);
-});
-
-test("Claude Code template is valid stdio MCP JSON and never includes a literal credential", () => {
-  const config = JSON.parse(read("docs/examples/mcp-clients/claude.mcp.template.json"));
-  const client = config.mcpServers.ninerr;
-  assert.equal(client.command, "node");
-  assert.equal(client.type, "stdio");
-  assert.match(client.args[0], /scripts\/ninerr-mcp\.mjs$/);
-  assert.equal(client.env.NINERR_MCP_TOKEN, "${NINERR_MCP_TOKEN}");
-});
-
-test("OpenCode V2 template is valid local MCP JSON with env expansion", () => {
-  const config = JSON.parse(read("docs/examples/mcp-clients/opencode.template.json"));
-  assert.equal(config.mcp.servers.ninerr.type, "local");
-  assert.equal(config.mcp.servers.ninerr.command[0], "node");
-  assert.match(config.mcp.servers.ninerr.command[1], /scripts\/ninerr-mcp\.mjs$/);
-  assert.equal(config.mcp.servers.ninerr.environment.NINERR_MCP_TOKEN, "{env:NINERR_MCP_TOKEN}");
-});
-
-test("Cursor template is stdio and forwards token through environment substitution", () => {
-  const entry = JSON.parse(read("docs/examples/mcp-clients/cursor.mcp.template.json")).mcpServers.ninerr;
-  assert.equal(entry.type, "stdio");
-  assert.equal(entry.command, "node");
-  assert.match(entry.args[0], /scripts\/ninerr-mcp\.mjs$/);
-  assert.equal(entry.env.NINERR_MCP_TOKEN, "${env:NINERR_MCP_TOKEN}");
-});
-
-test("Gemini template is stdio and keeps client confirmations enabled", () => {
-  const entry = JSON.parse(read("docs/examples/mcp-clients/gemini.settings.template.json")).mcpServers.ninerr;
-  assert.equal(entry.command, "node");
-  assert.match(entry.args[0], /scripts\/ninerr-mcp\.mjs$/);
-  assert.equal(entry.env.NINERR_MCP_TOKEN, "${NINERR_MCP_TOKEN}");
-  assert.equal(entry.trust, false);
-});
-
-test("client guide requires a live agent connection, not merely a configured command", () => {
-  const guide = read("docs/MCP_CLIENTS.md");
-  for (const name of ["Codex", "Claude Code", "OpenCode", "Cursor", "Gemini CLI", "guide", "project_info", "layer_tree", "dry-run", "delete_layers", "NINERR_MCP_TOKEN"]) {
-    assert.ok(guide.includes(name), `missing MCP acceptance topic: ${name}`);
+test("every template starts the engine with node and `mcp`, and holds no credential", () => {
+  for (const name of readdirSync(new URL("../docs/examples/mcp-clients/", import.meta.url))) {
+    const text = read(`docs/examples/mcp-clients/${name}`);
+    assert.doesNotMatch(text, /TOKEN|token|ninerr-mcp\.mjs|Bearer|secret/u, `${name} carries no credential and no relay`);
+    assert.match(text, /bin\/ninerr\.mjs"/u, `${name} names the engine`);
   }
-  assert.match(guide, /not proof|not the same/i);
+});
+
+test("Codex: a TOML entry whose tool timeout outlasts the wait for the person", () => {
+  const config = read("docs/examples/mcp-clients/codex.template.toml");
+  assert.match(config, /^\[mcp_servers\.ninerr\]$/mu);
+  assert.match(config, /^command = "node"$/mu);
+  assert.match(config, /^args = \["[^"]+\/bin\/ninerr\.mjs", "mcp"\]$/mu);
+  const timeout = Number(/^tool_timeout_sec = (\d+)$/mu.exec(config)?.[1]);
+  assert.ok(timeout > 120, "longer than the engine's 120-second wait for an answer");
+});
+
+test("Claude Code and Cursor: stdio entries", () => {
+  for (const name of ["claude.mcp.template.json", "cursor.mcp.template.json"]) {
+    const entry = JSON.parse(read(`docs/examples/mcp-clients/${name}`)).mcpServers.ninerr;
+    assert.deepEqual([entry.type, entry.command, entry.args.length, entry.args[1]], ["stdio", "node", 2, "mcp"], name);
+    assert.match(entry.args[0], ENGINE);
+    assert.equal(entry.env, undefined, `${name} passes no environment`);
+  }
+});
+
+test("OpenCode: the form OpenCode 2.3.0 ran, under mcp.ninerr", () => {
+  const config = JSON.parse(read("docs/examples/mcp-clients/opencode.template.json"));
+  const entry = config.mcp.ninerr;
+  assert.equal(entry.type, "local");
+  assert.equal(entry.enabled, true);
+  assert.deepEqual([entry.command[0], entry.command[2]], ["node", "mcp"]);
+  assert.match(entry.command[1], ENGINE);
+  assert.equal(config.mcp.servers, undefined);
+});
+
+test("Gemini CLI: keeps its own per-tool confirmation", () => {
+  const entry = JSON.parse(read("docs/examples/mcp-clients/gemini.settings.template.json")).mcpServers.ninerr;
+  assert.equal(entry.trust, false);
+  assert.deepEqual([entry.command, entry.args[1]], ["node", "mcp"]);
+  assert.match(entry.args[0], ENGINE);
 });

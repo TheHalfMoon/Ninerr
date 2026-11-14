@@ -4,11 +4,9 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"
-      ],
-      "env": {
-        "NINERR_MCP_TOKEN": "${env:NINERR_MCP_TOKEN}"
-      }
+        "/ABSOLUTE/PATH/TO/ninerr/bin/ninerr.mjs",
+        "mcp"
+      ]
     }
   }
 }

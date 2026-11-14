@@ -1,147 +1,82 @@
-# Connect Ninerr to Codex, Claude Code, OpenCode, and other MCP clients
+# Connect Ninerr to Codex, Claude Code, OpenCode and other MCP clients
 
-Ninerr's local studio host already implements a **37-tool** MCP server. This is a client-configuration guide, **not a hosted remote MCP service**. The desktop/editor and the agent edit the same open project through the studio host. Tools support read/write classes, revision checks, dry runs, undo, and explicit human approvals for consequential deletion. See [MCP protocol and security](MCP.md).
+Ninerr is used by agents through its **headless engine**: a local MCP server on stdio that your agent's client starts itself (`docs/HEADLESS.md`). You need no editor, browser, desktop app, account, credential or network. This page shows each client's configuration, and how to check a connection end to end.
 
 ## Requirements
 
-1. A **stable installed or checked-out Ninerr** folder on the **same computer** as the agent. The three clients need the absolute path to `scripts/ninerr-mcp.mjs` inside that installation. **Do not point them at a temporary PR worktree**; such paths can disappear.
-2. Node 22.18+ (22.x) or 24.11+; run `npm ci --ignore-scripts` once in Ninerr if using a source checkout.
-3. Start Ninerr (`npm start` from the installation or start its desktop app), open a project, choose **Agents → Connect**, and copy the one-time agent credential into a private secret store or your current process environment. Never commit it, paste it in a chat, or put it in CLI arguments or a `*.json`/`*.toml` file.
-4. Start your MCP client **after** setting the `NINERR_MCP_TOKEN` environment variable in the environment inherited by that client. Only the named agent's permissions are available; it cannot access unopened projects by default.
+1. Install the engine and run `ninerr doctor`, as `docs/ENGINE.md` says. `doctor` prints the exact command for this computer: `node`, the absolute path of the installed `bin/ninerr.mjs`, and `mcp`.
+2. Node.js 22.18 or a later 22.x, or 24.11 or later, on the `PATH` the client sees. Otherwise give the absolute path of Node.js, as `doctor` prints it.
 
-The stdio relay uses `scripts/ninerr-mcp.mjs`; it discovers the local studio host through the private Ninerr Projects directory, or accepts `--projects <folder>` or `--url http://127.0.0.1:<port>/mcp`. It does **not** start Ninerr on its own or connect to a remote hosted instance.
+In the templates (`docs/examples/mcp-clients/`), `/ABSOLUTE/PATH/TO/ninerr/bin/ninerr.mjs` stands for that path. Projects go to "Ninerr Projects" in your home folder. To use another folder, add `"--projects", "<absolute folder>"` after `"mcp"`, or set `NINERR_PROJECTS`. On Windows, forward slashes in paths work in every one of these files.
 
-### Safe, temporary token setup
+No token or key appears in any of them: only the client that started the engine can talk to it.
 
-In PowerShell, prompt without echo or shell-history exposure. Launch the MCP client **from the same terminal**; closing the terminal clears this session variable:
+## Codex (CLI, IDE and desktop app)
 
-```powershell
-$secure = Read-Host -Prompt "Ninerr agent credential" -AsSecureString
-$env:NINERR_MCP_TOKEN = [System.Net.NetworkCredential]::new("", $secure).Password
-Remove-Variable secure
-```
-
-On macOS/Linux, use your OS secret manager or a hidden-input prompt and export the value in the MCP client's environment. Avoid embedding credentials into CLI commands or tracked project configuration. The environment is scoped to processes that inherit it; treat local access to that user session as sensitive.
-
-## Codex CLI / Codex desktop / Codex IDE
-
-Codex reads its user-scoped `~/.codex/config.toml`. Codex CLI and its desktop and IDE clients share this MCP configuration. Add or edit the `ninerr` entry without replacing unrelated configuration:
+Codex reads `~/.codex/config.toml`, shared by the CLI and its desktop and IDE clients. Add the entry in `docs/examples/mcp-clients/codex.template.toml` without replacing the servers already there:
 
 ```toml
 [mcp_servers.ninerr]
 command = "node"
-args = ["D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"]
-env_vars = ["NINERR_MCP_TOKEN"]
+args = ["/ABSOLUTE/PATH/TO/ninerr/bin/ninerr.mjs", "mcp"]
 startup_timeout_sec = 20
-tool_timeout_sec = 90
+tool_timeout_sec = 150
 ```
 
-Replace the sample path with the absolute path on your machine; on Windows, forward slashes in the TOML string work for the Node script path. If your Ninerr Projects directory is not the default, append `"--projects", "C:/Users/YourUser/Ninerr Projects"` to `args`. The `env_vars` entry explicitly forwards an existing variable; **do not use** `[mcp_servers.ninerr.env]` to store the credential.
-
-Run `codex mcp list`, open Codex and inspect `/mcp`. Start with an agent read call to `guide` and `project_info`. If it fails, verify that Ninerr is running, a project is open, and Codex was launched with the token variable. A broken or stopped local host must not trigger a remote fallback.
+Deleting waits up to 120 seconds for your answer, so the tool timeout is longer than that. Check the entry with `codex mcp list`, or `/mcp` in Codex.
 
 ## Claude Code
 
-From PowerShell (using the stable path you chose):
-
-```powershell
-claude mcp add --transport stdio --scope user ninerr -- node "D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"
+```sh
+claude mcp add --transport stdio --scope user ninerr -- node /ABSOLUTE/PATH/TO/ninerr/bin/ninerr.mjs mcp
 claude mcp get ninerr
 ```
 
-Claude Code's **user** scope makes Ninerr available in any of your workspaces without putting a credential in a repository. Launch Claude Code from the terminal carrying `NINERR_MCP_TOKEN`, and run `/mcp` to confirm the connection. If `ninerr` already exists, inspect its configuration before replacing it.
-
-An optional client-specific local JSON config may also be used (template in `docs/examples/mcp-clients/claude.mcp.template.json`); expand its example path and ensure its token environment substitution is supported by the installed Claude Code version. Prefer the `claude mcp add` command.
+User scope makes Ninerr available in all your workspaces. `docs/examples/mcp-clients/claude.mcp.template.json` is the same entry as a file, for `--mcp-config`.
 
 ## OpenCode
 
-Current OpenCode V2 config stores servers under `mcp.servers` in the user or project `opencode.jsonc`:
+In your `opencode.json` (user or project), merge the `ninerr` entry under `mcp` from `docs/examples/mcp-clients/opencode.template.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "servers": {
-      "ninerr": {
-        "type": "local",
-        "command": ["node", "D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"],
-        "environment": {
-          "NINERR_MCP_TOKEN": "{env:NINERR_MCP_TOKEN}"
-        }
-      }
-    }
+    "ninerr": { "type": "local", "command": ["node", "/ABSOLUTE/PATH/TO/ninerr/bin/ninerr.mjs", "mcp"], "enabled": true }
   }
 }
 ```
 
-Replace the path, then **merge** the `mcp.servers.ninerr` object with your existing configuration rather than overwriting other servers. Use `opencode mcp list` or `/mcps` to check. Launch OpenCode with the credential in its environment. Source: `docs/examples/mcp-clients/opencode.template.json`.
+This form is the one OpenCode 2.3.0 ran in the recorded sessions (`docs/evidence/HEADLESS_CLIENTS_2026-11-14.md`). OpenCode keeps its MCP servers running between runs, so ask the agent to `close_project` when it is done. A project left open is released after 10 minutes with no call. Check the entry with `opencode mcp list`.
 
 ## Cursor
 
-Cursor supports local stdio MCP servers in `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project). Merge the `ninerr` entry from `docs/examples/mcp-clients/cursor.mcp.template.json` with your existing `mcpServers` object:
-
-```json
-{
-  "mcpServers": {
-    "ninerr": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"],
-      "env": { "NINERR_MCP_TOKEN": "${env:NINERR_MCP_TOKEN}" }
-    }
-  }
-}
-```
-
-Set the credential in the environment before launching Cursor, or use the secure environment mechanism Cursor supports. Never copy the token literal into `mcp.json`. Validate by running the same read/dry-run/edit tests below, not by merely seeing the server listed.
+Merge the entry from `docs/examples/mcp-clients/cursor.mcp.template.json` into `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project).
 
 ## Gemini CLI
 
-Gemini CLI supports stdio MCP servers through `~/.gemini/settings.json` (user) or `.gemini/settings.json` (project). Merge the `mcpServers.ninerr` object from `docs/examples/mcp-clients/gemini.settings.template.json`:
-
-```json
-{
-  "mcpServers": {
-    "ninerr": {
-      "command": "node",
-      "args": ["D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"],
-      "env": { "NINERR_MCP_TOKEN": "${NINERR_MCP_TOKEN}" },
-      "trust": false
-    }
-  }
-}
-```
-
-Keep `trust: false`: Gemini tool calls should retain their own approval controls, in addition to Ninerr's document authorization. Use `gemini mcp list` to inspect configured servers, then exercise the local test project.
+Merge the entry from `docs/examples/mcp-clients/gemini.settings.template.json` into `~/.gemini/settings.json` (user) or `.gemini/settings.json` (project). Keep `"trust": false`, so Gemini asks before each tool call as well.
 
 ## Other MCP clients
 
-Use the **local stdio** transport with:
+Use the local stdio transport, with server name `ninerr`, command `node`, and arguments `[<absolute path of bin/ninerr.mjs>, "mcp"]`.
 
-- Executable: `node`
-- Arguments: absolute path to Ninerr's `scripts/ninerr-mcp.mjs`, optionally `--projects <absolute-projects-folder>`
-- Environment: `NINERR_MCP_TOKEN` inherited securely by the client process (not written into shared configs).
-- Server name: `ninerr`; call `guide` first.
+## Acceptance check, per client
 
-If a client only supports Streamable HTTP, use Ninerr's authenticated **loopback-only** `POST /mcp` endpoint with its Bearer credential, after discovering the runtime port from your local Ninerr host. Never expose `/mcp` publicly or tunnel it without a separate security design.
+Do this with each client separately. A client that is only configured, or only shows Ninerr in its list, has not been checked.
 
-## Acceptance check (all clients)
+1. **Create:** "With Ninerr, create a project named `check-<client>`, add a frame named Hero 800 by 400 with a background color, export it as html named hero, then save and close the project." The preview is in that project's `exports/` folder.
+2. **Reopen and edit, in a new conversation:** "Open `check-<client>`, rename Hero to Banner, export it as jsx, show the last three history entries, and close it." History names the client's agent for every change.
+3. **Dry run:** ask for a `create_frame` with `dryRun: true`. The revision does not change.
+4. **Delete:** ask the agent to delete Banner. The client must ask you first, or Ninerr refuses (a client that cannot ask). Decline, and check the layer is still there.
+5. **Undo:** ask for a small change, then `undo_change`. The change is gone and history shows both.
 
-1. Start Ninerr and open a **disposable test project**; create an agent connection and grant the appropriate read/write access.
-2. In Codex/Claude Code/OpenCode, ask: **"Call Ninerr's `guide`, `project_info` and `layer_tree`. Do not edit anything."** Confirm the tool results identify the open project.
-3. Ask the agent to **dry-run** `create_frame` or `set_text` at the revision it just read; confirm no document change.
-4. Ask it to make one small reversible change and check that the editor reflects an **attributed agent transaction**; undo it from Ninerr.
-5. Attempt a consequential `delete_layers` with a test frame: it must request **a person’s approval**, not execute silently. Deny approval and verify no deletion.
-6. Switch projects or revoke the agent connection: verify that a stale agent cannot continue changing the prior document without re-reading/connecting.
-7. Repeat the read + dry-run + edit flow separately with **each client** (Codex, Claude Code, OpenCode, Cursor, Gemini CLI where installed). Seeing a client in `mcp list` is **not proof** that an end-to-end connection passed.
+`docs/evidence/HEADLESS_CLIENTS_2026-11-14.md` records these checks as run so far. The tests in `tests/headless-engine.test.mjs` and `tests/engine-package.test.mjs` drive the real engine process, but they don't substitute for a client's own session.
 
-Ninerr's `tests/mcp-server.test.mjs`, `tests/mcp-relay.test.mjs` and `tests/mcp-authorization.test.mjs` exercise the server and relay but are **not substitutes** for a live test with each installed client. Do not mark a client "connected" until the actual test passes.
+## Security and limits
 
-## Security / limitations
-
-- The currently implemented tools operate on Ninerr's **open document**, not arbitrary files or networks; they do not grant general system access.
-- A client must authenticate with a per-agent credential; the host enforces document authorization.
-- Writes are journaled and reversible; consequential deletions need human confirmation.
-- A locally installed client and Ninerr host must be on the same device for the relay's loopback restrictions.
-- A configured client is not the same as a **released v0.1.0 product**; final-version client matrix and release evidence are separate gates.
-- This integration does not require a paid cloud API for the Ninerr server. The agent vendor may have its own plan or inference costs.
+- **Scope.** The engine acts only inside its projects folder, on the project the agent opened. Project names cannot be paths. Exports go only into that project's own `exports/` folder, never through a link. Nothing is fetched from the network.
+- **Attribution and undo.** Every change is an attributed, journaled history transaction, and an agent can undo its own changes.
+- **Deleting needs you.** It goes through the client's prompt (MCP elicitation), or is refused. An approval is only as trustworthy as that prompt: a client set to approve everything automatically approves for you.
+- **Your agent's provider may cost money.** The agent's model provider may charge for its use. Ninerr itself needs no paid service.
+- **The editor's server is frozen.** The older way to connect, through the running editor's server with a relay and a per-agent token (`scripts/ninerr-mcp.mjs`, `docs/MCP.md`), still works, but it is frozen with the editor.

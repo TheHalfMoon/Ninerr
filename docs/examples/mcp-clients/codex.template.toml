@@ -1,9 +1,9 @@
-# Add/merge this entry in ~/.codex/config.toml. Do not overwrite existing servers.
-# Replace the sample absolute path with your stable Ninerr installation path.
-# Do not put credentials in .env: forward NINERR_MCP_TOKEN from the local environment.
+# Add this entry to ~/.codex/config.toml, keeping the servers already there.
+# Use the path `ninerr doctor` prints for bin/ninerr.mjs. No credential is needed:
+# Codex starts the engine itself, and only Codex can talk to it.
 [mcp_servers.ninerr]
 command = "node"
-args = ["D:/YOUR-STABLE-NINERR-CHECKOUT/scripts/ninerr-mcp.mjs"]
-env_vars = ["NINERR_MCP_TOKEN"]
+args = ["/ABSOLUTE/PATH/TO/ninerr/bin/ninerr.mjs", "mcp"]
 startup_timeout_sec = 20
-tool_timeout_sec = 90
+# Deleting waits up to 120 seconds for your answer, so the tool timeout is longer.
+tool_timeout_sec = 150

@@ -29,7 +29,7 @@ Ninerr runs an MCP server so that an agent can read and edit the open design doc
 
 ## Connecting an agent
 
-**Codex, Claude Code, OpenCode and other MCP clients:** follow [client-specific setup instructions](MCP_CLIENTS.md), including token-safe configuration and end-to-end acceptance checks. This server only runs on the same machine as Ninerr.
+**Codex, Claude Code, OpenCode and other MCP clients:** follow [client-specific setup instructions](MCP_CLIENTS.md) for the headless engine, with no credential, and the end-to-end acceptance check for each client. This server only runs on the same machine as Ninerr.
 
 
 1. In Ninerr, connect an agent. Ninerr shows its credential once.
