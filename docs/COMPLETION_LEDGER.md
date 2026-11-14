@@ -69,9 +69,9 @@ Last updated: 2026-11-14. Canonical main: `bdb99ba`.
 
 Each row's PR has its full check results, its fresh-context review findings and fixes, and its mutation results.
 
-## In review
+## Latest merged non-UI hardening
 
-- Doctor MCP reliability hardening (branch `fix/doctor-mcp-timeouts-20261114`): bound initialize/tool-call waits to 10 seconds, reject malformed JSON with a failed diagnostic, and close scratch streams on failure. Windows tests: `tests/doctor-hardening.test.mjs` (2 pass) and `tests/engine-package.test.mjs` (2 pass). This is not merged or final-release qualification; exact-head CI and post-merge evidence remain required.
+- Doctor MCP reliability hardening was merged in #478 (merge commit `45e9a0788ec48bd3a518aac143a753253e388792`): initialize/tool-call waits are bounded to 10 seconds, malformed JSON fails diagnostics cleanly, and scratch streams close on failure. Windows regression tests: `tests/doctor-hardening.test.mjs` (2 pass) and `tests/engine-package.test.mjs` (2 pass). All exact-head checks on `5c6a73c` passed before the normal merge; post-merge CI [43608783284](https://github.com/TheHalfMoon/Ninerr/actions/runs/43608783284) and Desktop CI [43608783333](https://github.com/TheHalfMoon/Ninerr/actions/runs/43608783333) both passed on the merge commit. These automated results do not constitute final candidate qualification or human Desktop/UI acceptance.
 
 ## Remaining requirements
 
