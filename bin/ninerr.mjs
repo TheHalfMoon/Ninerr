@@ -107,7 +107,7 @@ async function doctor() {
   }
   // How an MCP client starts the engine: this Node.js and this command, by absolute paths.
   const server = { command: process.execPath, args: [realpathSync(process.argv[1]), "mcp", "--projects", projectsRoot] };
-  process.stdout.write(`\nTo connect an agent, give its client this MCP server (docs/MCP_CLIENTS.md has each client's file):\n  command: ${JSON.stringify(server.command)}\n  args:    ${JSON.stringify(server.args)}\n`);
+  process.stdout.write(`\nTo connect an agent, give its client this MCP server (docs/ENGINE.md shows each client's file):\n  command: ${JSON.stringify(server.command)}\n  args:    ${JSON.stringify(server.args)}\n`);
   process.stdout.write(`\n${failed === 0 ? "Everything Ninerr needs is in place." : `${failed} check${failed === 1 ? "" : "s"} failed.`}\n`);
   return failed === 0 ? 0 : 1;
 }

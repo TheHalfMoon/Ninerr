@@ -24,6 +24,10 @@ import { StudioSession, assertProjectName, type StudioActor } from "./session.ts
 const MAX_LINE_BYTES = 1024 * 1024;
 // How long a consequential call waits for the person's answer in the client.
 const HEADLESS_CONFIRMATION_WAIT_MS = 120_000;
+// Some clients keep an MCP server running between conversations. A project left open that long
+// stays locked to everyone else, so after this long with no call the engine closes it; the
+// agent's next call is told to open it again.
+const IDLE_CLOSE_MS = 10 * 60_000;
 const OWNER: StudioActor = { actorId: "local-user", kind: "user", accessClass: "member", displayName: "You" };
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -35,6 +39,8 @@ export interface HeadlessOptions {
   now?: () => string;
   /** Overrides the wait for the person's answer to a consequential call (tests). */
   confirmationWaitMs?: number;
+  /** Overrides how long an open project may sit with no call before it is closed (tests). */
+  idleCloseMs?: number;
 }
 
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", properties, required, additionalProperties: false });
@@ -72,6 +78,8 @@ export class HeadlessEngine {
   readonly #lastRead = new Map<string, string>();
   readonly #confirmations: ConfirmationBroker;
   readonly #waitMs: number;
+  readonly #idleMs: number;
+  #idle: ReturnType<typeof setTimeout> | null = null;
   #session: StudioSession | null = null;
   #actor: StudioActor = localAgentActor(undefined);
   #canAsk = false;
@@ -80,11 +88,12 @@ export class HeadlessEngine {
   readonly #asked = new Set<string>();
   readonly #answers = new Map<string | number, (message: any) => void>();
 
-  constructor(options: { projectsRoot: string; now?: () => string; write: (message: unknown) => void; confirmationWaitMs?: number }) {
+  constructor(options: { projectsRoot: string; now?: () => string; write: (message: unknown) => void; confirmationWaitMs?: number; idleCloseMs?: number }) {
     this.#projectsRoot = options.projectsRoot;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#write = options.write;
     this.#waitMs = options.confirmationWaitMs ?? HEADLESS_CONFIRMATION_WAIT_MS;
+    this.#idleMs = options.idleCloseMs ?? IDLE_CLOSE_MS;
     this.#confirmations = new ConfirmationBroker((pending) => this.#ask(pending));
   }
 
@@ -94,6 +103,7 @@ export class HeadlessEngine {
 
   /** Answer one message from the client: a request or notification, or its answer to one of ours. */
   async receive(message: unknown): Promise<unknown> {
+    this.#keepOpen();
     if (message !== null && typeof message === "object" && !Array.isArray(message) && !("method" in message) && "id" in message) {
       const resolve = this.#answers.get((message as any).id);
       if (resolve !== undefined) {
@@ -111,7 +121,7 @@ export class HeadlessEngine {
     }
     if (method === "initialize") {
       const answer: any = await handleMcpMessage(this.#context(), this.#actor, message);
-      if (answer?.result) answer.result.instructions = "Ninerr design documents, with no editor needed. Call list_projects, then open_project or create_project; call guide for how to design; save_project when done.";
+      if (answer?.result) answer.result.instructions = "Ninerr design documents, with no editor needed. Call list_projects, then open_project or create_project; call guide for how to design; when done, save_project and close_project, which releases the project for the person and other agents.";
       return answer;
     }
     if (method === "tools/list") {
@@ -135,6 +145,7 @@ export class HeadlessEngine {
 
   /** Close the open project, if any. */
   close(): void {
+    if (this.#idle !== null) clearTimeout(this.#idle);
     this.endInput();
     this.#closeSession();
   }
@@ -185,6 +196,16 @@ export class HeadlessEngine {
       .filter((entry) => entry.isDirectory() && (existsSync(join(this.#projectsRoot, entry.name, PROJECT_FILES.directory)) || existsSync(join(this.#projectsRoot, entry.name, LEGACY_PROJECT_DIRECTORY))))
       .map((entry) => entry.name)
       .sort();
+  }
+
+  // Each message restarts the idle clock; when it runs out with nothing waiting for the person, the project is closed.
+  #keepOpen(): void {
+    if (this.#idle !== null) clearTimeout(this.#idle);
+    this.#idle = setTimeout(() => {
+      this.#idle = null;
+      if (this.#session !== null && this.#confirmations.pending().length === 0) this.#closeSession();
+    }, this.#idleMs);
+    this.#idle.unref?.();
   }
 
   #closeSession(): void {
@@ -243,7 +264,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<void> {
     options.output.write(`${JSON.stringify(message)}\n`);
   };
   prepareProjectsFolder(options.projectsRoot);
-  const engine = new HeadlessEngine({ projectsRoot: options.projectsRoot, write, ...(options.now ? { now: options.now } : {}), ...(options.confirmationWaitMs ? { confirmationWaitMs: options.confirmationWaitMs } : {}) });
+  const engine = new HeadlessEngine({ projectsRoot: options.projectsRoot, write, ...(options.now ? { now: options.now } : {}), ...(options.confirmationWaitMs ? { confirmationWaitMs: options.confirmationWaitMs } : {}), ...(options.idleCloseMs ? { idleCloseMs: options.idleCloseMs } : {}) });
   const lines = createInterface({ input: options.input, crlfDelay: Infinity });
   const inflight = new Set<Promise<void>>();
   try {
