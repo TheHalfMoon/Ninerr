@@ -22,9 +22,9 @@ function makeConfig(names = MCP_TOOL_NAMES) {
   };
 }
 
-test("the catalog is Ninerr's 37-tool surface, frozen and without duplicates", () => {
-  assert.equal(MCP_TOOL_NAMES.length, 37);
-  assert.equal(new Set(MCP_TOOL_NAMES).size, 37);
+test("the catalog is Ninerr's 41-tool surface, frozen and without duplicates", () => {
+  assert.equal(MCP_TOOL_NAMES.length, 41);
+  assert.equal(new Set(MCP_TOOL_NAMES).size, 41);
   assert.ok(Object.isFrozen(MCP_TOOL_NAMES));
   for (const name of MCP_TOOL_NAMES) assert.match(name, /^[a-z]+(?:_[a-z]+)*$/u, name);
 });
@@ -38,8 +38,8 @@ test("each tool is classified by what it does to the document", () => {
   for (const name of ["future_tool", "get_screenshot", "get_tree_summary", "toString", "constructor", "__proto__"]) assert.equal(classifyTool(name), "unknown", name);
   assert.throws(() => classifyTool(""), MCPContractError);
   const classes = MCP_TOOL_NAMES.map(classifyTool);
-  assert.equal(classes.filter((value) => value === "read").length, 16);
-  assert.equal(classes.filter((value) => value === "write").length, 19);
+  assert.equal(classes.filter((value) => value === "read").length, 17);
+  assert.equal(classes.filter((value) => value === "write").length, 22);
   assert.equal(classes.filter((value) => value === "consequential").length, 2);
   // Design tokens and components (ADR-0004, ADR-0005): deleting a token needs the person.
   assert.equal(classifyTool("design_tokens"), "read");
@@ -47,6 +47,11 @@ test("each tool is classified by what it does to the document", () => {
   assert.equal(classifyTool("get_component"), "read");
   assert.equal(classifyTool("set_instance_override"), "write");
   assert.equal(classifyTool("delete_token"), "consequential");
+  // History, and the agent's own undo and redo; an export writes files, so it needs document-write.
+  assert.equal(classifyTool("project_history"), "read");
+  assert.equal(classifyTool("undo_change"), "write");
+  assert.equal(classifyTool("redo_change"), "write");
+  assert.equal(classifyTool("export_design"), "write");
 });
 
 test("a server offering exactly the catalog passes the surface check", () => {
