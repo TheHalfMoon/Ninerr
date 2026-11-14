@@ -7,12 +7,18 @@ This is the persistent record of what is complete, what remains and what blocks 
 **Founder update, 2026-11-14:** The target for the **first public release** is now **v0.1.0** (superseding v1.0.0), and all Desktop/UI implementation and visual/user-facing acceptance are reserved to the founder. Engineering owns the remaining non-UI core, CI, testing infrastructure, security, release provenance, docs and safe packaging qualification, without altering the Desktop/UI surface. This is a division of labor, not a waiver of P10, accessibility, clean-install, third-party-source or human-approval gates. See `docs/provenance/FOUNDER_DECISION_2026-11-14_V0_1_0_DESKTOP_UI_OWNERSHIP.md`. Historical references below to `1.0` are the prior plan and must not be mistaken for the next tag.
 
 
-Last updated: 2026-11-14. Canonical main: `2c6e730`.
+Last updated: 2026-11-14. Canonical main: `bdb99ba`.
 
 ## Completed since P09 (with evidence)
 
 | Capability | PRs | Merge | Evidence |
 | --- | --- | --- | --- |
+| The headless engine: Ninerr as a stdio MCP server, with no editor (HEADLESS increment 2) | #470 | `53a445a` | `tests/headless-engine.test.mjs` on three platforms; post-merge CI success |
+| History, own undo and redo, exports and previews into `exports/` (increment 3) | #472 | `f219260` | the same tests, with dry-run, link and replace guards |
+| The engine package, `ninerr doctor`, install guide (increment 4) | #473 | `7d7b86f` | `tests/engine-package.test.mjs`: a real `npm install -g` and `doctor` on three platforms |
+| The release is the engine, not desktop archives (increment 5, release) | #474 | `baef171` | Release Evidence `collect` checks the engine tarball |
+| Client setup for the engine; OpenCode in real sessions | #468, #473 | `bdb99ba` | `docs/evidence/HEADLESS_CLIENTS_2026-11-14.md` |
+| Release manifests and the MCP server name the version; reproducible desktop archives; dependency audit; MCP label and approval-prompt hardening (#64) | #462, #466, #464, #463, #467 | `2c6e730`, `99153eb` | exact-head CI on each |
 | Whole-process egress policy (R04) | #394, #396, #397 | `3c2fa83` | desktop egress runs in CI on three platforms |
 | Hardened gates; sealed release artifacts | #401, #402, #403 | `682c666` | release workflow tests |
 | React style objects survive the code round trip | #399, #400 | `616bafa` | `tests/code-roundtrip*` |
@@ -107,18 +113,21 @@ Nothing is in review.
 
 ## Open blockers (founder or third party)
 
-The founder decided the pending brief on 2026-11-13 (`docs/provenance/FOUNDER_DECISION_2026-11-13_PENDING_BRIEF.md`). What remains:
-1. **The written offer (#457):** the route is decided; the owner fills in the name, contact and date it is signed with.
-2. **The candidate:** the founder names the commit; engineering then runs P10 on it.
-3. **Founder's hardware and hands:** the reference-machine performance runs, a clean-machine install, and a real screen-reader pass (#376), each by the protocol in `docs/ACCEPTANCE.md`.
-4. **Owner-only actions:** the `v0.1.0` tag, publishing the draft release, and removing the unused `TYPESAFE_API_KEY` secret.
+Under the agent-first decision (`docs/provenance/FOUNDER_DECISION_2026-11-14_AGENT_FIRST_HEADLESS.md`):
+1. **Real Claude Code and Codex sessions** (the decision's minimum): Claude Code's sign-in has expired (the person signs in again), and Codex's usage limit is reached until 2026-11-17. Gemini CLI's tier no longer supports that client. OpenCode passed (`docs/evidence/HEADLESS_CLIENTS_2026-11-14.md`).
+2. **The written offer (#457):** needed only if Electron binaries are distributed. The release workflow now publishes none (#474), so the founder confirms whether #457 is still needed for v0.1.0.
+3. **The candidate:** the founder names the commit; engineering then qualifies it (the full suite and the engine install on three platforms, the engine's offline guarantee, the client sessions, the release evidence).
+4. **Owner-only actions:** the `v0.1.0` tag, publishing the draft release or an npm package, enabling Dependabot alerts, and removing the unused `TYPESAFE_API_KEY` secret.
+5. **PR #471** (the desktop restyle) is open against the UI freeze; the founder decides whether it stays.
 
-Decided and closed: #349 (#456), breakpoints (ADR-0008, after 1.0), PDF, network access and the preview runner (not in 1.0), Aceternity UI and 21st.dev (left out of 1.0), and the P10-5 dispositions.
+The clean-machine desktop install and the editor's screen-reader pass (#376) are not v0.1.0 gates under the decision (`docs/HEADLESS.md`).
 
 ## Tests executed (latest, with exact heads)
 
 | Head | Run | Result |
 | --- | --- | --- |
+| `ci/release-engine-artifact` at `f4f7d9e` (every headless increment) | `npm run check`, Windows | 1,400 tests: 1,390 pass, 0 fail, 10 skipped |
+| `f73bfbc` (#470), #472, #473 (`7d7b86f` parent), #474 | CI: Foundation and Desktop on three platforms, Release Evidence, Dependency Audit, Open Code Review | all pass |
 | `1ebdc52` (#461, v0.1.0) | CI: Foundation and Desktop on three platforms, Release Evidence build, desktop and collect, Open Code Review | all pass |
 | `079631a` (P10 test candidate) | `npm run check`, smoke, gate 13 by the reference protocol, packaged smoke, journey and resilience on Windows; Release Evidence in CI | all pass (`docs/evidence/P10_CANDIDATE_TEST_079631a_2026-11-14.md`) |
 | `9aa1248` (Astryx A to E plus C combined) | `npm run check`, Windows | 1,310 tests: 1,299 pass, 0 fail, 11 skipped |
@@ -135,10 +144,7 @@ Decided and closed: #349 (#456), breakpoints (ADR-0008, after 1.0), PDF, network
 
 ## Next engineering actions
 
-The headless engine, in the increments of `docs/HEADLESS.md`:
-1. The stdio engine: lifecycle tools, local agent identity, consequential calls by client confirmation or denial, history, undo and redo.
-2. Exports and previews into the project's `exports/` folder, and validation reports.
-3. The `ninerr` CLI, `ninerr doctor`, and client configuration, building on #468.
-4. Qualification in real Codex, Claude Code and OpenCode sessions on three platforms, and the release workflow building the engine artifact.
-
-Not v0.1.0 gates under the decision: the desktop packages as release artifacts, the clean-machine desktop install, and the editor's screen-reader pass (#376). Electron's written offer (#457) is needed only if Electron binaries are distributed; that is for the founder to confirm.
+1. When the person has signed in to Claude Code and Codex's limit has reset: run the acceptance check of `docs/MCP_CLIENTS.md` in real Claude Code and Codex sessions, and record it.
+2. Run the same client sessions on macOS and Linux.
+3. When the founder names the candidate: qualify it as the open blockers say.
+4. After v0.1.0: validation and accessibility reports as engine tools, PNG previews where a local browser exists, and code-to-design from a connected codebase over MCP.
