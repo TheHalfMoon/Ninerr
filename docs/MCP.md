@@ -29,6 +29,9 @@ Ninerr runs an MCP server so that an agent can read and edit the open design doc
 
 ## Connecting an agent
 
+**Codex, Claude Code, OpenCode and other MCP clients:** follow [client-specific setup instructions](MCP_CLIENTS.md) for the headless engine, with no credential, and the end-to-end acceptance check for each client. This server only runs on the same machine as Ninerr.
+
+
 1. In Ninerr, connect an agent. Ninerr shows its credential once.
 2. Configure the MCP client to use one of the transports. Transports are `stdio` and `http` (`MCP_TRANSPORTS`).
    - **stdio:** run `node scripts/ninerr-mcp.mjs --projects <your Ninerr projects folder>` (or `npm run mcp`), with `NINERR_MCP_TOKEN` set to the credential. The relay finds the running Ninerr through the discovery file in the projects folder, or takes `--url`. It only connects to a loopback address.

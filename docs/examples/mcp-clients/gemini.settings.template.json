@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "ninerr": {
+      "command": "node",
+      "args": [
+        "/ABSOLUTE/PATH/TO/ninerr/bin/ninerr.mjs",
+        "mcp"
+      ],
+      "trust": false
+    }
+  }
+}

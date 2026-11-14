@@ -39,6 +39,8 @@ Each failed check says what to do. At the end, `doctor` prints the exact command
 
 ## 4. Connect your agent
 
+`docs/MCP_CLIENTS.md` has each client's template, and the acceptance check to run with each one.
+
 Give your client an MCP server named `ninerr`. Use the command and arguments `ninerr doctor` printed: the absolute path of Node.js, then the absolute path of `bin/ninerr.mjs`, `mcp` and `--projects <folder>`. That form works everywhere. On Windows, the `ninerr` command is a `.cmd` file, which some clients cannot start without a shell. On macOS and Linux, `ninerr` with the arguments `mcp` also works.
 
 In the examples below, `<node>` and `<ninerr.mjs>` stand for those two paths.

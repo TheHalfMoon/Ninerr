@@ -31,7 +31,7 @@ npm start
 
 `npm start` runs the studio host and prints a link to the editor. Projects live in a "Ninerr Projects" folder in your home folder unless `NINERR_PROJECTS` or `npm start -- --projects <folder>` names another. The projects folder must be one only you can change (on Windows, on NTFS, outside OneDrive's online-only files): `docs/DESKTOP.md` says why, and covers the projects folder and settings from earlier versions, and `docs/MIGRATION.md` covers converting older projects.
 
-To connect an MCP client, run `npm run mcp`, with the agent credential Ninerr shows you set as `NINERR_MCP_TOKEN`.
+To connect **Codex, Claude Code, OpenCode, Cursor, Gemini CLI or another MCP client**, install the engine (`docs/ENGINE.md`) and follow [client setup and live acceptance checks](docs/MCP_CLIENTS.md); no credential is needed. Connecting to the running editor instead (`npm run mcp`, with the agent credential Ninerr shows you as `NINERR_MCP_TOKEN`) still works, frozen with the editor.
 
 `npm test` runs the test suite, and `npm run smoke` runs the offline smoke workflow.
 
