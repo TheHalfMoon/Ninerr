@@ -71,7 +71,7 @@ Each row's PR has its full check results, its fresh-context review findings and 
 
 ## In review
 
-Nothing is in review.
+- Doctor MCP reliability hardening (branch `fix/doctor-mcp-timeouts-20261114`): bound initialize/tool-call waits to 10 seconds, reject malformed JSON with a failed diagnostic, and close scratch streams on failure. Windows tests: `tests/doctor-hardening.test.mjs` (2 pass) and `tests/engine-package.test.mjs` (2 pass). This is not merged or final-release qualification; exact-head CI and post-merge evidence remain required.
 
 ## Remaining requirements
 
