@@ -16,10 +16,11 @@ A Ninerr release is a tagged commit together with its signed release files: the 
 
 | File | What it is |
 | --- | --- |
-| `Ninerr-linux-x64.tar.gz`, `Ninerr-darwin-arm64.zip`, `Ninerr-win32-x64.zip` | The desktop app (`docs/DESKTOP.md` says how to install it). Each is packaged on its own platform's runner from the tagged commit, smoke-tested, and taken through the release-candidate journey before it is collected. |
-| `Ninerr-<platform>.json` | Each archive's package manifest: the product version, the commit it was packaged from, its SHA-256, the Electron runtime and its pinned archive, its corresponding-source binding, the fuses, and whether it is publisher-signed (it is not: the release is unsigned by a publisher, by the founder's decision of 2026-10-13). |
+| `ninerr-<version>.tgz` | The Ninerr Engine: the `ninerr` command and its headless MCP server, as an npm package built by `scripts/build-engine.mjs` from the tagged commit (`docs/ENGINE.md` says how to install it). Building it again from the same commit gives the same file. |
 | `ninerr-release-evidence-<sha>.tar.gz` | The evidence bundle below, as one archive. |
 | `SHA256SUMS` | The SHA-256 of each file above. |
+
+**Desktop archives are not part of v0.1.0** (founder, 2026-11-14). The workflow still packages each one on its own runner, smoke-tests it and walks it through the release-candidate journey. `collect` checks each against its manifest, this commit and this version, as evidence that the frozen desktop app still works. None of them is signed or published. The rest of this page describes them as they were built for a desktop release.
 
 **Local web mode** is the tagged source itself. Run it with Node 22.18 or a later 22.x, or Node 24.11 or later, and no network beyond loopback once the dependencies are installed:
 
@@ -89,10 +90,11 @@ The `Release Evidence` workflow (`.github/workflows/release.yml`) has five jobs.
   This job cannot request an OIDC token.
 - **`desktop`** is the Desktop workflow (`.github/workflows/desktop.yml`) itself, the same one every pull request runs. It packages each archive on its own platform's runner and uploads it at once, before anything runs from it. It then smoke-tests the archive and runs the release-candidate journey through it. It cannot request an OIDC token either.
 - **`collect`** runs no repository or dependency code. It:
-  1. downloads the bundle and the three archives with their manifests;
+  1. downloads the bundle, the engine's tarball, and the three desktop archives with their manifests;
   2. checks that the bundle is for this run's commit, that every archive was packaged from that commit with the bundle's version, and, for a tag, that the tag names that version; then checks each archive against the SHA-256 its manifest records;
-  3. puts the bundle in one archive and writes `SHA256SUMS`;
-  4. uploads the seven files and `SHA256SUMS` as `ninerr-release-<sha>`, kept for 90 days.
+  3. checks that the engine's artifact is only `ninerr-<version>.tgz`, and that its package is `ninerr` at the bundle's version;
+  4. puts the bundle in one archive and writes `SHA256SUMS` for the engine and the bundle (the desktop archives are checked, kept apart, and not released);
+  5. uploads the two files and `SHA256SUMS` as `ninerr-release-<sha>`, kept for 90 days.
 - **`attest`** runs only for a pushed tag matching `v[0-9]*`. It downloads the bundle and the collected files and signs every file with `actions/attest-build-provenance`. These are keyless Sigstore attestations through GitHub OIDC, so no signing key is stored anywhere. It runs no repository or dependency code.
 - **`publish`** runs only for a pushed tag, after `attest`. It puts the collected files in a **draft** GitHub Release for that tag. It runs only `gh`. It cannot create a tag, because the release must name an existing one, and it leaves the draft unpublished: publishing it is the owner's decision. Running `publish` again makes another draft, which the owner can delete.
 
