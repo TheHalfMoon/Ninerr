@@ -24,8 +24,20 @@ import type { StudioActor, StudioSession } from "./session.ts";
 // the editor (the host's own confirmation flow), never from the client (#82, P06 G8).
 
 export const MCP_PROTOCOL_VERSIONS = Object.freeze(["2025-06-18", "2025-03-26", "2024-11-05"]);
-// The product's version, from the package.json at the root of the source tree, or of the app inside a desktop package.
-const PRODUCT_VERSION: string = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version;
+// The product's version: from the nearest package.json above this module that is Ninerr's own,
+// the root of the source tree, the app inside a desktop package, or an installed engine.
+function productVersion(): string {
+  for (let folder = new URL("./", import.meta.url), depth = 0; depth < 8; folder = new URL("../", folder), depth += 1) {
+    try {
+      const found = JSON.parse(readFileSync(new URL("package.json", folder), "utf8"));
+      if (found?.name === "ninerr" && typeof found.version === "string") return found.version;
+    } catch {
+      // No package.json here: look further up.
+    }
+  }
+  throw new Error("Ninerr's package.json was not found above the MCP server");
+}
+const PRODUCT_VERSION = productVersion();
 const SERVER_INFO = Object.freeze({ name: "ninerr", title: "Ninerr", version: PRODUCT_VERSION });
 const MAX_RESULT_NODES = 500;
 const MAX_TREE_DEPTH = 12;

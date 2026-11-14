@@ -306,6 +306,40 @@ test("a question the person never answers is no approval, and asking again asks 
   }
 });
 
+test("a project left open with no call is closed after the idle time, releasing it", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-headless-")));
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const answers = new Map();
+  createInterface({ input: output }).on("line", (line) => {
+    const message = JSON.parse(line);
+    answers.get(message.id)?.(message);
+  });
+  let next = 1;
+  const call = (name, args = {}) => new Promise((resolve) => {
+    const id = next++;
+    answers.set(id, (message) => resolve(message.result));
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  });
+  const running = runHeadless({ projectsRoot: root, input, output, idleCloseMs: 400 });
+  try {
+    await call("create_project", { name: "p" });
+    const lock = join(root, "p", PROJECT_FILES.directory, "lock");
+    assert.ok(existsSync(lock), "open and locked");
+    await call("list_projects");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.ok(existsSync(lock), "a call keeps it open");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    assert.ok(!existsSync(lock), "idle: closed and released");
+    assert.match((await call("create_frame", { name: "A", width: 10, height: 10 })).content[0].text, /No project is open/u, "the next call is told to open it");
+    assert.equal((await call("open_project", { name: "p" })).isError, undefined, "and it opens again");
+  } finally {
+    input.end();
+    await running;
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
 test("a dry run of undo, redo or export changes nothing; an export never replaces a file unasked, nor goes through a link", () => withProjects(async (projects) => {
   const agent = engine(projects);
   await agent.initialize();
@@ -342,3 +376,37 @@ test("a dry run of undo, redo or export changes nothing; an export never replace
   }
   await agent.stop();
 }));
+
+test("an idle project waiting on the person stays open until the question ends, then is closed", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-headless-")));
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const answers = new Map();
+  createInterface({ input: output }).on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === undefined) answers.get(message.id)?.(message);
+  });
+  let next = 1;
+  const rpc = (method, params) => new Promise((resolve) => {
+    const id = next++;
+    answers.set(id, (message) => resolve(message.result));
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+  const running = runHeadless({ projectsRoot: root, input, output, idleCloseMs: 300, confirmationWaitMs: 2500 });
+  try {
+    await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "Slow", version: "1" } });
+    await rpc("tools/call", { name: "create_project", arguments: { name: "p" } });
+    const frame = (await rpc("tools/call", { name: "create_frame", arguments: { name: "A", width: 10, height: 10 } })).structuredContent.nodeId;
+    const lock = join(root, "p", PROJECT_FILES.directory, "lock");
+    const asked = rpc("tools/call", { name: "delete_layers", arguments: { nodeIds: [frame] } });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    assert.ok(existsSync(lock), "still open while the person is asked");
+    assert.match((await asked).content[0].text, /declined/u, "unanswered: declined");
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    assert.ok(!existsSync(lock), "then idle: closed and released");
+  } finally {
+    input.end();
+    await running;
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
