@@ -104,9 +104,9 @@ Each row's PR has its full check results, its fresh-context review findings and 
 | RTL editing | done (#433, and MCP `set_attributes` #443): a layer's text direction |
 | Reduced motion | no motion in the editor; the canvas ends a design's motion when the system asks (#444) |
 | Component sources | |
-| â†³ three-way update of an imported item | missing |
-| â†³ preview, beyond static HTML | not in 1.0: previews stay the canvas's static rendering (founder, 2026-11-13) |
-| â†³ registry fetching | not in 1.0: items come from files the person chooses (founder, 2026-11-13) |
+| ↳ three-way update of an imported item | missing |
+| ↳ preview, beyond static HTML | not in 1.0: previews stay the canvas's static rendering (founder, 2026-11-13) |
+| ↳ registry fetching | not in 1.0: items come from files the person chooses (founder, 2026-11-13) |
 | Agents: dry-run and baseRevision (ADR-0006) | done (#425) |
 | Windows installer, upgrade, uninstall | packages are archives (founder, 2026-10-13); upgrade and uninstall documented (#441) |
 | Screen-reader pass (#376) | not done with a real screen reader; its protocol is in `docs/ACCEPTANCE.md` |
