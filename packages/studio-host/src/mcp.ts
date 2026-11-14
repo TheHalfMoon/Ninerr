@@ -100,6 +100,15 @@ function valuesAt(value: unknown, path: string): unknown[] {
   return values;
 }
 
+// What the person is asked to approve shows every character as itself: a control, format or
+// blank-looking character in a layer's name or text (one an agent could not give, but an
+// imported page or an older project could hold) is written out as [U+XXXX], so it can neither
+// hide nor reorder the words around it. ZWNJ and ZWJ stay, as they join what they sit in.
+const HIDDEN_GLOBAL = /(?![\u{200c}\u{200d}])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{34f}\u{115f}\u{1160}\u{2800}\u{3164}\u{ffa0}]|\p{Cs}/gu;
+function shownPlainly(text: string): string {
+  return text.replace(HIDDEN_GLOBAL, (character) => `[U+${character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}]`);
+}
+
 /** The first of a call's labels that hides or reorders what a person reads, as a refusal; null when there is none. */
 function hiddenLabel(toolName: string, args: unknown): string | null {
   for (const path of LABELS[toolName] ?? []) {
@@ -1234,7 +1243,7 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
     const aliased = aliases.length === 0 ? "" : `, aliased by ${aliases.slice(0, 5).join(", ")}${aliases.length > 5 ? ", …" : ""}`;
     return `Delete token ${shown}, used by ${values} value${values === 1 ? "" : "s"} on ${uses.length} layer${uses.length === 1 ? "" : "s"}${aliased}, ${by}`;
   };
-  const summary = toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`;
+  const summary = shownPlainly(toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`);
   const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
   // What was approved must still be what runs: a token changed while the call waited is asked about again.
   if (decision.outcome === "approved" && subjectOf() !== subjectSha256) return "What this would delete changed while it waited for the person; call again to ask them about it as it is now.";

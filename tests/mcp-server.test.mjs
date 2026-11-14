@@ -301,6 +301,29 @@ test("an agent's names carry no hidden or reordering characters, and a refused o
   }, { confirmationWaitMs: 100 });
 });
 
+test("what the person is asked to approve shows hidden characters as themselves, not as what they do", async () => {
+  await withStudio(async ({ owner, tool }) => {
+    const { token } = (await owner("POST", "/api/agents/create", { name: "Agent" })).json;
+    await owner("POST", "/api/projects/create", { name: "p" });
+    // A person may name a layer anything; an imported page or an older project may hold such a name too.
+    await owner("POST", "/api/edit", { baseRevision: 0, intent: "Add", operations: [
+      { type: "insert-node", node: { id: "spoof", type: "element", props: { tag: "div", name: "Logo\u202Egnp.exe" } }, index: 0 },
+      { type: "insert-node", node: { id: "quiet", type: "text", props: { tag: "p", text: "Keep\u200Bme \u{E0041}\u2066ok\u2069 \u{1F469}\u200D\u{1F4BB}" } }, index: 1 },
+    ] });
+    await tool(token, "project_info", {});
+    const asked = tool(token, "delete_layers", { nodeIds: ["spoof", "quiet"] });
+    let pending = [];
+    for (let tries = 0; tries < 100 && pending.length === 0; tries += 1) {
+      pending = (await owner("GET", "/api/confirmations")).json.pending;
+      if (pending.length === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].summary, "Delete 2 layers: Logo[U+202E]gnp.exe (div), \u201CKeep[U+200B]me [U+E0041][U+2066]ok[U+2069] \u{1F469}\u200D\u{1F4BB}\u201D (p)");
+    await owner("POST", "/api/confirmations/decide", { id: pending[0].id, approve: false });
+    await asked;
+  }, { confirmationWaitMs: 2000 });
+});
+
 test("consequential calls wait for the person's decision, bound to the exact call", async () => {
   await withStudio(async ({ owner, tool, host }) => {
     const { token } = (await owner("POST", "/api/agents/create", { name: "Agent" })).json;
