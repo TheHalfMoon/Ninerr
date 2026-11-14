@@ -4,6 +4,10 @@
 
 Ninerr is a local-first design workspace for interfaces that are code. A design is a document of real HTML and CSS. Code components are first-class layers, and changes move both ways between the canvas and a codebase. People and AI agents edit the same document, and every change is an attributed history transaction.
 
+## Use it with your agent
+
+Build and install the Ninerr Engine, check it with `ninerr doctor`, and add it to Codex, Claude Code, OpenCode, Cursor or Gemini CLI as an MCP server: `docs/ENGINE.md` has each step. No editor, browser, desktop app or account is needed.
+
 ## What is in this repository
 - **The studio host** (`packages/studio-host`) is the single writer of an open project. It serves the editor on a loopback-only HTTP API, keeps history with undo and redo, and hosts the MCP endpoint for agents.
 - **The editor** (`packages/studio-web`, `packages/canvas`, `packages/renderer`) is a browser editor with a layers tree, an inspector and live history. It renders the document in a script-free, sandboxed frame.
