@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
@@ -7,6 +8,7 @@ import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInsta
 import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
 import { exportHtml, exportJsx, exportTailwind } from "./code.ts";
 import { StudioError } from "./errors.ts";
+import { writeTrustedFile } from "./trusted-file.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
@@ -48,6 +50,8 @@ interface ToolContext {
   selection: () => string[];
   references: ReferenceCatalog;
   edit: (operations: unknown[], intent: string) => Json;
+  /** The call is a dry run: a tool that does not change the document through `edit` must not act. */
+  dryRun: boolean;
 }
 
 /** Tool arguments are the schema's and nothing else: no directory, URL, tenant or token gets through. */
@@ -82,6 +86,7 @@ const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   rename_token: ["to"],
   delete_token: ["name", "replacement.token"],
   set_layer_modes: ["collection"],
+  export_design: ["name"],
 });
 const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
 
@@ -177,6 +182,27 @@ const strings = (value: unknown, label: string): string[] => {
   if (!Array.isArray(value) || value.length === 0 || value.length > 500 || value.some((item) => typeof item !== "string")) throw new ToolError(`${label} must be a list of 1-500 node ids`);
   return value as string[];
 };
+
+// What export_design writes: a file per format, in the project's own exports folder.
+const EXPORT_FORMATS = Object.freeze({ html: "html", jsx: "jsx", tailwind: "jsx" });
+const EXPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
+const MAX_HISTORY = 200;
+
+/** A change as an agent reads it in history. */
+const historyLine = (entry: any) => ({
+  revision: entry.revision,
+  transactionId: entry.transactionId,
+  actor: entry.actor,
+  actorKind: entry.actorKind,
+  ...(typeof entry.actorName === "string" ? { actorName: entry.actorName } : {}),
+  intent: entry.intent,
+  tool: entry.tool,
+  affectedNodeIds: entry.affectedNodeIds.slice(0, 20),
+  ...(entry.undoOf ? { undoOf: entry.undoOf } : {}),
+  ...(entry.redoOf ? { redoOf: entry.redoOf } : {}),
+  ...(entry.revertOf ? { revertOf: entry.revertOf } : {}),
+  ...(entry.earlier ? { earlier: true } : {}),
+});
 
 const TOOLS: Tool[] = [
   {
@@ -330,6 +356,7 @@ const TOOLS: Tool[] = [
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
         "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
         "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
+        "project_history lists the latest changes and who made them; undo_change and redo_change undo and redo your own latest change. export_design writes a layer into the project's exports folder as html (a complete, script-free preview page), jsx or tailwind, and returns the file's path for the person.",
         "Every tool that changes the document takes dryRun: true, which checks the change and says what it would touch (wouldChange) without making it or asking the person anything (a created layer's id there is not the one a real call makes), and baseRevision, the revision you read (project_info gives it): a change to a document that has moved on since is refused, so read it again.",
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
@@ -861,6 +888,87 @@ const TOOLS: Tool[] = [
       };
     },
   },
+  {
+    name: "project_history",
+    title: "History",
+    description: "The project's latest changes, newest last: who made each (a person or an agent), with which tool, and its intent. Changes made before the project was opened are marked earlier.",
+    inputSchema: object({ limit: { type: "integer", minimum: 1, maximum: MAX_HISTORY } }),
+    run: ({ session }, args) => {
+      const limit = Number.isSafeInteger(args.limit) && args.limit >= 1 && args.limit <= MAX_HISTORY ? args.limit : 50;
+      const log = session.log;
+      return { revision: session.revision, total: log.length, changes: log.slice(-limit).map(historyLine) } as Json;
+    },
+  },
+  {
+    name: "undo_change",
+    title: "Undo",
+    description: "Undo your own latest change in this session (a person's or another agent's changes are never undone by you). redo_change puts it back.",
+    inputSchema: object({}),
+    run: ({ session, actor, dryRun }) => {
+      if (dryRun) {
+        if (!session.canUndo(actor)) throw new ToolError("there is nothing of yours to undo");
+        return { dryRun: true, wouldUndo: "your latest change in this session (project_history lists it)", revision: session.revision } as Json;
+      }
+      const event = session.undo(actor);
+      return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds, undoOf: event.undoOf ?? null } as Json;
+    },
+  },
+  {
+    name: "redo_change",
+    title: "Redo",
+    description: "Redo your own change you last undid with undo_change.",
+    inputSchema: object({}),
+    run: ({ session, actor, dryRun }) => {
+      if (dryRun) {
+        if (!session.canRedo(actor)) throw new ToolError("there is nothing of yours to redo");
+        return { dryRun: true, wouldRedo: "your change you last undid", revision: session.revision } as Json;
+      }
+      const event = session.redo(actor);
+      return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds, redoOf: event.redoOf ?? null } as Json;
+    },
+  },
+  {
+    name: "export_design",
+    title: "Export a design",
+    description: "Write a layer as code or a preview into the project's exports folder, and return the file's path: html is a complete, script-free page to open in any browser (a preview); jsx is a React component; tailwind is a React component styled with Tailwind classes. The design itself does not change.",
+    inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: Object.keys(EXPORT_FORMATS) }, name: { type: "string", maxLength: 64, description: "The file's name without extension: letters, digits, - and _. Defaults to the layer's component name." }, replace: { type: "boolean", description: "Replace a file of that name already in exports (it may have been edited since). Without it, an existing file is refused." } }, ["nodeId", "format"]),
+    run: ({ session, dryRun }, args) => {
+      if (args.replace !== undefined && typeof args.replace !== "boolean") throw new ToolError("replace is true or false");
+      if (!Object.hasOwn(EXPORT_FORMATS, args.format)) throw new ToolError(`format is one of ${Object.keys(EXPORT_FORMATS).join(", ")}`);
+      nodeOf(session, args.nodeId);
+      if (args.name !== undefined && (typeof args.name !== "string" || !EXPORT_NAME.test(args.name))) throw new ToolError("name is 1-64 letters, digits, - or _, starting with a letter or digit");
+      let text: string;
+      let componentName: string;
+      let layers: number;
+      if (args.format === "html") {
+        const page = exportHtml(session.document, args.nodeId);
+        ({ componentName, layers } = page);
+        text = page.html;
+      } else {
+        const code = args.format === "jsx" ? exportJsx(session.document, args.nodeId) : exportTailwind(session.document, args.nodeId);
+        ({ componentName, layers } = code);
+        // A component's stylesheet and tokens go with it, in the file, where an import would need them.
+        const css = [code.tokens, code.stylesheet].filter((part): part is string => typeof part === "string" && part !== "").join("\n");
+        text = css === "" ? code.code : `${code.code}\n\n/* Its stylesheet:\n${css.replace(/\*\//gu, "* /")}\n*/\n`;
+      }
+      const base = args.name ?? (EXPORT_NAME.test(componentName) ? componentName : "design");
+      const folder = join(session.root, "exports");
+      const path = join(folder, `${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}`);
+      // Case-insensitive, as a Windows or macOS disk is: another file of that name is the same file there.
+      const taken = existsSync(folder) && readdirSync(folder).some((entry) => entry.toLowerCase() === `${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}`.toLowerCase());
+      if (taken && args.replace !== true) throw new ToolError(`exports already has ${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}; pass replace: true to replace it, or give another name`);
+      if (dryRun) return { dryRun: true, wouldWrite: path, replaces: taken, format: args.format, componentName, layers, bytes: Buffer.byteLength(text) } as Json;
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+      // The folder must be the project's own: not a link or junction to somewhere else, which a
+      // project from a clone, an archive or a shared drive could carry.
+      const entry = lstatSync(folder);
+      if (entry.isSymbolicLink() || !entry.isDirectory() || realpathSync(folder) !== join(realpathSync(session.root), "exports")) {
+        throw new ToolError("the project's exports folder is a link to somewhere else, so nothing was written; make it an ordinary folder");
+      }
+      writeTrustedFile(path, text);
+      return { path, format: args.format, componentName, layers, bytes: Buffer.byteLength(text), replaced: taken } as Json;
+    },
+  },
 ];
 
 const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
@@ -1052,7 +1160,7 @@ export interface McpContext {
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
-const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers"]);
+const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history"]);
 
 const rpcError = (id: Json, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 const toolResult = (value: Json, isError = false) => ({
@@ -1157,6 +1265,7 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       session,
       actor,
       toolName,
+      dryRun: dryRun === true,
       selection: context.selection,
       references: context.references,
       edit: (operations, intent) => {

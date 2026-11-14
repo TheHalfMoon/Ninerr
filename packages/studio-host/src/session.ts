@@ -160,8 +160,12 @@ export class StudioSession {
   // layers. The store still validates and applies every transaction itself.
   #base: { document: any; past: never[]; future: never[] } | null = null;
 
-  private constructor(name: string, store: ProjectStore, owner: StudioActor, now: () => string, legacyMigratedFrom: number | null = null) {
+  /** The project's folder, inside the projects folder. */
+  readonly root: string;
+
+  private constructor(name: string, root: string, store: ProjectStore, owner: StudioActor, now: () => string, legacyMigratedFrom: number | null = null) {
     this.name = name;
+    this.root = root;
     this.owner = owner;
     this.recovery = legacyMigratedFrom === null ? store.recovery : Object.freeze({ ...store.recovery, migratedFrom: legacyMigratedFrom, legacyProject: true as const });
     this.#store = store;
@@ -216,7 +220,7 @@ export class StudioSession {
       // original directory is left unchanged next to the new one (persistence, N0-G2).
       const legacy = projectLayout(root) === "legacy" ? migrateLegacy(root, name, input.owner.actorId, at) : null;
       const store = openProject(root, { owner: input.owner.actorId, at, ...(input.breakStaleLock ? { breakStaleLock: input.breakStaleLock } : {}) });
-      return new StudioSession(name, store, input.owner, input.now, legacy?.migratedFrom ?? null);
+      return new StudioSession(name, root, store, input.owner, input.now, legacy?.migratedFrom ?? null);
     } catch (error) {
       throw asOpenError(error, name);
     }

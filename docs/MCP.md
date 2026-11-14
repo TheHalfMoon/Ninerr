@@ -21,6 +21,7 @@ Ninerr runs an MCP server so that an agent can read and edit the open design doc
 - **Lifecycle tools,** which belong to the engine: `list_projects`, `create_project`, `open_project`, `save_project` and `close_project`. A project's name is its folder's name inside the projects folder, never a path. Opening holds the project's lock, as the editor does, so a project open in the editor or in another agent's engine is refused until it is released. Ending the client's session closes the project.
 - **Every document tool** below works the same as in the editor's server. It goes through the same single writer, authorization, revision checks, dry runs and history.
 - **Identity.** Only the client that started the process can speak to it, so no token is needed. The agent is `agent-local-<client>`, named from the client's `initialize`, and History shows it as "<client> (local agent)". It is granted read and document-write on the project it opens, and nothing else.
+- **History, undo and exports** (catalog tools, in the engine and in the editor's server alike): `project_history` lists the latest changes and who made them. `undo_change` and `redo_change` undo and redo the calling agent's own latest change, never anyone else's. `export_design` writes a layer into the project's own `exports/` folder as `html` (a complete page with the canvas's content policy and no scripts: a preview for any browser), `jsx` or `tailwind`, under a plain file name (letters, digits, `-`, `_`), and returns the path. The design does not change. A file of that name already there (in any case) is replaced only with `replace: true`, and nothing is written through an `exports` folder that is a link elsewhere. A dry run of `export_design`, `undo_change` or `redo_change` says what it would do and does nothing.
 - **Deleting** (`delete_layers`, `delete_token`) is put to the person through the client, with MCP elicitation, showing the same plain summary the editor shows and bound to the exact call. Only an answer that approves deletes. Declining, cancelling, an error or no answer deletes nothing. A client that cannot ask (it did not declare elicitation) is refused with an explanation, and a question left unanswered is declined. The engine cannot tell who answers in the client: an approval is only as trustworthy as the client's own prompt, so a client set to approve requests automatically, or an agent that is its own client, approves for the person. Use a client that shows the question to you.
 - **The agent's name** comes from the client's first `initialize`. Clients with the same name share one identity in History.
 - **Ending.** When the client goes away (its input closes, or the engine is stopped), anything waiting for the person is denied and the open project is closed, releasing its lock.
@@ -36,16 +37,16 @@ The server identifies itself as `ninerr` and tells the agent to call `guide` fir
 
 ## Tools
 
-`MCP_TOOL_NAMES` is the catalog: the 37 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
+`MCP_TOOL_NAMES` is the catalog: the 41 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
 
 | Class | Tools | Capability required |
 | --- | --- | --- |
-| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task`, `design_tokens`, `list_components`, `instance_layers`, `search_components`, `get_component` | `read` |
-| write | `create_frame`, `set_text`, `rename_layers`, `set_styles`, `set_attributes`, `set_layout`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance` | `document-write` |
+| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task`, `design_tokens`, `list_components`, `instance_layers`, `search_components`, `get_component`, `project_history` | `read` |
+| write | `create_frame`, `set_text`, `rename_layers`, `set_styles`, `set_attributes`, `set_layout`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance`, `undo_change`, `redo_change`, `export_design` | `document-write` |
 | consequential | `delete_layers`, `delete_token` | `document-write` plus a confirmation |
 | unknown | any other name | denied without consulting a policy |
 
-So the 16 read-only tools need only `read`.
+So the 17 read-only tools need only `read`.
 
 - **Reading.**
   - `guide`: how Ninerr documents, layers and edits work; the server asks the agent to call it first.
