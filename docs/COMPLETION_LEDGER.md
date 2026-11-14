@@ -80,8 +80,8 @@ Nothing is in review.
 | ID | What remains |
 | --- | --- |
 | P10-1 | Full qualification on the exact candidate: `npm run check` on three platforms, smoke, gate-13 budgets by the reference protocol (needs the reference machine), the P08-G4 criteria remeasured, and the seven-project dogfooding rerun. Schema v2 scale workloads are merged (#426). | The seven-project dogfooding passed on main `0723851` (`docs/evidence/P10_DOGFOODING_2026-11-13.md`) as evidence; the candidate needs its own run.
-| P10-2 | Desktop packages smoke-tested and journeyed on each platform for the candidate. No clean-machine install has been done; its protocol is in `docs/ACCEPTANCE.md`. |
-| P10-3 | Artifacts bound to the candidate. The Electron LGPL corresponding source is checked but not carried alongside the artifacts (route to be confirmed: see Blockers). |
+| P10-2 | **Historical Desktop gate, not a v0.1.0 headless release gate.** Desktop package journeys and clean-machine GUI acceptance remain founder-owned and unclaimed; the headless candidate instead requires an engine install and MCP lifecycle qualification on supported platforms (`docs/HEADLESS.md`). |
+| P10-3 | Bind the **engine** artifact, SBOM, notices and provenance to the exact headless candidate. No Electron binary is shipped in v0.1.0 under the recorded founder decision; revisit corresponding-source obligations if Desktop distribution resumes. |
 | P10-4 | Security, offline, crash recovery and migration (including v1 to v2) on the candidate. #349 is fixed (#456). |
 | P10-5 | Dispositioned by the founder on 2026-11-13: #79's remainder covered (aliases; drift built in #452), #78 superseded by ADR-0005. Both closed. |
 | P10-6 | Every open issue has a recorded disposition (`docs/evidence/P10_ISSUE_DISPOSITIONS_2026-11-13.md`); none is critical. #382, #94 and #351 are closed. Judged again on the exact candidate. |
@@ -140,7 +140,7 @@ The clean-machine desktop install and the editor's screen-reader pass (#376) are
 | --- | --- | --- |
 | Engineering (not Desktop/UI) | Non-UI correctness and security fixes, offline/egress and regression gates, provenance and SBOM validation, three-platform CI and release-artifact reproducibility, exact-head evidence | Automated evidence must pass on the final candidate; no source, UI, or security gate can be guessed or bypassed |
 | Founder (Desktop/UI) | Desktop product UX and UI changes; clean-machine installation; actual NVDA/JAWS/VoiceOver session; visual and interaction acceptance | Human evidence is recorded with the exact candidate; automated tests do not substitute for screen-reader testing |
-| Founder (legal and release) | Adopt lawful corresponding-source distribution method and valid contact details; ratify final candidate; approve tag and publishing | The written offer draft (#457) is **not** yet a legal commitment; no `v0.1.0` tag or public release until explicit final authorization |
+| Founder (legal and release) | Ratify the exact final headless-engine candidate and authorize any tag, npm publication or GitHub Release; reassess corresponding-source duties if a later release includes Electron | The 2026-11-14 decision excludes Electron binaries from v0.1.0 and closes #457 for this release only. No tag or publication without explicit final authorization; do not treat the earlier written-offer draft as adopted |
 
 ## Next engineering actions
 
