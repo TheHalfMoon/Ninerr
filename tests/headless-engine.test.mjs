@@ -5,7 +5,9 @@ import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync, readFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { PassThrough } from "node:stream";
 import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
+import { runHeadless } from "../packages/studio-host/src/index.ts";
 
 // The headless engine (docs/HEADLESS.md): the real `ninerr mcp` process on stdio, driven as an
 // agent's client drives it. No editor, browser or desktop app runs.
@@ -27,7 +29,8 @@ function engine(projects, { elicitation = false, onAsk } = {}) {
     const message = JSON.parse(line);
     if (message.method === "elicitation/create") {
       asked.push(message.params);
-      const answer = onAsk?.(message.params) ?? { action: "decline" };
+      const answer = onAsk === undefined ? { action: "decline" } : onAsk(message.params);
+      if (answer === null) return;
       child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: answer })}\n`);
       return;
     }
@@ -47,7 +50,7 @@ function engine(projects, { elicitation = false, onAsk } = {}) {
     rpc,
     call,
     stderr: () => stderr,
-    initialize: () => rpc("initialize", { protocolVersion: "2025-06-18", capabilities: elicitation ? { elicitation: {} } : {}, clientInfo: { name: "Test Agent", version: "1" } }),
+    initialize: (name = "Test Agent") => rpc("initialize", { protocolVersion: "2025-06-18", capabilities: elicitation ? { elicitation: {} } : {}, clientInfo: { name, version: "1" } }),
     async stop() {
       child.stdin.end();
       return exited;
@@ -192,3 +195,70 @@ test("stale revisions are refused, and a damaged project is refused rather than 
   assert.equal((await agent.call("list_projects")).structuredContent.open, null, "nothing is open");
   await agent.stop();
 }));
+
+test("a client that goes away while a delete waits for the person leaves nothing deleted and the project released", () => withProjects(async (projects) => {
+  const agent = engine(projects, { elicitation: true, onAsk: () => null });
+  await agent.initialize();
+  await agent.call("create_project", { name: "p" });
+  const frame = (await agent.call("create_frame", { name: "Keep", width: 10, height: 10 })).structuredContent.nodeId;
+  void agent.call("delete_layers", { nodeIds: [frame] });
+  for (let tries = 0; tries < 200 && agent.asked.length === 0; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(agent.asked.length, 1, "the person is being asked");
+  assert.equal(await agent.stop(), 0, "the engine ends cleanly");
+  assert.ok(!existsSync(join(projects, "p", PROJECT_FILES.directory, "lock")), "the project's lock is released");
+  const next = engine(projects);
+  await next.initialize();
+  await next.call("open_project", { name: "p" });
+  assert.equal((await next.call("layer_details", { nodeId: frame })).isError, undefined, "nothing was deleted");
+  await next.stop();
+}));
+
+test("reopening the open project works, and a second initialize cannot change who the agent is", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize("First Client");
+  await agent.call("create_project", { name: "p" });
+  assert.equal((await agent.call("open_project", { name: "p" })).isError, undefined, "the open project reopens");
+  await agent.initialize("Other Client");
+  const made = await agent.call("create_frame", { name: "A", width: 10, height: 10 });
+  assert.equal(made.isError, undefined, "still the first identity, still granted");
+  await agent.stop();
+}));
+
+test("a question the person never answers is no approval, and asking again asks again", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-headless-")));
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const asked = [];
+  const answers = new Map();
+  createInterface({ input: output }).on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === "elicitation/create") asked.push(message);
+    else answers.get(message.id)?.(message);
+  });
+  let next = 1;
+  const call = (name, args = {}) => new Promise((resolve) => {
+    const id = next++;
+    answers.set(id, (message) => resolve(message.result));
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } })}\n`);
+  });
+  const running = runHeadless({ projectsRoot: root, input, output, confirmationWaitMs: 1500 });
+  try {
+    await new Promise((resolve) => {
+      answers.set(0, resolve);
+      input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "Silent", version: "1" } } })}\n`);
+    });
+    await call("create_project", { name: "p" });
+    const frame = (await call("create_frame", { name: "Keep", width: 10, height: 10 })).structuredContent.nodeId;
+    const first = await call("delete_layers", { nodeIds: [frame] });
+    assert.equal(first.isError, true);
+    assert.match(first.content[0].text, /declined/u, "no answer is no approval");
+    const second = await call("delete_layers", { nodeIds: [frame] });
+    assert.equal(second.isError, true);
+    assert.equal(asked.length, 2, "a retry asks the person again");
+    assert.equal((await call("layer_details", { nodeId: frame })).isError, undefined, "still there");
+  } finally {
+    input.end();
+    await running;
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
