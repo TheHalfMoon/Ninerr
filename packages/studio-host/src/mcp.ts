@@ -1043,6 +1043,12 @@ export interface McpContext {
    * not looked at (#260).
    */
   lastRead: Map<string, string>;
+  /**
+   * Why the person cannot be asked to approve a consequential call here, or null when they can.
+   * The headless engine says so when its client cannot ask (no MCP elicitation): the call is then
+   * refused, never approved without the person.
+   */
+  confirmationUnavailable?: () => string | null;
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
@@ -1210,6 +1216,8 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
   const key = { agentId: actor.actorId, toolName, documentId: session.documentId, argumentsSha256, subjectSha256 };
   const approvedAt = context.confirmations.takeApproval(key);
   if (approvedAt !== null) return { documentId: session.documentId, toolName, argumentsSha256, actorId: actor.ownerActorId!, confirmedAt: approvedAt };
+  const unavailable = context.confirmationUnavailable?.() ?? null;
+  if (unavailable !== null) return unavailable;
   const ids = Array.isArray((args as any)?.nodeIds) ? [...new Set((args as any).nodeIds.filter((id: unknown) => typeof id === "string"))] as string[] : [];
   const document = session.document as any;
   // What the person is shown: each layer's name or text and its kind, and how many layers
