@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
@@ -62,6 +62,8 @@ interface ToolContext {
   selection: () => string[];
   references: ReferenceCatalog;
   edit: (operations: unknown[], intent: string) => Json;
+  /** The call is a dry run: a tool that does not change the document through `edit` must not act. */
+  dryRun: boolean;
 }
 
 /** Tool arguments are the schema's and nothing else: no directory, URL, tenant or token gets through. */
@@ -914,7 +916,11 @@ const TOOLS: Tool[] = [
     title: "Undo",
     description: "Undo your own latest change in this session (a person's or another agent's changes are never undone by you). redo_change puts it back.",
     inputSchema: object({}),
-    run: ({ session, actor }) => {
+    run: ({ session, actor, dryRun }) => {
+      if (dryRun) {
+        if (!session.canUndo(actor)) throw new ToolError("there is nothing of yours to undo");
+        return { dryRun: true, wouldUndo: "your latest change in this session (project_history lists it)", revision: session.revision } as Json;
+      }
       const event = session.undo(actor);
       return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds, undoOf: event.undoOf ?? null } as Json;
     },
@@ -924,7 +930,11 @@ const TOOLS: Tool[] = [
     title: "Redo",
     description: "Redo your own change you last undid with undo_change.",
     inputSchema: object({}),
-    run: ({ session, actor }) => {
+    run: ({ session, actor, dryRun }) => {
+      if (dryRun) {
+        if (!session.canRedo(actor)) throw new ToolError("there is nothing of yours to redo");
+        return { dryRun: true, wouldRedo: "your change you last undid", revision: session.revision } as Json;
+      }
       const event = session.redo(actor);
       return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds, redoOf: event.redoOf ?? null } as Json;
     },
@@ -933,8 +943,9 @@ const TOOLS: Tool[] = [
     name: "export_design",
     title: "Export a design",
     description: "Write a layer as code or a preview into the project's exports folder, and return the file's path: html is a complete, script-free page to open in any browser (a preview); jsx is a React component; tailwind is a React component styled with Tailwind classes. The design itself does not change.",
-    inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: Object.keys(EXPORT_FORMATS) }, name: { type: "string", maxLength: 64, description: "The file's name without extension: letters, digits, - and _. Defaults to the layer's component name." } }, ["nodeId", "format"]),
-    run: ({ session }, args) => {
+    inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: Object.keys(EXPORT_FORMATS) }, name: { type: "string", maxLength: 64, description: "The file's name without extension: letters, digits, - and _. Defaults to the layer's component name." }, replace: { type: "boolean", description: "Replace a file of that name already in exports (it may have been edited since). Without it, an existing file is refused." } }, ["nodeId", "format"]),
+    run: ({ session, dryRun }, args) => {
+      if (args.replace !== undefined && typeof args.replace !== "boolean") throw new ToolError("replace is true or false");
       if (!Object.hasOwn(EXPORT_FORMATS, args.format)) throw new ToolError(`format is one of ${Object.keys(EXPORT_FORMATS).join(", ")}`);
       nodeOf(session, args.nodeId);
       if (args.name !== undefined && (typeof args.name !== "string" || !EXPORT_NAME.test(args.name))) throw new ToolError("name is 1-64 letters, digits, - or _, starting with a letter or digit");
@@ -954,10 +965,20 @@ const TOOLS: Tool[] = [
       }
       const base = args.name ?? (EXPORT_NAME.test(componentName) ? componentName : "design");
       const folder = join(session.root, "exports");
-      mkdirSync(folder, { recursive: true, mode: 0o700 });
       const path = join(folder, `${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}`);
+      // Case-insensitive, as a Windows or macOS disk is: another file of that name is the same file there.
+      const taken = existsSync(folder) && readdirSync(folder).some((entry) => entry.toLowerCase() === `${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}`.toLowerCase());
+      if (taken && args.replace !== true) throw new ToolError(`exports already has ${base}.${EXPORT_FORMATS[args.format as keyof typeof EXPORT_FORMATS]}; pass replace: true to replace it, or give another name`);
+      if (dryRun) return { dryRun: true, wouldWrite: path, replaces: taken, format: args.format, componentName, layers, bytes: Buffer.byteLength(text) } as Json;
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+      // The folder must be the project's own: not a link or junction to somewhere else, which a
+      // project from a clone, an archive or a shared drive could carry.
+      const entry = lstatSync(folder);
+      if (entry.isSymbolicLink() || !entry.isDirectory() || realpathSync(folder) !== join(realpathSync(session.root), "exports")) {
+        throw new ToolError("the project's exports folder is a link to somewhere else, so nothing was written; make it an ordinary folder");
+      }
       writeTrustedFile(path, text);
-      return { path, format: args.format, componentName, layers, bytes: Buffer.byteLength(text) } as Json;
+      return { path, format: args.format, componentName, layers, bytes: Buffer.byteLength(text), replaced: taken } as Json;
     },
   },
 ];
@@ -1256,6 +1277,7 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       session,
       actor,
       toolName,
+      dryRun: dryRun === true,
       selection: context.selection,
       references: context.references,
       edit: (operations, intent) => {

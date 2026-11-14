@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -333,6 +333,77 @@ test("a project left open with no call is closed after the idle time, releasing 
     assert.ok(!existsSync(lock), "idle: closed and released");
     assert.match((await call("create_frame", { name: "A", width: 10, height: 10 })).content[0].text, /No project is open/u, "the next call is told to open it");
     assert.equal((await call("open_project", { name: "p" })).isError, undefined, "and it opens again");
+  } finally {
+    input.end();
+    await running;
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  }
+});
+
+test("a dry run of undo, redo or export changes nothing; an export never replaces a file unasked, nor goes through a link", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize();
+  await agent.call("create_project", { name: "p" });
+  const frame = (await agent.call("create_frame", { name: "Hero", width: 10, height: 10 })).structuredContent.nodeId;
+  const dryUndo = (await agent.call("undo_change", { dryRun: true })).structuredContent;
+  assert.equal(dryUndo.dryRun, true);
+  assert.equal((await agent.call("project_history")).structuredContent.revision, 1, "a dry undo undoes nothing");
+  assert.equal((await agent.call("redo_change", { dryRun: true })).isError, true, "nothing to redo");
+  const exports = join(projects, "p", "exports");
+  const dryExport = (await agent.call("export_design", { nodeId: frame, format: "html", name: "hero", dryRun: true })).structuredContent;
+  assert.equal(dryExport.wouldWrite, join(exports, "hero.html"));
+  assert.ok(!existsSync(exports), "a dry export writes nothing");
+
+  assert.equal((await agent.call("export_design", { nodeId: frame, format: "html", name: "hero" })).isError, undefined);
+  writeFileSync(join(exports, "hero.html"), "edited by the person");
+  const again = await agent.call("export_design", { nodeId: frame, format: "html", name: "HERO" });
+  assert.match(text(again), /already has HERO\.html; pass replace: true/u, "the same name, in any case, is refused");
+  assert.equal(readFileSync(join(exports, "hero.html"), "utf8"), "edited by the person", "and the person's file is untouched");
+  assert.equal((await agent.call("export_design", { nodeId: frame, format: "html", name: "hero", replace: true })).structuredContent.replaced, true);
+  assert.match(readFileSync(join(exports, "hero.html"), "utf8"), /^<!doctype html>/u);
+
+  // A project whose exports folder is a link (from a clone, an archive or a shared drive): nothing is written through it.
+  const outside = mkdtempSync(join(tmpdir(), "ninerr-outside-"));
+  try {
+    rmSync(exports, { recursive: true, force: true });
+    symlinkSync(outside, exports, process.platform === "win32" ? "junction" : "dir");
+    const linked = await agent.call("export_design", { nodeId: frame, format: "jsx", name: "escaped" });
+    assert.match(text(linked), /link to somewhere else/u);
+    assert.deepEqual(readdirSync(outside), [], "nothing was written outside the project");
+  } finally {
+    rmSync(exports, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+  await agent.stop();
+}));
+
+test("an idle project waiting on the person stays open until the question ends, then is closed", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-headless-")));
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const answers = new Map();
+  createInterface({ input: output }).on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === undefined) answers.get(message.id)?.(message);
+  });
+  let next = 1;
+  const rpc = (method, params) => new Promise((resolve) => {
+    const id = next++;
+    answers.set(id, (message) => resolve(message.result));
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+  });
+  const running = runHeadless({ projectsRoot: root, input, output, idleCloseMs: 300, confirmationWaitMs: 2500 });
+  try {
+    await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "Slow", version: "1" } });
+    await rpc("tools/call", { name: "create_project", arguments: { name: "p" } });
+    const frame = (await rpc("tools/call", { name: "create_frame", arguments: { name: "A", width: 10, height: 10 } })).structuredContent.nodeId;
+    const lock = join(root, "p", PROJECT_FILES.directory, "lock");
+    const asked = rpc("tools/call", { name: "delete_layers", arguments: { nodeIds: [frame] } });
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    assert.ok(existsSync(lock), "still open while the person is asked");
+    assert.match((await asked).content[0].text, /declined/u, "unanswered: declined");
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    assert.ok(!existsSync(lock), "then idle: closed and released");
   } finally {
     input.end();
     await running;

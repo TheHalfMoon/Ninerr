@@ -203,7 +203,10 @@ export class HeadlessEngine {
     if (this.#idle !== null) clearTimeout(this.#idle);
     this.#idle = setTimeout(() => {
       this.#idle = null;
-      if (this.#session !== null && this.#confirmations.pending().length === 0) this.#closeSession();
+      if (this.#session === null) return;
+      // Something waits for the person: look again later, rather than leave the project open for good.
+      if (this.#confirmations.pending().length > 0) this.#keepOpen();
+      else this.#closeSession();
     }, this.#idleMs);
     this.#idle.unref?.();
   }

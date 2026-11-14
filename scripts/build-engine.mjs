@@ -13,7 +13,7 @@
 // Nothing is published.
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -115,7 +115,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const args = process.argv.slice(2);
   const at = args.indexOf("--out");
   const out = resolve(at >= 0 && args[at + 1] ? args[at + 1] : join(ROOT, "dist", "engine"));
-  if (relative(ROOT, out) === "" || !relative(ROOT, out).startsWith("dist") && existsSync(out) && readdirSync(out).length > 0) fail(`${out} must be under dist/ or an empty folder`);
+  // The build replaces its output folder: only a folder inside dist/ (never dist/ itself), or a new or empty one elsewhere.
+  const inside = relative(ROOT, out);
+  const underDist = inside.startsWith(`dist${sep}`) && inside.length > `dist${sep}`.length;
+  if (!underDist && existsSync(out) && readdirSync(out).length > 0) fail(`${out} must be a folder inside dist/, or a new or empty one`);
   const engine = buildEngine(out);
   process.stdout.write(`built ${engine.name} ${engine.version} in ${out}: ${engine.bundleDependencies.length} bundled packages, ${Object.keys(engine.dependencies).length - engine.bundleDependencies.length} third-party\n`);
   if (args.includes("--pack")) {
