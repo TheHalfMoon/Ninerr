@@ -100,7 +100,8 @@ async function doctor() {
         const pending = answers.get(message.id);
         if (pending) {
           answers.delete(message.id);
-          pending.resolve(message);
+          if (message.error) pending.reject(new Error(`MCP error ${message.error.code ?? "unknown"}: ${message.error.message ?? "unspecified"}`));
+          else pending.resolve(message);
         }
       }
     });
