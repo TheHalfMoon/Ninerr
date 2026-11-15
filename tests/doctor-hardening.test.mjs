@@ -50,3 +50,14 @@ test("doctor exits with a failed check if MCP initialize never answers", { timeo
     assert.match(result.stdout, /MCP initialize timed out/);
   });
 });
+
+test("doctor rejects a JSON-RPC error response instead of accepting it as a successful initialization", () => {
+  withFakeEngine('output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: "engine refused initialize" } }) + "\\n"); await new Promise((resolve) => input.on("close", resolve));', (cli, root) => {
+    const result = spawnSync(process.execPath, [cli, "doctor", "--projects", root], {
+      encoding: "utf8", timeout: 5_000,
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /FAIL the engine creates a project/);
+    assert.match(result.stdout, /MCP error -32603: engine refused initialize/);
+  });
+});
