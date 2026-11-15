@@ -52,7 +52,7 @@ test("doctor exits with a failed check if MCP initialize never answers", { timeo
 });
 
 test("doctor rejects a JSON-RPC error response instead of accepting it as a successful initialization", () => {
-  withFakeEngine('output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: "engine refused initialize" } }) + "\\n"); await new Promise((resolve) => input.on("close", resolve));', (cli, root) => {
+  withFakeEngine('await new Promise((resolve) => input.once("data", resolve)); output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: "engine refused initialize" } }) + "\\n"); await new Promise((resolve) => input.on("close", resolve));', (cli, root) => {
     const result = spawnSync(process.execPath, [cli, "doctor", "--projects", root], {
       encoding: "utf8", timeout: 5_000,
     });
