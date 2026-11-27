@@ -73,10 +73,6 @@ Each row's PR has its full check results, its fresh-context review findings and 
 
 - Doctor MCP reliability hardening was merged in #478 (merge commit `45e9a0788ec48bd3a518aac143a753253e388792`): initialize/tool-call waits are bounded to 10 seconds, malformed JSON fails diagnostics cleanly, and scratch streams close on failure. Windows regression tests: `tests/doctor-hardening.test.mjs` (2 pass) and `tests/engine-package.test.mjs` (2 pass). All exact-head checks on `5c6a73c` passed before the normal merge; post-merge CI [43608783284](https://github.com/TheHalfMoon/Ninerr/actions/runs/43608783284) and Desktop CI [43608783333](https://github.com/TheHalfMoon/Ninerr/actions/runs/43608783333) both passed on the merge commit. These automated results do not constitute final candidate qualification or human Desktop/UI acceptance.
 
-## Pending non-UI release hardening (not yet merged)
-
-- PR pending: `ninerr doctor` now rejects an MCP JSON-RPC `error` response during its engine self-test, instead of treating an error frame as an acceptable reply. `tests/doctor-hardening.test.mjs` adds a negative initialization-response case. This change is **not complete** until the branch's exact-head checks and independent review pass, followed by normal merge and post-merge verification. It is not final candidate qualification or human Desktop/UI acceptance.
-
 ## Remaining requirements
 
 **Release-candidate criteria (P10, `docs/MASTER_PLAN.md`).** The latest P10 run was on `079631a`, a test candidate and not the release candidate: every check it could run passed, with no defect (`docs/evidence/P10_CANDIDATE_TEST_079631a_2026-11-14.md`). Evidence for one commit is not evidence for another, so the v0.1.0 candidate is qualified again on its own commit.

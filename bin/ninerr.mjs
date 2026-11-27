@@ -83,6 +83,7 @@ async function doctor() {
   const output = new PassThrough();
   const answers = new Map();
   const lines = createInterface({ input: output });
+  let running = null;
   try {
     const RPC_TIMEOUT_MS = 10_000;
     let protocolError;
@@ -100,12 +101,20 @@ async function doctor() {
         const pending = answers.get(message.id);
         if (pending) {
           answers.delete(message.id);
-          if (message.error) pending.reject(new Error(`MCP error ${message.error.code ?? "unknown"}: ${message.error.message ?? "unspecified"}`));
-          else pending.resolve(message);
+          if (Object.hasOwn(message, "error") && message.error !== undefined) {
+            const detail = message.error !== null && typeof message.error === "object"
+              ? `MCP error ${message.error.code ?? "unknown"}: ${message.error.message ?? "unspecified"}`
+              : `MCP error: ${JSON.stringify(message.error)}`;
+            pending.reject(new Error(detail));
+          } else if (!Object.hasOwn(message, "result") || message.result === null || typeof message.result !== "object") {
+            pending.reject(new Error("MCP response missing result"));
+          } else {
+            pending.resolve(message);
+          }
         }
       }
     });
-    const running = runHeadless({ projectsRoot: scratch, input, output });
+    running = runHeadless({ projectsRoot: scratch, input, output });
     // A rejected engine task must be observed even if its RPC never answered.
     running.catch(() => {});
     // A broken engine must never leave doctor waiting indefinitely for a reply.
@@ -127,14 +136,17 @@ async function doctor() {
     const preview = await rpc(4, "tools/call", { name: "export_design", arguments: { nodeId: frame.result?.structuredContent?.nodeId ?? "", format: "html" } });
     input.end();
     await running;
-    const ok = created.result?.isError === undefined && frame.result?.isError === undefined && preview.result?.isError === undefined;
-    say(ok, "the engine creates a project, designs in it and writes a preview", ok ? undefined : `The engine answered: ${JSON.stringify([created, frame, preview].map((answer) => answer.result?.content?.[0]?.text ?? answer.error)).slice(0, 400)}`);
+    const ok = created.result.isError !== true && frame.result.isError !== true && preview.result.isError !== true && typeof preview.result.structuredContent?.path === "string";
+    say(ok, "the engine creates a project, designs in it and writes a preview", ok ? undefined : `The engine answered: ${JSON.stringify([created, frame, preview].map((answer) => answer.result?.content?.[0]?.text)).slice(0, 400)}`);
   } catch (error) {
     say(false, "the engine creates a project, designs in it and writes a preview", error instanceof Error ? error.message : String(error));
   } finally {
     input.destroy();
     lines.close();
     output.destroy();
+    if (running !== null) {
+      await Promise.race([running.catch(() => {}), new Promise((resolve) => setTimeout(resolve, 1_000).unref?.())]);
+    }
     rmSync(scratch, { recursive: true, force: true, maxRetries: 5 });
   }
   // How an MCP client starts the engine: this Node.js and this command, by absolute paths.
