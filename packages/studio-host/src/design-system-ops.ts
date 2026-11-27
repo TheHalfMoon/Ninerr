@@ -1,7 +1,7 @@
 // Ninerr Systems: deterministic Design System Health Audit, High-Contrast mode generation,
 // atomic reversible theme migration, responsive breakpoint CSS compilation, and 3-way
 // registry component update planning (Issue #405).
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { threeWayMerge } from "@ninerr/code-ir";
 import { contrastRatio, parseOpaqueColor } from "@ninerr/design-assurance";
 import {
@@ -15,7 +15,12 @@ import {
   tokenReferences,
   tokenUses,
 } from "@ninerr/document-model";
+import { planElement } from "@ninerr/renderer";
 import { StudioError } from "./errors.ts";
+
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 export interface DesignSystemAuditFinding {
   ruleId: string;
@@ -35,9 +40,11 @@ const CONTRAST_PAIRS: ReadonlyArray<{ fg: string; bg: string; label: string }> =
 function resolveValueInMode(tokensByName: Map<string, any>, tokenName: string, modeId: string, defaultModes: Map<string, string>, depth = 0): string | null {
   if (depth > 8) return null;
   const token = tokensByName.get(tokenName);
-  if (!token) return null;
+  if (!token || !token.values || typeof token.values !== "object") return null;
   const fallbackMode = defaultModes.get(token.collection);
-  const raw = token.values?.[modeId] ?? (fallbackMode ? token.values?.[fallbackMode] : undefined) ?? Object.values(token.values ?? {})[0];
+  const raw = Object.hasOwn(token.values, modeId)
+    ? token.values[modeId]
+    : (fallbackMode && Object.hasOwn(token.values, fallbackMode) ? token.values[fallbackMode] : Object.values(token.values)[0]);
   if (typeof raw !== "string") return null;
   const match = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/iu.exec(raw.trim());
   if (match) return resolveValueInMode(tokensByName, match[1], modeId, defaultModes, depth + 1);
@@ -112,12 +119,13 @@ export function auditDesignSystem(document: any) {
     if (names.length < 2) continue;
     duplicateGroups += 1;
     const [, type, val] = key.split("|");
+    const sortedNames = [...names].sort(compareCodeUnits);
     findings.push({
       ruleId: "system:duplicate-token-value",
       kind: "heuristic-observation",
       severity: "warning",
-      message: `${names.length} ${type} tokens (${names.join(", ")}) duplicate the same literal value ${val}.`,
-      evidence: { tokens: names.sort(), type, value: val },
+      message: `${sortedNames.length} ${type} tokens (${sortedNames.join(", ")}) duplicate the same literal value ${val}.`,
+      evidence: { tokens: sortedNames, type, value: val },
     });
   }
 
@@ -125,7 +133,9 @@ export function auditDesignSystem(document: any) {
   for (const token of tokens) {
     const col = collectionsById.get(token.collection);
     if (!col) continue;
-    const missing = (col.modes ?? []).map((m: any) => m.id).filter((id: string) => token.values?.[id] === undefined);
+    const missing = (col.modes ?? [])
+      .map((m: any) => m.id)
+      .filter((id: string) => !Object.hasOwn(token.values ?? {}, id));
     if (missing.length > 0) {
       findings.push({
         ruleId: "system:missing-mode-value",
@@ -183,7 +193,7 @@ export function auditDesignSystem(document: any) {
       const bgRgb = parseOpaqueColor(bgVal);
       if (!fgRgb || !bgRgb) continue;
       const ratio = contrastRatio(fgRgb, bgRgb);
-      const minRatio = modeId.includes("high-contrast") ? 7.0 : 4.5;
+      const minRatio = /high[-_]?contrast/iu.test(modeId) ? 7.0 : 4.5;
       if (ratio < minRatio) {
         contrastFailures += 1;
         findings.push({
@@ -196,6 +206,11 @@ export function auditDesignSystem(document: any) {
       }
     }
   }
+
+  const SEVERITY_ORDER: Record<string, number> = { error: 0, warning: 1, info: 2 };
+  findings.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9)
+    || compareCodeUnits(a.ruleId, b.ruleId)
+    || compareCodeUnits(a.message, b.message));
 
   const modeCount = collections.reduce((sum, col) => sum + (col.modes?.length ?? 0), 0);
   return {
@@ -250,7 +265,9 @@ export function generateHighContrastMode(document: any, { collectionId }: { coll
   collection.modes.push({ id: "high-contrast", name: "High Contrast" });
   for (const token of props.tokens) {
     if (token.collection !== collection.id) continue;
-    const baseVal = token.values[collection.defaultMode] ?? Object.values(token.values)[0];
+    const baseVal = Object.hasOwn(token.values, collection.defaultMode)
+      ? token.values[collection.defaultMode]
+      : Object.values(token.values)[0];
     if (Object.hasOwn(HIGH_CONTRAST_OVERRIDES, token.name)) {
       token.values["high-contrast"] = HIGH_CONTRAST_OVERRIDES[token.name];
     } else if (token.type === "color" && /text|foreground|fg/iu.test(token.name)) {
@@ -259,7 +276,7 @@ export function generateHighContrastMode(document: any, { collectionId }: { coll
       token.values["high-contrast"] = "#ffffff";
     } else if (token.type === "color" && /border/iu.test(token.name)) {
       token.values["high-contrast"] = "#111827";
-    } else {
+    } else if (typeof baseVal === "string") {
       token.values["high-contrast"] = baseVal;
     }
   }
@@ -305,16 +322,40 @@ export function planThemeMigration(document: any, {
   if (!collection) throw new StudioError(404, "unknown-collection", `collection ${String(collectionId)} was not found`);
 
   const hasAnyDark = incoming.some((t) => typeof t?.dark === "string" && t.dark.trim() !== "");
-  let darkMode = collection.modes.find((m: any) => m.id === "dark" || m.name.toLowerCase() === "dark");
-  if (hasAnyDark && !darkMode) {
-    darkMode = { id: "dark", name: "Dark" };
-    collection.modes.push(darkMode);
-    for (const existing of props.tokens) {
-      if (existing.collection === collection.id && existing.values[darkMode.id] === undefined) {
-        existing.values[darkMode.id] = existing.values[collection.defaultMode];
+  const ensureModes = (col: any, needDark: boolean) => {
+    let lightMode = col.modes.find((m: any) => m.id === "light" || m.name.toLowerCase() === "light");
+    let darkMode = col.modes.find((m: any) => m.id !== lightMode?.id && (m.id === "dark" || m.name.toLowerCase() === "dark"));
+    const defaultModeObj = col.modes.find((m: any) => m.id === col.defaultMode) ?? col.modes[0];
+    if (!lightMode && !darkMode) {
+      lightMode = defaultModeObj;
+    } else if (!lightMode && darkMode) {
+      if (defaultModeObj.id !== darkMode.id) {
+        lightMode = defaultModeObj;
+      } else {
+        const id = col.modes.some((m: any) => m.id === "light") ? `light-${randomUUID().slice(0, 6)}` : "light";
+        lightMode = { id, name: "Light" };
+        col.modes.push(lightMode);
+        for (const existingTok of props.tokens) {
+          if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, lightMode.id) && Object.hasOwn(existingTok.values, col.defaultMode)) {
+            existingTok.values[lightMode.id] = existingTok.values[col.defaultMode];
+          }
+        }
       }
     }
-  }
+    if (needDark && !darkMode) {
+      const id = col.modes.some((m: any) => m.id === "dark") ? `dark-${randomUUID().slice(0, 6)}` : "dark";
+      darkMode = { id, name: "Dark" };
+      col.modes.push(darkMode);
+      for (const existingTok of props.tokens) {
+        if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, darkMode.id) && Object.hasOwn(existingTok.values, col.defaultMode)) {
+          existingTok.values[darkMode.id] = existingTok.values[col.defaultMode];
+        }
+      }
+    }
+    return { lightModeId: lightMode.id, darkModeId: darkMode?.id ?? null };
+  };
+
+  if (hasAnyDark) ensureModes(collection, true);
 
   const updated: Array<{ name: string; before: Record<string, string>; after: Record<string, string> }> = [];
   const added: Array<{ name: string; type: string; values: Record<string, string> }> = [];
@@ -333,10 +374,14 @@ export function planThemeMigration(document: any, {
     }
     const existing = props.tokens.find((t: any) => t.name === entry.name);
     if (existing) {
+      const targetCol = props.collections.find((c: any) => c.id === existing.collection) ?? collection;
+      const { lightModeId, darkModeId } = ensureModes(targetCol, entry.dark !== undefined);
       const before = { ...existing.values };
-      const after = { ...existing.values, [collection.defaultMode]: primaryVal };
-      if (darkMode && entry.dark !== undefined) after[darkMode.id] = entry.dark;
-      if (JSON.stringify(before) === JSON.stringify(after)) {
+      const after = { ...existing.values, [lightModeId]: primaryVal };
+      if (darkModeId && entry.dark !== undefined) after[darkModeId] = entry.dark;
+      const typeChanged = typeof entry.type === "string" && TOKEN_TYPES.includes(entry.type as any) && existing.type !== entry.type;
+      if (typeChanged) existing.type = entry.type;
+      if (!typeChanged && JSON.stringify(before) === JSON.stringify(after)) {
         unchanged.push(entry.name);
       } else {
         existing.values = after;
@@ -346,9 +391,14 @@ export function planThemeMigration(document: any, {
         updated.push({ name: entry.name, before, after });
       }
     } else {
+      const { lightModeId, darkModeId } = ensureModes(collection, entry.dark !== undefined || hasAnyDark);
       const tokenType = typeof entry.type === "string" && TOKEN_TYPES.includes(entry.type as any) ? entry.type : "color";
-      const values: Record<string, string> = { [collection.defaultMode]: primaryVal };
-      if (darkMode) values[darkMode.id] = entry.dark ?? primaryVal;
+      const values: Record<string, string> = {};
+      for (const mode of collection.modes) {
+        if (darkModeId && mode.id === darkModeId) values[mode.id] = entry.dark ?? primaryVal;
+        else if (mode.id === lightModeId) values[mode.id] = primaryVal;
+        else values[mode.id] = primaryVal;
+      }
       props.tokens.push({
         name: entry.name,
         type: tokenType,
@@ -389,6 +439,32 @@ export function planThemeMigration(document: any, {
  * Compile responsive breakpoint rules into safe @media or @container CSS rules for a node's
  * props.stylesheet (NEVER emitted into compileTokens()).
  */
+function balancedCssBraces(css: string): boolean {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < css.length; i += 1) {
+    const ch = css[i];
+    if (quote !== null) {
+      if (ch === "\\" && i + 1 < css.length) { i += 1; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "/" && css[i + 1] === "*") {
+      const end = css.indexOf("*/", i + 2);
+      if (end < 0) return false;
+      i = end + 1;
+      continue;
+    }
+    if (ch === "\"" || ch === "'") { quote = ch; continue; }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+  }
+  return quote === null && depth === 0;
+}
+
 export function compileBreakpointsStylesheet(
   breakpoints: Array<{ id: string; minWidth?: number; maxWidth?: number }>,
   rulesByBreakpoint: Record<string, string>,
@@ -400,13 +476,33 @@ export function compileBreakpointsStylesheet(
   for (const [id, cssBody] of Object.entries(rulesByBreakpoint)) {
     const bp = byId.get(id);
     if (!bp || typeof cssBody !== "string" || cssBody.trim() === "") continue;
+    if (!balancedCssBraces(cssBody)) {
+      throw new StudioError(422, "unsafe-breakpoint-css", `breakpoint ${id} CSS has unbalanced braces or quotes`);
+    }
     const conds: string[] = [];
-    if (bp.minWidth !== undefined) conds.push(`(min-width: ${bp.minWidth}px)`);
-    if (bp.maxWidth !== undefined) conds.push(`(max-width: ${bp.maxWidth}px)`);
+    if (bp.minWidth !== undefined) {
+      if (!Number.isInteger(bp.minWidth) || bp.minWidth < 1 || bp.minWidth > 16384) {
+        throw new StudioError(400, "invalid-breakpoint", `breakpoint ${id} has invalid minWidth`);
+      }
+      conds.push(`(min-width: ${bp.minWidth}px)`);
+    }
+    if (bp.maxWidth !== undefined) {
+      if (!Number.isInteger(bp.maxWidth) || bp.maxWidth < 1 || bp.maxWidth > 16384) {
+        throw new StudioError(400, "invalid-breakpoint", `breakpoint ${id} has invalid maxWidth`);
+      }
+      conds.push(`(max-width: ${bp.maxWidth}px)`);
+    }
     if (conds.length === 0) continue;
     blocks.push(`${keyword} ${conds.join(" and ")} {\n${cssBody.trim()}\n}`);
   }
-  return blocks.join("\n\n");
+  const compiled = blocks.join("\n\n");
+  if (compiled !== "") {
+    const planned = planElement({ id: "breakpoint-check", type: "frame", props: { stylesheet: compiled } });
+    if (planned.stylesheet === null || planned.dropped > 0) {
+      throw new StudioError(422, "unsafe-breakpoint-css", "breakpoint CSS was rejected by the renderer sanitizer");
+    }
+  }
+  return compiled;
 }
 
 /**

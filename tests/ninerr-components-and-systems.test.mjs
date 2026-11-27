@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   NINERR_COMPONENTS,
   NINERR_COMPONENT_CATEGORIES,
@@ -16,7 +19,9 @@ import {
 import { applyTransaction as historyApply } from "@ninerr/history";
 import { auditAccessibility } from "@ninerr/design-assurance";
 import { planElement } from "@ninerr/renderer";
+import { createProject } from "@ninerr/persistence";
 import { exportHtml, exportJsx, exportTailwind } from "../packages/studio-host/src/code.ts";
+import { runCliCommand } from "../packages/studio-host/src/cli.ts";
 import {
   auditDesignSystem,
   compileBreakpointsStylesheet,
@@ -160,4 +165,96 @@ test("Design System Health Audit, High-Contrast Mode, Atomic Theme Migration, Br
   assert.equal(conflicted.status, "conflict");
   assert.equal(conflicted.mergedContent, null);
   assert.ok(conflicted.conflicts.length > 0);
+});
+
+test("breakpoint sanitizer, dark-as-default migration safety, and Ninerr components/tokens CLI subcommands", async () => {
+  // Breakpoint CSS refuses unbalanced brace breakout and unsafe url().
+  assert.throws(() => compileBreakpointsStylesheet(
+    [{ id: "mobile", maxWidth: 639 }],
+    { mobile: "} body { color: red; } @media (min-width: 1px) {" },
+  ));
+  assert.throws(() => compileBreakpointsStylesheet(
+    [{ id: "mobile", maxWidth: 639 }],
+    { mobile: ".card { background-image: url(https://evil.example/a.png); }" },
+  ));
+
+  // Dark-as-default & missing-defaultMode token safety in planThemeMigration.
+  const darkDoc = createDocument({ id: "doc-dark-mig", name: "Dark Mig" });
+  darkDoc.schemaVersion = 2;
+  darkDoc.rootIds.push("ds-dark");
+  darkDoc.nodes["ds-dark"] = {
+    id: "ds-dark",
+    type: "design-system",
+    parentId: null,
+    children: [],
+    metadata: {},
+    props: {
+      name: "Dark DS",
+      collections: [{ id: "base", name: "Base", modes: [{ id: "dark", name: "Dark" }, { id: "alt", name: "Alt" }], defaultMode: "dark" }],
+      tokens: [{ name: "--only-alt", type: "color", collection: "base", values: { alt: "#123456" } }],
+    },
+  };
+  const migratedDark = planThemeMigration(darkDoc, {
+    themeName: "Dual",
+    tokens: [{ name: "--bg-surface", light: "#ffffff", dark: "#0f172a" }],
+  });
+  const nextDarkDoc = commit(darkDoc, migratedDark.operations);
+  const ds = nextDarkDoc.nodes["ds-dark"];
+  assert.ok(ds.props.collections[0].modes.some((m) => m.id === "light"), "light mode created for dark-as-default migration");
+  assert.deepEqual(ds.props.tokens.find((t) => t.name === "--only-alt").values, { alt: "#123456" });
+  const bg = ds.props.tokens.find((t) => t.name === "--bg-surface");
+  assert.equal(bg.values.light, "#ffffff");
+  assert.equal(bg.values.dark, "#0f172a");
+
+  // CLI: ninerr components list/show & ninerr tokens audit/merge.
+  let out = "";
+  const listCode = await runCliCommand("components", ["list", "--category", "forms", "--json"], {
+    version: "0.1.0",
+    stdout: (s) => { out += s; },
+    stderr: () => {},
+  });
+  assert.equal(listCode, 0);
+  const listed = JSON.parse(out);
+  assert.equal(listed.components.length, 7);
+
+  let showOut = "";
+  const showCode = await runCliCommand("components", ["show", "ninerr:pricing-tiers", "--json"], {
+    version: "0.1.0",
+    stdout: (s) => { showOut += s; },
+    stderr: () => {},
+  });
+  assert.equal(showCode, 0);
+  assert.equal(JSON.parse(showOut).id, "pricing-tiers");
+
+  const scratch = mkdtempSync(join(tmpdir(), "ninerr-cli-phase3-"));
+  try {
+    const projectDir = join(scratch, "proj");
+    mkdirSync(projectDir, { recursive: true });
+    createProject(projectDir, { projectId: "proj", document: nextDarkDoc, createdAt: "2026-11-27T00:00:00.000Z" });
+    let auditOut = "";
+    const auditCode = await runCliCommand("tokens", ["audit", projectDir, "--json"], {
+      version: "0.1.0",
+      stdout: (s) => { auditOut += s; },
+      stderr: () => {},
+    });
+    assert.equal(auditCode, 0);
+    assert.equal(JSON.parse(auditOut).hasDesignSystem, true);
+
+    const baseF = join(scratch, "base.tsx");
+    const localF = join(scratch, "local.tsx");
+    const upF = join(scratch, "up.tsx");
+    writeFileSync(baseF, "const a = 1;\nconst b = 2;\n");
+    writeFileSync(localF, "const a = 10;\nconst b = 2;\n");
+    writeFileSync(upF, "const a = 1;\nconst b = 20;\n");
+    let mergeOut = "";
+    const mergeCode = await runCliCommand("tokens", ["merge", "--base", baseF, "--local", localF, "--upstream", upF, "--json"], {
+      version: "0.1.0",
+      stdout: (s) => { mergeOut += s; },
+      stderr: () => {},
+    });
+    assert.equal(mergeCode, 0);
+    assert.equal(JSON.parse(mergeOut).status, "merged");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });

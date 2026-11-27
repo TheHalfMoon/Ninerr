@@ -59,6 +59,10 @@ const CLASSES = Object.freeze({
   design_intelligence: "read",
   set_design_brief: "write",
   apply_motion: "write",
+  // Native editable Ninerr components and design-system operations (audit, theme migration, high-contrast, breakpoints).
+  instantiate_component: "write",
+  audit_design_system: "read",
+  migrate_theme: "write",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

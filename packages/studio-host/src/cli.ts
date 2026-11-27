@@ -1,6 +1,12 @@
 // Extended Ninerr CLI subcommands dispatched from bin/ninerr.mjs (`ninerr design ...`,
-// `ninerr motion ...`, and subsequent product commands). Pure local execution, zero network.
+// `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
+// Pure local execution, zero network.
 import { lstatSync, readFileSync } from "node:fs";
+import {
+  NINERR_COMPONENT_CATEGORIES,
+  getNinerrComponent,
+  searchNinerrComponents,
+} from "@ninerr/component-sources";
 import {
   ARCHETYPE_IDS,
   DOMAIN_ARCHETYPES,
@@ -17,6 +23,8 @@ import {
   planDesignDirections,
   renderSkillMarkdown,
 } from "@ninerr/design-intelligence";
+import { openProject } from "@ninerr/persistence";
+import { auditDesignSystem, planRegistryItemUpdate } from "./design-system-ops.ts";
 
 export interface CliRunOptions {
   version: string;
@@ -24,9 +32,20 @@ export interface CliRunOptions {
   stderr?: (text: string) => void;
 }
 
-export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion"]);
+export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens"]);
 const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient"]);
-const MAX_CLI_CSS_BYTES = 2 * 1024 * 1024;
+const MAX_CLI_FILE_BYTES = 2 * 1024 * 1024;
+
+function readBoundedTextFile(filePath: string, commandLabel: string): string {
+  const stat = lstatSync(filePath);
+  if (!stat.isFile()) {
+    throw new Error(`${commandLabel}: ${JSON.stringify(filePath)} is not a regular file`);
+  }
+  if (stat.size > MAX_CLI_FILE_BYTES) {
+    throw new Error(`${commandLabel}: ${JSON.stringify(filePath)} exceeds ${MAX_CLI_FILE_BYTES} bytes`);
+  }
+  return readFileSync(filePath, "utf8");
+}
 
 function parseFlags(argv: string[]) {
   const positionals: string[] = [];
@@ -86,6 +105,24 @@ function motionHelp(): string {
     "  ninerr motion react <presetId> [--json]",
     "  ninerr motion lint <file.css> [--allow-ambient] [--json]",
     "  ninerr motion frequency --trigger <name> --preset <id> [--daily-uses <n>] [--json]",
+    "",
+  ].join("\n");
+}
+
+function componentsHelp(): string {
+  return [
+    "Ninerr Native Components CLI:",
+    "  ninerr components list [--category <category>] [--query <text>] [--json]",
+    "  ninerr components show <id> [--json]",
+    "",
+  ].join("\n");
+}
+
+function tokensHelp(): string {
+  return [
+    "Ninerr Design Systems CLI:",
+    "  ninerr tokens audit <project-folder> [--json]",
+    "  ninerr tokens merge --base <file> --local <file> --upstream <file> [--json]",
     "",
   ].join("\n");
 }
@@ -242,16 +279,7 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           err("ninerr motion lint: specify a CSS file path\n");
           return 2;
         }
-        const stat = lstatSync(filePath);
-        if (!stat.isFile()) {
-          err(`ninerr motion lint: ${JSON.stringify(filePath)} is not a regular file\n`);
-          return 2;
-        }
-        if (stat.size > MAX_CLI_CSS_BYTES) {
-          err(`ninerr motion lint: ${JSON.stringify(filePath)} exceeds ${MAX_CLI_CSS_BYTES} bytes\n`);
-          return 2;
-        }
-        const cssText = readFileSync(filePath, "utf8");
+        const cssText = readBoundedTextFile(filePath, "ninerr motion lint");
         const findings = lintMotionCss(cssText, { allowAmbient: flags["allow-ambient"] === true });
         if (asJson) {
           out(`${JSON.stringify({ file: filePath, findings }, null, 2)}\n`);
@@ -271,6 +299,100 @@ export async function runCliCommand(command: string, args: string[], options: Cl
         return result.allowed ? 0 : 1;
       }
       err(`ninerr motion: unknown subcommand ${JSON.stringify(sub)}\n${motionHelp()}`);
+      return 2;
+    }
+
+    if (command === "components") {
+      const sub = positionals[0];
+      if (!sub || sub === "help" || flags.help === true) {
+        out(componentsHelp());
+        return 0;
+      }
+      if (sub === "list") {
+        const category = typeof flags.category === "string" ? flags.category : "";
+        const query = typeof flags.query === "string" ? flags.query : "";
+        const components = searchNinerrComponents({ category, query });
+        if (asJson) {
+          out(`${JSON.stringify({ categories: NINERR_COMPONENT_CATEGORIES, components }, null, 2)}\n`);
+        } else {
+          for (const c of components) out(`${c.id.padEnd(22)} ${c.category.padEnd(22)} ${c.summary}\n`);
+        }
+        return 0;
+      }
+      if (sub === "show") {
+        const raw = positionals[1];
+        if (!raw) {
+          err("ninerr components show: specify a component id\n");
+          return 2;
+        }
+        const id = raw.startsWith("ninerr:") ? raw.slice(7) : raw;
+        const component = getNinerrComponent(id);
+        if (!component) {
+          err(`ninerr components show: unknown component ${JSON.stringify(raw)}\n`);
+          return 2;
+        }
+        if (asJson) {
+          out(`${JSON.stringify(component, null, 2)}\n`);
+        } else {
+          out(`${component.name} (ninerr:${component.id}) [${component.category}]\n${component.summary}\nVariants: ${component.variants.join(", ")}\n`);
+        }
+        return 0;
+      }
+      err(`ninerr components: unknown subcommand ${JSON.stringify(sub)}\n${componentsHelp()}`);
+      return 2;
+    }
+
+    if (command === "tokens") {
+      const sub = positionals[0];
+      if (!sub || sub === "help" || flags.help === true) {
+        out(tokensHelp());
+        return 0;
+      }
+      if (sub === "audit") {
+        const projectDir = positionals[1];
+        if (!projectDir) {
+          err("ninerr tokens audit: specify a Ninerr project folder\n");
+          return 2;
+        }
+        const opened = openProject(projectDir, { owner: "ninerr-cli-audit", at: new Date().toISOString() });
+        let report;
+        try {
+          report = auditDesignSystem(opened.document);
+        } finally {
+          opened.close();
+        }
+        if (asJson) {
+          out(`${JSON.stringify(report, null, 2)}\n`);
+        } else {
+          out(`Tokens: ${report.tokenCount} across ${report.collectionCount} collection(s), ${report.modeCount} mode(s)\n`);
+          out(`Errors: ${report.summary.errors}, Warnings: ${report.summary.warnings}, Info: ${report.summary.info}\n`);
+          for (const f of report.findings) out(`${f.severity.toUpperCase().padEnd(8)} ${f.ruleId}: ${f.message}\n`);
+        }
+        return report.summary.errors > 0 ? 1 : 0;
+      }
+      if (sub === "merge") {
+        const basePath = typeof flags.base === "string" ? flags.base : "";
+        const localPath = typeof flags.local === "string" ? flags.local : "";
+        const upstreamPath = typeof flags.upstream === "string" ? flags.upstream : "";
+        if (!basePath || !localPath || !upstreamPath) {
+          err("ninerr tokens merge: specify --base, --local, and --upstream file paths\n");
+          return 2;
+        }
+        const plan = planRegistryItemUpdate({
+          baseContent: readBoundedTextFile(basePath, "ninerr tokens merge"),
+          localContent: readBoundedTextFile(localPath, "ninerr tokens merge"),
+          upstreamContent: readBoundedTextFile(upstreamPath, "ninerr tokens merge"),
+        });
+        if (asJson) {
+          out(`${JSON.stringify(plan, null, 2)}\n`);
+        } else if (plan.status === "conflict") {
+          out(`CONFLICT (${plan.conflicts.length} conflict region(s))\n`);
+        } else {
+          out(`${plan.mergedContent}`);
+        }
+        return plan.status === "conflict" ? 1 : 0;
+      }
+      err(`ninerr tokens: unknown subcommand ${JSON.stringify(sub)}\n${tokensHelp()}`);
       return 2;
     }
 

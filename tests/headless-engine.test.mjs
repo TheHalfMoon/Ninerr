@@ -764,3 +764,114 @@ test("an agent plans aesthetic directions, sets a product brief with seeded toke
   await agent.call("close_project");
   await agent.stop();
 }));
+
+test("an agent searches and instantiates native Ninerr components, audits the design system, and migrates themes/high-contrast/breakpoints via MCP", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize("SystemAgent");
+  await agent.call("create_project", { name: "systems" });
+
+  // 1. Discover native Ninerr components through search_components & get_component.
+  const search = (await agent.call("search_components", { source: "ninerr", query: "pricing" })).structuredContent;
+  assert.ok(search.components.some((c) => c.id === "ninerr:pricing-tiers" && c.instantiable === true));
+  const detail = (await agent.call("get_component", { id: "ninerr:pricing-tiers" })).structuredContent;
+  assert.equal(detail.component.id, "ninerr:pricing-tiers");
+  assert.equal(detail.provenance.license.spdx, "Apache-2.0");
+  assert.equal((await agent.call("get_component", { id: "ninerr:does-not-exist" })).isError, true);
+
+  // 2. Create page frame and instantiate native components both detached and as definition+instance; BiDi refused.
+  const pageId = (await agent.call("create_frame", { name: "Landing", width: 1280, height: 900 })).structuredContent.nodeId;
+  assert.equal((await agent.call("instantiate_component", { componentId: "hero-section", parentId: pageId, headline: "Bad\u202eHeadline" })).isError, true, "BiDi option rejected");
+
+  const hero = await agent.call("instantiate_component", {
+    componentId: "ninerr:hero-section",
+    parentId: pageId,
+    headline: "Build reliable interfaces",
+  });
+  assert.equal(hero.isError, undefined, text(hero));
+  assert.equal(hero.structuredContent.definitionId, null);
+  assert.ok(hero.structuredContent.nodeCount >= 4);
+
+  const pricingDef = await agent.call("instantiate_component", {
+    componentId: "pricing-tiers",
+    parentId: pageId,
+    asDefinition: true,
+  });
+  assert.equal(pricingDef.isError, undefined, text(pricingDef));
+  assert.ok(typeof pricingDef.structuredContent.definitionId === "string");
+  assert.ok(typeof pricingDef.structuredContent.instanceId === "string");
+
+  // 3. Migrate theme with dryRun preview first, then commit, generate AAA high-contrast mode, and set breakpoints with scoped CSS.
+  const dryMigrate = await agent.call("migrate_theme", {
+    dryRun: true,
+    action: "migrate",
+    themeName: "Clinical Calm",
+    tokens: [
+      { name: "--bg-canvas", light: "#f8fafc", dark: "#0b1120" },
+      { name: "--bg-surface", light: "#ffffff", dark: "#111827" },
+      { name: "--text-primary", light: "#0f172a", dark: "#f8fafc" },
+      { name: "--text-muted", light: "#475569", dark: "#cbd5e1" },
+      { name: "--accent-primary", light: "#0f766e", dark: "#2dd4bf" },
+      { name: "--accent-contrast", light: "#ffffff", dark: "#042f2e" },
+    ],
+  });
+  assert.equal(dryMigrate.isError, undefined, text(dryMigrate));
+  assert.equal(dryMigrate.structuredContent.dryRun, true);
+  assert.equal((await agent.call("audit_design_system")).structuredContent.hasDesignSystem, false, "dryRun changed nothing");
+
+  const migrated = await agent.call("migrate_theme", {
+    action: "migrate",
+    themeName: "Clinical Calm",
+    tokens: [
+      { name: "--bg-canvas", light: "#f8fafc", dark: "#0b1120" },
+      { name: "--bg-surface", light: "#ffffff", dark: "#111827" },
+      { name: "--text-primary", light: "#0f172a", dark: "#f8fafc" },
+      { name: "--text-muted", light: "#475569", dark: "#cbd5e1" },
+      { name: "--accent-primary", light: "#0f766e", dark: "#2dd4bf" },
+      { name: "--accent-contrast", light: "#ffffff", dark: "#042f2e" },
+    ],
+  });
+  assert.equal(migrated.isError, undefined, text(migrated));
+  assert.equal(migrated.structuredContent.added.length, 6);
+
+  const hc = await agent.call("migrate_theme", { action: "generate_high_contrast" });
+  assert.equal(hc.isError, undefined, text(hc));
+  assert.equal(hc.structuredContent.modeId, "high-contrast");
+
+  // Breakpoints refuse brace escape, accept clean scoped @media CSS.
+  const badBp = await agent.call("migrate_theme", {
+    action: "set_breakpoints",
+    breakpoints: [{ id: "mobile", name: "Mobile", maxWidth: 639 }],
+    nodeId: pageId,
+    rulesByBreakpoint: { mobile: "} body { color: red; } @media (min-width: 1px) {" },
+  });
+  assert.equal(badBp.isError, true, "brace breakout refused in breakpoint CSS");
+
+  const bps = await agent.call("migrate_theme", {
+    action: "set_breakpoints",
+    breakpoints: [
+      { id: "mobile", name: "Mobile", maxWidth: 639 },
+      { id: "desktop", name: "Desktop", minWidth: 1024 },
+    ],
+    nodeId: pageId,
+    rulesByBreakpoint: { mobile: ":scope { padding: 16px; }", desktop: ":scope { padding: 48px; }" },
+  });
+  assert.equal(bps.isError, undefined, text(bps));
+  assert.match(bps.structuredContent.compiledCss, /@media \(max-width: 639px\)/u);
+
+  const audit = (await agent.call("audit_design_system")).structuredContent;
+  assert.equal(audit.hasDesignSystem, true);
+  assert.equal(audit.hasHighContrastMode, true);
+  assert.equal(audit.hasBreakpoints, true);
+  assert.equal(audit.summary.contrastFailures, 0);
+
+  // Export instantiated native component page as HTML & TSX.
+  const htmlOut = (await agent.call("export_design", { nodeId: pageId, format: "html", name: "landing" })).structuredContent;
+  const htmlText = readFileSync(htmlOut.path, "utf8");
+  assert.match(htmlText, /Build reliable interfaces/u);
+  assert.match(htmlText, /@media \(max-width: 639px\)/u);
+  const tsxOut = (await agent.call("export_design", { nodeId: pageId, format: "tsx", name: "LandingPage" })).structuredContent;
+  assert.match(readFileSync(tsxOut.path, "utf8"), /import type React from "react";/u);
+
+  await agent.call("close_project");
+  await agent.stop();
+}));
