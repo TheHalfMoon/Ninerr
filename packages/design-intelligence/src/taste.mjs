@@ -12,6 +12,15 @@ import { lintMotionCss } from "./motion.mjs";
 const INTERACTIVE_TAGS = new Set(["button", "a", "input", "select", "textarea"]);
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 const SEVERITY_ORDER = Object.freeze({ error: 0, warning: 1, info: 2 });
+const SPACING_PROPS = Object.freeze([
+  "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
+  "paddingTop", "paddingBottom", "paddingLeft", "paddingRight",
+  "gap", "row-gap", "column-gap", "rowGap", "columnGap",
+]);
+
+function compareCodeUnits(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 function parsePx(value) {
   if (typeof value !== "string") return null;
@@ -44,13 +53,80 @@ function resolveTokenMap(system) {
   return map;
 }
 
+/** Resolve var(--name, fallback) calls inside a CSS value, handling nested fallbacks and shorthands. */
 function resolveCssValue(raw, tokenMap, depth = 0) {
-  if (typeof raw !== "string" || depth > 8) return raw;
-  const match = /^var\(\s*(--[A-Za-z0-9_-]+)(?:\s*,\s*([^)]+))?\s*\)$/iu.exec(raw.trim());
-  if (!match) return raw;
-  const next = tokenMap.get(match[1]);
-  if (next !== undefined) return resolveCssValue(next, tokenMap, depth + 1);
-  return match[2] ? match[2].trim() : raw;
+  if (typeof raw !== "string" || depth > 8 || !raw.includes("var(")) return raw;
+  let out = "";
+  let i = 0;
+  while (i < raw.length) {
+    const idx = raw.indexOf("var(", i);
+    if (idx === -1) {
+      out += raw.slice(i);
+      break;
+    }
+    out += raw.slice(i, idx);
+    let depthParen = 1;
+    let end = idx + 4;
+    while (end < raw.length && depthParen > 0) {
+      if (raw[end] === "(") depthParen += 1;
+      else if (raw[end] === ")") depthParen -= 1;
+      end += 1;
+    }
+    if (depthParen !== 0) {
+      out += raw.slice(idx);
+      break;
+    }
+    const inner = raw.slice(idx + 4, end - 1);
+    const comma = inner.indexOf(",");
+    const name = (comma === -1 ? inner : inner.slice(0, comma)).trim();
+    const fallback = comma === -1 ? "" : inner.slice(comma + 1).trim();
+    const mapped = tokenMap.get(name);
+    if (mapped !== undefined) {
+      out += resolveCssValue(mapped, tokenMap, depth + 1);
+    } else if (fallback !== "") {
+      out += resolveCssValue(fallback, tokenMap, depth + 1);
+    } else {
+      out += raw.slice(idx, end);
+    }
+    i = end;
+  }
+  return out;
+}
+
+/** Extract max blur radius (px) and max alpha from a CSS box-shadow value. */
+function inspectBoxShadow(rawShadow) {
+  if (typeof rawShadow !== "string" || rawShadow.trim() === "" || rawShadow.trim().toLowerCase() === "none") {
+    return { maxBlurPx: 0, maxAlpha: 0 };
+  }
+  let maxBlurPx = 0;
+  let maxAlpha = 0;
+  // Split shadow layers on top-level commas (outside parentheses).
+  const layers = [];
+  let start = 0;
+  let depth = 0;
+  for (let i = 0; i <= rawShadow.length; i += 1) {
+    const ch = rawShadow[i];
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+    else if ((ch === "," && depth === 0) || i === rawShadow.length) {
+      layers.push(rawShadow.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  for (const layer of layers) {
+    // Remove color functions before reading offset-x, offset-y, blur-radius, spread-radius lengths.
+    for (const alphaMatch of layer.matchAll(/rgba?\([^)]*?(?:,|\/)\s*(0?\.\d+|1(?:\.0+)?|0)\s*\)/giu)) {
+      const a = Number(alphaMatch[1]);
+      if (Number.isFinite(a) && a > maxAlpha) maxAlpha = a;
+    }
+    const withoutColors = layer.replace(/[a-z]+\([^)]*\)|#[0-9a-f]{3,8}\b|\binset\b/giu, " ");
+    const lengths = [...withoutColors.matchAll(/(?:^|\s)(-?\d+(?:\.\d+)?)(px|rem)?(?=\s|$)/giu)]
+      .map((m) => (m[2]?.toLowerCase() === "rem" ? Number(m[1]) * 16 : Number(m[1])));
+    if (lengths.length >= 3 && Number.isFinite(lengths[2]) && lengths[2] > maxBlurPx) {
+      maxBlurPx = lengths[2];
+    }
+  }
+  return { maxBlurPx, maxAlpha };
 }
 
 function isCardLike(style) {
@@ -78,12 +154,15 @@ function isBadgeLike(node, style) {
 function walkSubtree(document, rootId, visit) {
   const roots = rootId ? [rootId] : document.rootIds;
   const stack = [];
+  const visited = new Set();
   for (let i = roots.length - 1; i >= 0; i -= 1) {
     const id = roots[i];
     if (Object.hasOwn(document.nodes, id)) stack.push({ id, parentId: null, cardDepth: 0 });
   }
   while (stack.length > 0) {
     const item = stack.pop();
+    if (visited.has(item.id) || !Object.hasOwn(document.nodes, item.id)) continue;
+    visited.add(item.id);
     const node = document.nodes[item.id];
     if (!node || node.type === "design-system") continue;
     const style = node.props?.style ?? {};
@@ -190,16 +269,19 @@ export function evaluateTaste(document, { brief: briefOverride = null, rootId = 
     const bgRgb = parseOpaqueColor(rawBg);
     if (fgRgb && bgRgb) {
       const ratio = contrastRatio(fgRgb, bgRgb);
-      const isLarge = fontSizePx !== null && fontSizePx >= 24;
+      const rawWeight = resolveCssValue(style.fontWeight ?? style["font-weight"], tokenMap);
+      const weightNum = rawWeight === "bold" ? 700 : Number(rawWeight ?? 400);
+      const isLarge = fontSizePx !== null && (fontSizePx >= 24 || (fontSizePx >= 18.66 && weightNum >= 700));
       const minRatio = isLarge ? 3.0 : 4.5;
       if (ratio < minRatio) {
+        const floored = Math.floor(ratio * 100) / 100;
         findings.push({
           ruleId: "taste:color-low-contrast",
           kind: "deterministic-defect",
           severity: "error",
           nodeId: node.id,
-          message: `Foreground ${rawColor} on background ${rawBg} achieves ${ratio.toFixed(2)}:1 contrast, below WCAG AA (${minRatio}:1).`,
-          evidence: { color: rawColor, background: rawBg, contrastRatio: Number(ratio.toFixed(2)), required: minRatio },
+          message: `Foreground ${rawColor} on background ${rawBg} achieves ${floored.toFixed(2)}:1 contrast, below WCAG AA (${minRatio}:1).`,
+          evidence: { color: rawColor, background: rawBg, contrastRatio: floored, required: minRatio },
           suggestion: "Adjust foreground or surface color tokens to reach at least 4.5:1 for normal text (3:1 for large display text).",
         });
       }
@@ -221,8 +303,8 @@ export function evaluateTaste(document, { brief: briefOverride = null, rootId = 
       }
     }
 
-    // 4px spacing grid check
-    for (const prop of ["padding", "paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "gap", "rowGap", "columnGap"]) {
+    // 4px spacing grid check (both kebab-case and camelCase CSS properties)
+    for (const prop of SPACING_PROPS) {
       const resolved = resolveCssValue(style[prop], tokenMap);
       if (typeof resolved !== "string") continue;
       for (const token of resolved.split(/\s+/u)) {
@@ -271,19 +353,17 @@ export function evaluateTaste(document, { brief: briefOverride = null, rootId = 
       });
     }
 
-    // Anti-slop: heavy harsh shadows
+    // Anti-slop: heavy harsh shadows (large blur >= 40px, or murky wide blur >= 24px with heavy opacity >= 0.35)
     if (typeof rawShadow === "string" && rawShadow.trim() !== "" && rawShadow !== "none") {
-      const heavyBlur = /\b(\d+)px\s+(?:\d+px\s+)?rgba?\([^)]*,\s*0?\.(\d+)\)/iu.exec(rawShadow);
-      const blurPx = heavyBlur ? Number(heavyBlur[1]) : 0;
-      const alpha = heavyBlur ? Number(`0.${heavyBlur[2]}`) : 0;
-      if (blurPx >= 40 || alpha >= 0.3) {
+      const { maxBlurPx, maxAlpha } = inspectBoxShadow(rawShadow);
+      if (maxBlurPx >= 40 || (maxBlurPx >= 32 && maxAlpha >= 0.4)) {
         findings.push({
           ruleId: "taste:anti-slop-heavy-shadow",
           kind: "heuristic-observation",
           severity: "warning",
           nodeId: node.id,
           message: `Heavy box-shadow (${rawShadow.slice(0, 80)}) creates murky elevation.`,
-          evidence: { boxShadow: rawShadow },
+          evidence: { boxShadow: rawShadow, blurPx: maxBlurPx, alpha: maxAlpha },
           suggestion: "Use crisp 1px borders paired with subtle low-opacity elevation (--shadow-sm or --shadow-md).",
         });
       }
@@ -397,15 +477,15 @@ export function evaluateTaste(document, { brief: briefOverride = null, rootId = 
   }
   if (headingSizes.h1.length > 0 && headingSizes.h2.length > 0) {
     const minH1 = Math.min(...headingSizes.h1.map((h) => h.px));
-    const maxH2 = Math.max(...headingSizes.h2.map((h) => h.px));
-    if (maxH2 >= minH1) {
+    const maxH2Entry = headingSizes.h2.reduce((best, cur) => (cur.px > best.px ? cur : best), headingSizes.h2[0]);
+    if (maxH2Entry.px >= minH1) {
       findings.push({
         ruleId: "taste:inverted-heading-scale",
         kind: "deterministic-defect",
         severity: "warning",
-        nodeId: headingSizes.h2[0].nodeId,
-        message: `Section heading <h2> (${maxH2}px) is as large as or larger than <h1> (${minH1}px).`,
-        evidence: { minH1, maxH2 },
+        nodeId: maxH2Entry.nodeId,
+        message: `Section heading <h2> (${maxH2Entry.px}px) is as large as or larger than <h1> (${minH1}px).`,
+        evidence: { minH1, maxH2: maxH2Entry.px },
         suggestion: "Ensure visual type scale decreases monotonically from h1 -> h2 -> h3 -> body.",
       });
     }
@@ -466,7 +546,7 @@ export function evaluateTaste(document, { brief: briefOverride = null, rootId = 
   findings.sort((a, b) => {
     const sev = SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity];
     if (sev !== 0) return sev;
-    return a.ruleId.localeCompare(b.ruleId) || String(a.nodeId ?? "").localeCompare(String(b.nodeId ?? ""));
+    return compareCodeUnits(a.ruleId, b.ruleId) || compareCodeUnits(String(a.nodeId ?? ""), String(b.nodeId ?? ""));
   });
 
   const summary = {

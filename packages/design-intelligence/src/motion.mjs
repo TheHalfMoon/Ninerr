@@ -237,9 +237,12 @@ const HIGH_FREQUENCY_TRIGGERS = new Set([
  */
 export function evaluateMotionFrequency({ trigger, presetId, dailyUses = null }) {
   const normalizedTrigger = typeof trigger === "string" ? trigger.trim().toLowerCase() : "";
-  const preset = Object.hasOwn(MOTION_PRESETS, presetId) ? MOTION_PRESETS[presetId] : null;
+  if (typeof presetId !== "string" || !Object.hasOwn(MOTION_PRESETS, presetId)) {
+    throw new Error(`unknown motion preset: ${String(presetId).slice(0, 64)}`);
+  }
+  const preset = MOTION_PRESETS[presetId];
   const highFreq = HIGH_FREQUENCY_TRIGGERS.has(normalizedTrigger) || (typeof dailyUses === "number" && dailyUses >= 100);
-  if (highFreq && preset && preset.durationMs > 120 && preset.id !== "focus" && preset.id !== "press") {
+  if (highFreq && preset.durationMs > 120 && preset.id !== "focus" && preset.id !== "press") {
     return Object.freeze({
       allowed: false,
       severity: "warning",
@@ -255,39 +258,63 @@ export function evaluateMotionFrequency({ trigger, presetId, dailyUses = null })
   });
 }
 
+/** Strip CSS block comments preserving line structure so comments never trigger motion lint. */
+function stripCssComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//gu, " ");
+}
+
 /**
  * Deterministically lint CSS for animation performance, restraint, and reduced-motion compliance.
  */
 export function lintMotionCss(cssText, { nodeId = null, allowAmbient = false } = {}) {
   if (typeof cssText !== "string" || cssText.trim() === "") return [];
+  const code = stripCssComments(cssText);
   const findings = [];
-  const hasMotion = /\b(?:transition|transition-property|transition-duration|animation|animation-duration|@keyframes)\b/iu.test(cssText);
-  if (!hasMotion) return [];
 
-  for (const match of cssText.matchAll(/\btransition(?:-property)?\s*:\s*([^;{}]+)/giu)) {
+  const transitionDecls = [...code.matchAll(/(?<![\w-])transition(?:-property)?\s*:\s*([^;{}]+)/giu)];
+  const durationDecls = [...code.matchAll(/(?<![\w-])(?:transition|animation)(?:-duration)?\s*:\s*([^;{}]+)/giu)];
+  const animationDecls = [...code.matchAll(/(?<![\w-])animation(?:-name|-iteration-count)?\s*:\s*([^;{}]+)/giu)];
+  const hasKeyframes = /(?:^|[;{}\s])@keyframes\s+[A-Za-z0-9_-]+/iu.test(code);
+
+  const isActiveDecl = (raw) => {
+    const cleaned = raw.trim().toLowerCase();
+    return cleaned !== "" && cleaned !== "none" && cleaned !== "0s" && cleaned !== "0ms";
+  };
+  const hasActiveMotion = hasKeyframes
+    || transitionDecls.some((m) => isActiveDecl(m[1]))
+    || durationDecls.some((m) => isActiveDecl(m[1]))
+    || animationDecls.some((m) => isActiveDecl(m[1]));
+  if (!hasActiveMotion) return [];
+
+  for (const match of transitionDecls) {
     const raw = match[1].trim().toLowerCase();
+    if (!isActiveDecl(raw)) continue;
     for (const part of raw.split(",")) {
-      const prop = part.trim().split(/\s+/u)[0];
-      if (LAYOUT_THRASHING_PROPS.has(prop)) {
-        findings.push({
-          ruleId: "motion:gpu-composited-only",
-          kind: "deterministic-defect",
-          severity: prop === "all" ? "error" : "warning",
-          nodeId,
-          message: `Transition animates non-composited property "${prop}", risking layout thrash or jank.`,
-          evidence: { declaration: match[0].trim(), property: prop },
-          suggestion: "Animate compositor-only properties (transform, opacity, clip-path) instead of layout geometry or 'all'.",
-        });
+      const tokens = part.trim().split(/\s+/u);
+      for (const tok of tokens) {
+        if (LAYOUT_THRASHING_PROPS.has(tok)) {
+          findings.push({
+            ruleId: "motion:gpu-composited-only",
+            kind: "deterministic-defect",
+            severity: tok === "all" ? "error" : "warning",
+            nodeId,
+            message: `Transition animates non-composited property "${tok}", risking layout thrash or jank.`,
+            evidence: { declaration: match[0].trim(), property: tok },
+            suggestion: "Animate compositor-only properties (transform, opacity, clip-path) instead of layout geometry or 'all'.",
+          });
+          break;
+        }
       }
     }
   }
 
-  for (const match of cssText.matchAll(/\b(?:transition|animation)(?:-duration)?\s*:\s*([^;{}]+)/giu)) {
+  for (const match of durationDecls) {
     const raw = match[1];
-    const isSkeleton = /skeleton|pulse|spin/iu.test(raw);
-    for (const durMatch of raw.matchAll(/(\d+(?:\.\d+)?)(ms|s)\b/giu)) {
+    if (!isActiveDecl(raw)) continue;
+    const isSkeleton = /skeleton|pulse|spin|loading|skel/iu.test(raw);
+    for (const durMatch of raw.matchAll(/(?<![\w.])(\d+(?:\.\d+)?|\.\d+)(ms|s)\b/giu)) {
       const ms = durMatch[2].toLowerCase() === "s" ? Number(durMatch[1]) * 1000 : Number(durMatch[1]);
-      if (!isSkeleton && ms > 350) {
+      if (!isSkeleton && ms > 300) {
         findings.push({
           ruleId: "motion:duration-cap",
           kind: "heuristic-observation",
@@ -301,19 +328,24 @@ export function lintMotionCss(cssText, { nodeId = null, allowAmbient = false } =
     }
   }
 
-  if (!allowAmbient && /\banimation(?:-iteration-count)?\s*:[^;{}]*\binfinite\b/iu.test(cssText) && !/skeleton|loading|spinner/iu.test(cssText)) {
-    findings.push({
-      ruleId: "motion:ambient-infinite-loop",
-      kind: "heuristic-observation",
-      severity: "warning",
-      nodeId,
-      message: "Infinite CSS animation detected outside a loading or skeleton state.",
-      evidence: { infinite: true },
-      suggestion: "Remove ambient infinite motion unless the design brief explicitly opts in, and always stop it under prefers-reduced-motion.",
-    });
+  if (!allowAmbient) {
+    for (const match of code.matchAll(/(?<![\w-])animation(?:-iteration-count)?\s*:([^;{}]*\binfinite\b[^;{}]*)/giu)) {
+      const decl = match[1];
+      if (!/skeleton|loading|spinner|skel/iu.test(decl)) {
+        findings.push({
+          ruleId: "motion:ambient-infinite-loop",
+          kind: "heuristic-observation",
+          severity: "warning",
+          nodeId,
+          message: "Infinite CSS animation detected outside a loading or skeleton state.",
+          evidence: { declaration: match[0].trim(), infinite: true },
+          suggestion: "Remove ambient infinite motion unless the design brief explicitly opts in, and always stop it under prefers-reduced-motion.",
+        });
+      }
+    }
   }
 
-  if (!/@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)/iu.test(cssText)) {
+  if (!/@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)/iu.test(code)) {
     findings.push({
       ruleId: "motion:missing-reduced-motion",
       kind: "deterministic-defect",
@@ -328,27 +360,55 @@ export function lintMotionCss(cssText, { nodeId = null, allowAmbient = false } =
   return findings;
 }
 
-const SAFE_SELECTOR = /^[A-Za-z0-9_.\-#:\[\]="~\s>+*-]{1,120}$/u;
+const SAFE_SELECTOR = /^[A-Za-z0-9_.\-#:\[\]="~ >+*-]{1,120}$/u;
+const UNSAFE_SELECTOR_SCHEME = /(?:javascript|vbscript|behavior\s*:|-moz-binding)/iu;
+
+function validateMotionSelector(raw) {
+  if (typeof raw !== "string") throw new Error("selector must be a valid bounded CSS selector");
+  const clean = raw.trim();
+  if (clean === "" || !SAFE_SELECTOR.test(clean) || UNSAFE_SELECTOR_SCHEME.test(clean)) {
+    throw new Error("selector must be a valid bounded CSS selector using safe ASCII characters");
+  }
+  let inBracket = false;
+  let inQuote = false;
+  for (let i = 0; i < clean.length; i += 1) {
+    const ch = clean[i];
+    if (inQuote) {
+      if (ch === '"') inQuote = false;
+      continue;
+    }
+    if (ch === '"') {
+      if (!inBracket) throw new Error("selector quotes are only allowed inside attribute brackets [...]");
+      inQuote = true;
+    } else if (ch === "[") {
+      if (inBracket) throw new Error("selector cannot nest attribute brackets");
+      inBracket = true;
+    } else if (ch === "]") {
+      if (!inBracket) throw new Error("selector has an unmatched closing bracket");
+      inBracket = false;
+    }
+  }
+  if (inQuote || inBracket) throw new Error("selector has unclosed brackets or quotes");
+  return clean;
+}
 
 /**
  * Compile one or more named Ninerr motion presets into a safe scoped stylesheet block
  * with mandatory @media (prefers-reduced-motion: reduce) compliance.
  */
-export function compileMotionStylesheet({ presetIds, selector = ".ninerr-motion", reducedMotion = "respect" }) {
+export function compileMotionStylesheet({ presetIds, selector = ":scope", reducedMotion = "respect" }) {
   if (!Array.isArray(presetIds) || presetIds.length === 0) {
     throw new Error("presetIds must be a non-empty array of motion preset ids");
   }
-  if (typeof selector !== "string" || !SAFE_SELECTOR.test(selector.trim())) {
-    throw new Error("selector must be a valid bounded CSS selector");
-  }
-  const cleanSelector = selector.trim();
+  const cleanSelector = validateMotionSelector(selector);
+  const uniqueIds = [...new Set(presetIds)];
   const keyframes = new Map();
   const rules = [];
   const appliedPresets = [];
 
-  for (const id of presetIds) {
-    if (!Object.hasOwn(MOTION_PRESETS, id)) {
-      throw new Error(`unknown motion preset: ${id}`);
+  for (const id of uniqueIds) {
+    if (typeof id !== "string" || !Object.hasOwn(MOTION_PRESETS, id)) {
+      throw new Error(`unknown motion preset: ${String(id).slice(0, 64)}`);
     }
     const preset = MOTION_PRESETS[id];
     appliedPresets.push(preset);
@@ -359,49 +419,74 @@ export function compileMotionStylesheet({ presetIds, selector = ".ninerr-motion"
     rules.push(preset.css(cleanSelector));
   }
 
-  const reducedBlock = reducedMotion === "none"
-    ? ""
-    : [
+  let reducedBlock = "";
+  if (reducedMotion === "minimal") {
+    reducedBlock = [
+      "@media (prefers-reduced-motion: reduce) {",
+      `  ${cleanSelector}, ${cleanSelector} * {`,
+      "    animation-duration: 0.01ms !important;",
+      "    animation-iteration-count: 1 !important;",
+      "    transition-property: opacity !important;",
+      "    transition-duration: 80ms !important;",
+      "    transform: none !important;",
+      "  }",
+      "}",
+    ].join("\n");
+  } else if (reducedMotion !== "none") {
+    reducedBlock = [
       "@media (prefers-reduced-motion: reduce) {",
       `  ${cleanSelector}, ${cleanSelector} * {`,
       "    animation-duration: 0.01ms !important;",
       "    animation-iteration-count: 1 !important;",
       "    transition-duration: 0.01ms !important;",
-      "    scroll-behavior: auto !important;",
       "  }",
       "}",
     ].join("\n");
+  }
 
   const css = [...keyframes.values(), ...rules, ...(reducedBlock ? [reducedBlock] : [])].join("\n\n");
   return Object.freeze({
     selector: cleanSelector,
-    presetIds: Object.freeze([...presetIds]),
+    presetIds: Object.freeze(uniqueIds),
     presets: Object.freeze(appliedPresets),
     css,
     tokens: MOTION_TOKENS,
   });
 }
 
+const PRESET_EASE_CUBIC = Object.freeze({
+  drawer: Object.freeze([0.32, 0.72, 0, 1]),
+  spring: Object.freeze([0.22, 1.12, 0.36, 1]),
+  skeleton: Object.freeze([0.77, 0, 0.175, 1]),
+});
+
 /**
  * Generate a reduced-motion-aware React/CSS motion config snippet for a preset.
  */
 export function compileMotionReact(presetId) {
-  if (!Object.hasOwn(MOTION_PRESETS, presetId)) {
-    throw new Error(`unknown motion preset: ${presetId}`);
+  if (typeof presetId !== "string" || !Object.hasOwn(MOTION_PRESETS, presetId)) {
+    throw new Error(`unknown motion preset: ${String(presetId).slice(0, 64)}`);
   }
   const preset = MOTION_PRESETS[presetId];
+  const ease = PRESET_EASE_CUBIC[preset.id] ?? [0.23, 1, 0.32, 1];
+  const initial = preset.id === "drawer"
+    ? { opacity: 0, x: 24 }
+    : preset.id === "enter" || preset.id === "modal" || preset.id === "toast"
+      ? { opacity: 0, y: preset.id === "toast" ? 10 : 6, scale: preset.id === "modal" ? 0.95 : 0.98 }
+      : { opacity: 1 };
+  const animate = preset.id === "drawer"
+    ? { opacity: 1, x: 0 }
+    : { opacity: 1, y: 0, scale: 1 };
   return Object.freeze({
     presetId: preset.id,
     durationSec: Number((preset.durationMs / 1000).toFixed(3)),
     easing: preset.easing,
     properties: preset.properties,
     reactProps: Object.freeze({
-      initial: preset.id === "enter" || preset.id === "modal" || preset.id === "toast"
-        ? { opacity: 0, y: preset.id === "toast" ? 10 : 6, scale: preset.id === "modal" ? 0.95 : 0.98 }
-        : { opacity: 1 },
-      animate: { opacity: 1, y: 0, scale: 1 },
-      exit: { opacity: 0, scale: 0.97 },
-      transition: { duration: Number((preset.durationMs / 1000).toFixed(3)), ease: [0.23, 1, 0.32, 1] },
+      initial,
+      animate,
+      exit: preset.id === "drawer" ? { opacity: 0, x: 24 } : { opacity: 0, scale: 0.97 },
+      transition: { duration: Number((preset.durationMs / 1000).toFixed(3)), ease },
       reducedMotionNote: "Respect useReducedMotion() or CSS prefers-reduced-motion: reduce by collapsing travel and duration to 0.",
     }),
   });

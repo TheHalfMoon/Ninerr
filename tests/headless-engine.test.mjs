@@ -674,12 +674,24 @@ test("an agent plans aesthetic directions, sets a product brief with seeded toke
   const applied = await agent.call("apply_motion", { nodeId: rootId, presetIds: ["hover", "focus", "enter"] });
   assert.equal(applied.isError, undefined, text(applied));
   assert.equal(applied.structuredContent.nodeId, rootId);
+  assert.equal(applied.structuredContent.selector, ":scope", "default apply_motion selector is :scope so exports match");
+
+  // Consecutive apply_motion preserves prior motion presets and rejects invalid selectors or reducedMotion: "none".
+  assert.equal((await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], selector: 'bad[attr="unclosed' })).isError, true, "unbalanced selector refused");
+  assert.equal((await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], reducedMotion: "none" })).isError, true, "reducedMotion: none refused over MCP");
+  const appliedPress = await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], reducedMotion: "minimal" });
+  assert.equal(appliedPress.isError, undefined, text(appliedPress));
+  const motionAfter = (await agent.call("design_intelligence", { action: "brief" })).structuredContent.motion;
+  assert.ok(motionAfter.presets.some((p) => p.id === "enter") && motionAfter.presets.some((p) => p.id === "press"), "consecutive apply_motion merges presets non-destructively");
+  // Re-apply enter so exported HTML contains keyframes for the check below.
+  await agent.call("apply_motion", { nodeId: rootId, presetIds: ["hover", "focus", "enter"] });
 
   // Verify motion stylesheet compiles cleanly into exported HTML with prefers-reduced-motion, while tokens CSS stays :root/mode only.
   const htmlOut = (await agent.call("export_design", { nodeId: rootId, format: "html", name: "console" })).structuredContent;
   const htmlText = readFileSync(htmlOut.path, "utf8");
   assert.match(htmlText, /@keyframes ninerr-enter/u);
   assert.match(htmlText, /prefers-reduced-motion: reduce/u);
+  assert.doesNotMatch(htmlText, /scroll-behavior/iu);
 
   const tokCssOut = (await agent.call("export_design", { format: "tokens-css", name: "tokens" })).structuredContent;
   const tokCssText = readFileSync(tokCssOut.path, "utf8");
@@ -688,6 +700,28 @@ test("an agent plans aesthetic directions, sets a product brief with seeded toke
 
   const lintClean = (await agent.call("design_intelligence", { action: "motion_lint", nodeId: rootId })).structuredContent;
   assert.deepEqual(lintClean.findings, [], "applied Ninerr motion stylesheet has 0 lint findings");
+  assert.equal((await agent.call("design_intelligence", { action: "motion_frequency", trigger: "click", presetId: "unknown-preset" })).isError, true, "unknown motion_frequency preset returns ToolError");
+
+  await agent.call("close_project");
+
+  // 4. Dark-as-default & multi-collection set_design_brief({ applyDirectionId }) preserves light and dark modes safely.
+  await agent.call("create_project", { name: "dark-default" });
+  await agent.call("import_source", {
+    format: "tokens-css",
+    name: "dark-first.css",
+    source: ":root { --bg-surface: 16px; } .dark { --bg-surface: 24px; }",
+  });
+  const fintechPlan = (await agent.call("design_intelligence", { action: "plan", productName: "Vault", domain: "fintech" })).structuredContent;
+  const darkSeeded = await agent.call("set_design_brief", {
+    productName: "Vault",
+    domain: "fintech",
+    applyDirectionId: fintechPlan.recommendedDirectionId,
+  });
+  assert.equal(darkSeeded.isError, undefined, text(darkSeeded));
+  const tokensAfter = (await agent.call("design_tokens")).structuredContent.tokens;
+  const bgSurface = tokensAfter.find((t) => t.name === "--bg-surface");
+  assert.equal(bgSurface.type, "color", "existing token type reconciled to planned token type");
+  assert.notEqual(bgSurface.values.default, bgSurface.values.dark, "light and dark values stay distinct");
 
   await agent.call("close_project");
   await agent.stop();

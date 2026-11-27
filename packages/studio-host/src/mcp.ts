@@ -1295,7 +1295,7 @@ const TOOLS: Tool[] = [
       }
       if (action === "motion_presets") {
         if (typeof args.presetId === "string" && args.presetId !== "") {
-          if (!Object.hasOwn(MOTION_PRESETS, args.presetId)) throw new ToolError(`unknown motion preset ${JSON.stringify(args.presetId)}`);
+          if (!Object.hasOwn(MOTION_PRESETS, args.presetId)) throw new ToolError(`unknown motion preset ${JSON.stringify(shownPlainly(args.presetId.slice(0, 64)))}`);
           const preset = MOTION_PRESETS[args.presetId as keyof typeof MOTION_PRESETS];
           return {
             preset: { id: preset.id, trigger: preset.trigger, duration: preset.duration, easing: preset.easing, properties: preset.properties, maxFrequency: preset.maxFrequency, summary: preset.summary },
@@ -1314,13 +1314,20 @@ const TOOLS: Tool[] = [
         if (typeof args.trigger !== "string" || typeof args.presetId !== "string") {
           throw new ToolError("motion_frequency requires trigger and presetId");
         }
-        return evaluateMotionFrequency({
-          trigger: args.trigger,
-          presetId: args.presetId,
-          dailyUses: typeof args.dailyUses === "number" ? args.dailyUses : null,
-        }) as unknown as Json;
+        try {
+          return evaluateMotionFrequency({
+            trigger: args.trigger,
+            presetId: args.presetId,
+            dailyUses: typeof args.dailyUses === "number" ? args.dailyUses : null,
+          }) as unknown as Json;
+        } catch (error) {
+          throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+        }
       }
       if (action === "motion_lint") {
+        if (typeof args.css === "string" && args.css.length > 200_000) {
+          throw new ToolError("css input exceeds 200000 characters");
+        }
         let css = typeof args.css === "string" ? args.css : "";
         let nodeId: string | null = null;
         if (args.nodeId !== undefined) {
@@ -1336,10 +1343,10 @@ const TOOLS: Tool[] = [
       if (action === "skill") {
         if (typeof args.skillId !== "string" || args.skillId.trim() === "") throw new ToolError("skill action requires skillId");
         const skill = getSkill(args.skillId);
-        if (!skill) throw new ToolError(`unknown Ninerr skill ${JSON.stringify(args.skillId)}`);
+        if (!skill) throw new ToolError(`unknown Ninerr skill ${JSON.stringify(shownPlainly(args.skillId.slice(0, 64)))}`);
         return { skill, markdown: renderSkillMarkdown(skill) } as unknown as Json;
       }
-      throw new ToolError(`unsupported design_intelligence action ${JSON.stringify(String(action))}`);
+      throw new ToolError(`unsupported design_intelligence action ${JSON.stringify(shownPlainly(String(action).slice(0, 64)))}`);
     },
   },
   {
@@ -1393,28 +1400,59 @@ const TOOLS: Tool[] = [
         const planned = planDesignDirections(brief);
         const dir = planned.directions.find((d) => d.id === args.applyDirectionId);
         if (!dir) {
-          throw new ToolError(`unknown applyDirectionId ${JSON.stringify(args.applyDirectionId)}; valid ids: ${planned.directions.map((d) => d.id).join(", ")}`);
+          throw new ToolError(`unknown applyDirectionId ${JSON.stringify(shownPlainly(args.applyDirectionId.slice(0, 64)))}; valid ids: ${planned.directions.map((d) => d.id).join(", ")}`);
         }
         props.brief = { ...brief, aestheticDirection: brief.aestheticDirection ?? dir.name };
-        const collection = props.collections[0];
-        let darkMode = collection.modes.find((m: any) => m.id === "dark" || m.name.toLowerCase() === "dark");
-        if (!darkMode) {
-          darkMode = { id: "dark", name: "Dark" };
-          collection.modes.push(darkMode);
-          for (const existing of props.tokens) {
-            if (existing.collection === collection.id && existing.values[darkMode.id] === undefined) {
-              existing.values[darkMode.id] = existing.values[collection.defaultMode];
+        const primaryCollection = props.collections[0];
+        const ensureLightAndDarkModes = (col: any) => {
+          let lightMode = col.modes.find((m: any) => m.id === "light" || m.name.toLowerCase() === "light");
+          let darkMode = col.modes.find((m: any) => m.id === "dark" || m.name.toLowerCase() === "dark");
+          const defaultModeObj = col.modes.find((m: any) => m.id === col.defaultMode) ?? col.modes[0];
+          if (!lightMode && !darkMode) {
+            lightMode = defaultModeObj;
+          } else if (!lightMode && darkMode) {
+            if (defaultModeObj.id !== darkMode.id) {
+              lightMode = defaultModeObj;
+            } else {
+              const id = col.modes.some((m: any) => m.id === "light") ? `light-${randomUUID().slice(0, 6)}` : "light";
+              lightMode = { id, name: "Light" };
+              col.modes.push(lightMode);
+              for (const existingTok of props.tokens) {
+                if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, lightMode.id)) {
+                  existingTok.values[lightMode.id] = existingTok.values[col.defaultMode];
+                }
+              }
             }
           }
-        }
+          if (!darkMode) {
+            const id = col.modes.some((m: any) => m.id === "dark") ? `dark-${randomUUID().slice(0, 6)}` : "dark";
+            darkMode = { id, name: "Dark" };
+            col.modes.push(darkMode);
+            for (const existingTok of props.tokens) {
+              if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, darkMode.id)) {
+                existingTok.values[darkMode.id] = existingTok.values[col.defaultMode];
+              }
+            }
+          }
+          return { lightModeId: lightMode.id, darkModeId: darkMode.id };
+        };
+
         for (const tok of dir.tokens) {
           const existing = props.tokens.find((t: any) => t.name === tok.name);
-          const nextValues = { [collection.defaultMode]: tok.light, [darkMode.id]: tok.dark };
+          const targetCollection = existing
+            ? (props.collections.find((c: any) => c.id === existing.collection) ?? primaryCollection)
+            : primaryCollection;
+          const { lightModeId, darkModeId } = ensureLightAndDarkModes(targetCollection);
           if (existing) {
-            existing.values = { ...existing.values, ...nextValues };
+            existing.type = tok.type;
+            existing.values = { ...existing.values, [lightModeId]: tok.light, [darkModeId]: tok.dark };
             existing.description = tok.description;
           } else {
-            props.tokens.push({ name: tok.name, type: tok.type, collection: collection.id, values: nextValues, description: tok.description });
+            const values: Record<string, string> = {};
+            for (const mode of targetCollection.modes) {
+              values[mode.id] = mode.id === darkModeId ? tok.dark : tok.light;
+            }
+            props.tokens.push({ name: tok.name, type: tok.type, collection: targetCollection.id, values, description: tok.description });
           }
           seededTokens += 1;
         }
@@ -1442,7 +1480,7 @@ const TOOLS: Tool[] = [
       nodeId: { type: "string", minLength: 1, maxLength: 128 },
       presetIds: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", enum: [...MOTION_PRESET_IDS] } },
       selector: { type: "string", minLength: 1, maxLength: 120 },
-      reducedMotion: { type: "string", enum: ["respect", "minimal", "none"] },
+      reducedMotion: { type: "string", enum: ["respect", "minimal"] },
       addMotionTokens: { type: "boolean" },
     }, ["nodeId", "presetIds"]),
     run: ({ session, edit }, args) => {
@@ -1455,13 +1493,16 @@ const TOOLS: Tool[] = [
       }
       const selector = typeof args.selector === "string" && args.selector.trim() !== ""
         ? args.selector.trim()
-        : `[data-ninerr-id="${node.id}"]`;
+        : ":scope";
       const reducedMotion = args.reducedMotion ?? "respect";
+      if (reducedMotion !== "respect" && reducedMotion !== "minimal") {
+        throw new ToolError("reducedMotion must be \"respect\" or \"minimal\"");
+      }
       let compiled;
       try {
         compiled = compileMotionStylesheet({ presetIds: args.presetIds, selector, reducedMotion });
       } catch (error) {
-        throw new ToolError(error instanceof Error ? error.message : String(error));
+        throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
       }
 
       const startMark = "/* ninerr-motion:start */";
@@ -1471,6 +1512,10 @@ const TOOLS: Tool[] = [
       const nextSheet = `${stripped === "" ? "" : `${stripped}\n\n`}${startMark}\n${compiled.css}\n${endMark}`;
       if (Buffer.byteLength(nextSheet, "utf8") > 512 * 1024) {
         throw new ToolError("combined node stylesheet exceeds 512 KiB budget");
+      }
+      const planned = planElement({ id: node.id, type: node.type, props: { stylesheet: nextSheet } } as any);
+      if (planned.stylesheet === null || planned.dropped > 0) {
+        throw new ToolError("motion stylesheet was rejected by the renderer sanitizer, so nothing was changed");
       }
 
       const operations: unknown[] = [{ type: "set-props", nodeId: node.id, set: { stylesheet: nextSheet } }];
@@ -1488,19 +1533,29 @@ const TOOLS: Tool[] = [
           props.tokens.push({ name: tok.name, type: tok.type, collection: collection.id, values, description: tok.description });
           addedTokens += 1;
         }
-        props.motion = {
-          reducedMotion,
-          defaultDuration: "220ms",
-          defaultEasing: "cubic-bezier(0.23, 1, 0.32, 1)",
-          allowAmbient: props.motion?.allowAmbient === true,
-          presets: compiled.presets.map((p) => ({
+        const prevMotion = props.motion && typeof props.motion === "object" ? props.motion : null;
+        const mergedPresets = new Map<string, any>();
+        if (Array.isArray(prevMotion?.presets)) {
+          for (const existingPreset of prevMotion.presets) {
+            if (existingPreset && typeof existingPreset.id === "string") mergedPresets.set(existingPreset.id, existingPreset);
+          }
+        }
+        for (const p of compiled.presets) {
+          mergedPresets.set(p.id, {
             id: p.id,
             trigger: p.trigger,
             duration: p.duration,
             easing: p.easing,
             properties: [...p.properties],
             maxFrequency: p.maxFrequency,
-          })),
+          });
+        }
+        props.motion = {
+          reducedMotion,
+          defaultDuration: typeof prevMotion?.defaultDuration === "string" ? prevMotion.defaultDuration : "220ms",
+          defaultEasing: typeof prevMotion?.defaultEasing === "string" ? prevMotion.defaultEasing : "cubic-bezier(0.23, 1, 0.32, 1)",
+          allowAmbient: prevMotion?.allowAmbient === true,
+          presets: [...mergedPresets.values()],
         };
         const dsProb = designSystemProblem(props);
         if (dsProb !== null) throw new ToolError(`design system rejected motion tokens: ${dsProb}`);

@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   TOKEN_TYPES,
   compileTokens,
@@ -12,6 +15,7 @@ import {
   setToken,
 } from "@ninerr/document-model";
 import { applyTransaction } from "@ninerr/history";
+import { planElement } from "@ninerr/renderer";
 import {
   ARCHETYPE_IDS,
   DOMAIN_ARCHETYPES,
@@ -34,6 +38,7 @@ import {
 } from "@ninerr/design-intelligence";
 import { contrastRatio, parseOpaqueColor } from "@ninerr/design-assurance";
 import { MCP_TOOL_NAMES } from "@ninerr/mcp-protocol";
+import { runCliCommand } from "../packages/studio-host/src/cli.ts";
 
 function commit(doc, operations, intent = "test") {
   const result = applyTransaction(doc, {
@@ -254,5 +259,144 @@ test("all 19 official Ninerr skills exist, render SKILL.md cleanly, and referenc
     const md = renderSkillMarkdown(skill);
     assert.match(md, new RegExp(`^---\\nname: ninerr-${skill.id}\\n`, "u"));
     assert.match(md, /## Recommended Ninerr MCP tools/u);
+  }
+});
+
+test("PR 484 review regressions: renderer-safe motion CSS, selector validation, motion linter accuracy, Taste edge cases, strict schema-v2, and CLI flag parsing", async () => {
+  // 1. Every compiled motion stylesheet (all 13 presets, both respect & minimal) passes planElement with 0 drops and non-null stylesheet.
+  for (const mode of ["respect", "minimal"]) {
+    const compiled = compileMotionStylesheet({ presetIds: [...MOTION_PRESET_IDS, "hover"], selector: ":scope", reducedMotion: mode });
+    assert.equal(compiled.presetIds.length, MOTION_PRESET_IDS.length, "duplicate presetIds are deduplicated");
+    assert.doesNotMatch(compiled.css, /scroll-behavior/iu, "never emits scroll-behavior which renderer UNSAFE_STYLESHEET rejects");
+    const planned = planElement({ id: "node-motion", type: "frame", props: { stylesheet: compiled.css } });
+    assert.equal(planned.dropped, 0, `${mode} motion stylesheet has 0 renderer drops`);
+    assert.equal(planned.stylesheet, compiled.css, `${mode} motion stylesheet survives renderer sanitizer verbatim`);
+  }
+  const minimal = compileMotionStylesheet({ presetIds: ["enter"], selector: ":scope", reducedMotion: "minimal" });
+  const respect = compileMotionStylesheet({ presetIds: ["enter"], selector: ":scope", reducedMotion: "respect" });
+  assert.notEqual(minimal.css, respect.css, "minimal and respect reducedMotion modes emit distinct CSS");
+  assert.match(minimal.css, /transition-property:\s*opacity !important;/u);
+
+  // 2. Selector validation rejects unbalanced brackets/quotes, control chars, and unsafe schemes.
+  for (const badSelector of [
+    'foo[bar="unclosed',
+    "foo[[bar]]",
+    'foo"bar"',
+    "foo]bar",
+    "foo\nbar",
+    "a[href=javascript:alert]",
+    "behavior:url",
+  ]) {
+    assert.throws(() => compileMotionStylesheet({ presetIds: ["hover"], selector: badSelector }), `rejects bad selector ${JSON.stringify(badSelector)}`);
+  }
+
+  // 3. Motion frequency rejects unknown presets; compileMotionReact differentiates drawer & curves.
+  assert.throws(() => evaluateMotionFrequency({ trigger: "click", presetId: "nonexistent-preset" }));
+  const drawerReact = compileMotionReact("drawer");
+  assert.deepEqual(drawerReact.reactProps.initial, { opacity: 0, x: 24 });
+  assert.deepEqual(drawerReact.reactProps.animate, { opacity: 1, x: 0 });
+  assert.deepEqual(drawerReact.reactProps.transition.ease, [0.32, 0.72, 0, 1]);
+
+  // 4. lintMotionCss handles static CSS, comments, decimal seconds, reverse shorthand order, and @keyframes accurately.
+  assert.deepEqual(lintMotionCss(".transition-panel { color: #111; --my-transition: 500ms; transition: none; /* transition: all 900ms; */ }"), []);
+  assert.deepEqual(lintMotionCss(".btn { transition: opacity .15s ease; } @media (prefers-reduced-motion: reduce) { .btn { transition-duration: 0.01ms; } }"), []);
+  const decimalSlow = lintMotionCss(".btn { transition: opacity .5s ease; } @media (prefers-reduced-motion: reduce) {}");
+  assert.ok(decimalSlow.some((f) => f.ruleId === "motion:duration-cap"), ".5s (500ms) triggers duration cap");
+  const reversedWidth = lintMotionCss(".box { transition: 200ms width ease; } @media (prefers-reduced-motion: reduce) {}");
+  assert.ok(reversedWidth.some((f) => f.ruleId === "motion:gpu-composited-only" && f.evidence.property === "width"), "transition: 200ms width catches layout prop");
+  const keyframesNoReduce = lintMotionCss("@keyframes slide { from { opacity: 0; } to { opacity: 1; } }");
+  assert.ok(keyframesNoReduce.some((f) => f.ruleId === "motion:missing-reduced-motion"), "@keyframes at column 0 requires reduced-motion");
+
+  // 5. Taste engine: kebab-case spacing, WCAG bold large text, dark --shadow-sm calibration, nested var() fallback.
+  let doc = createDocument({ id: "doc-taste-reg", name: "Reg" });
+  doc = commit(doc, createDesignSystem(doc, { id: "ds-1", name: "DS" }));
+  doc = commit(doc, setToken(doc, { name: "--fg-fallback", type: "color", collection: "base", values: { default: "#767676" } }));
+  doc = commit(doc, [
+    {
+      type: "insert-node",
+      parentId: null,
+      index: 1,
+      node: { id: "root", type: "frame", props: { tag: "main", style: { backgroundColor: "#0b1120" } } },
+    },
+    {
+      type: "insert-node",
+      parentId: "root",
+      index: 0,
+      node: {
+        id: "kebab-box",
+        type: "element",
+        props: {
+          tag: "div",
+          style: {
+            "padding-top": "13px",
+            boxShadow: "0 1px 2px rgba(0, 0, 0, 0.45)",
+          },
+        },
+      },
+    },
+    {
+      type: "insert-node",
+      parentId: "root",
+      index: 1,
+      node: {
+        id: "bold-large",
+        type: "element",
+        props: {
+          tag: "h2",
+          text: "Bold Large Heading",
+          style: {
+            "font-size": "19px",
+            "font-weight": "700",
+            color: "var(--missing, var(--fg-fallback, #767676))",
+            "background-color": "#ffffff",
+          },
+        },
+      },
+    },
+  ]);
+  const taste = evaluateTaste(doc);
+  assert.ok(taste.findings.some((f) => f.ruleId === "taste:spacing-off-grid" && f.nodeId === "kebab-box"), "kebab-case padding-top: 13px caught");
+  assert.ok(!taste.findings.some((f) => f.ruleId === "taste:anti-slop-heavy-shadow" && f.nodeId === "kebab-box"), "Ninerr dark --shadow-sm does not self-flag");
+  assert.ok(!taste.findings.some((f) => f.ruleId === "taste:color-low-contrast" && f.nodeId === "bold-large"), "19px bold with ~4.54:1 ratio passes WCAG 2.1 large text");
+
+  // 6. Strict schema-v2 validation rejects whitespace-only brief text and unknown keys in breakpoints/motion.
+  assert.throws(() => setDesignBrief(doc, { productName: "   ", domain: "fintech" }));
+  assert.throws(() => setDesignBrief(doc, { productName: "Valid", domain: "fintech", audience: "   " }));
+  assert.throws(() => setBreakpoints(doc, [{ id: "sm", name: "Small", minWidth: 640, bogus: true }]));
+  assert.throws(() => setBreakpoints(doc, [{ id: "sm", name: "   ", minWidth: 640 }]));
+  assert.throws(() => setMotionSystem(doc, { reducedMotion: "respect", presets: [{ id: "enter", extra: 1 }] }));
+
+  // 7. CLI boolean flag parsing & strict archetype/file checks.
+  const scratch = mkdtempSync(join(tmpdir(), "ninerr-cli-reg-"));
+  try {
+    const cssFile = join(scratch, "anim.css");
+    writeFileSync(cssFile, ".orb { animation: float 200ms infinite; } @media (prefers-reduced-motion: reduce) { .orb { animation: none; } }\n");
+    let out = "";
+    let err = "";
+    const code = await runCliCommand("motion", ["lint", "--allow-ambient", cssFile], {
+      version: "0.1.0",
+      stdout: (s) => { out += s; },
+      stderr: (s) => { err += s; },
+    });
+    assert.equal(code, 0, `boolean --allow-ambient before file path succeeds: ${err}`);
+    assert.match(out, /0 motion issues/u);
+
+    let errUnknown = "";
+    const badArch = await runCliCommand("design", ["archetype", "not-a-domain"], {
+      version: "0.1.0",
+      stdout: () => {},
+      stderr: (s) => { errUnknown += s; },
+    });
+    assert.equal(badArch, 2, "unknown explicit archetype exits 2");
+    assert.match(errUnknown, /unknown domain id/u);
+
+    const dirLint = await runCliCommand("motion", ["lint", scratch], {
+      version: "0.1.0",
+      stdout: () => {},
+      stderr: () => {},
+    });
+    assert.equal(dirLint, 2, "passing a directory to motion lint exits 2");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 });

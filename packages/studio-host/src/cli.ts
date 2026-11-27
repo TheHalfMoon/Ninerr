@@ -1,6 +1,6 @@
 // Extended Ninerr CLI subcommands dispatched from bin/ninerr.mjs (`ninerr design ...`,
 // `ninerr motion ...`, and subsequent product commands). Pure local execution, zero network.
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import {
   ARCHETYPE_IDS,
   DOMAIN_ARCHETYPES,
@@ -25,24 +25,39 @@ export interface CliRunOptions {
 }
 
 export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion"]);
+const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient"]);
+const MAX_CLI_CSS_BYTES = 2 * 1024 * 1024;
 
 function parseFlags(argv: string[]) {
   const positionals: string[] = [];
   const flags: Record<string, string | boolean> = Object.create(null);
+  let afterDoubleDash = false;
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
+    if (afterDoubleDash) {
+      positionals.push(token);
+      continue;
+    }
+    if (token === "--") {
+      afterDoubleDash = true;
+      continue;
+    }
     if (token.startsWith("--")) {
       const eq = token.indexOf("=");
       if (eq > 2) {
         flags[token.slice(2, eq)] = token.slice(eq + 1);
       } else {
         const key = token.slice(2);
-        const next = argv[i + 1];
-        if (next !== undefined && !next.startsWith("--")) {
-          flags[key] = next;
-          i += 1;
-        } else {
+        if (BOOLEAN_FLAGS.has(key)) {
           flags[key] = true;
+        } else {
+          const next = argv[i + 1];
+          if (next !== undefined && !next.startsWith("--")) {
+            flags[key] = next;
+            i += 1;
+          } else {
+            flags[key] = true;
+          }
         }
       }
     } else {
@@ -56,6 +71,7 @@ function designHelp(): string {
   return [
     "Ninerr Design Intelligence CLI:",
     "  ninerr design archetypes [--json]",
+    "  ninerr design archetype <id> [--json]",
     "  ninerr design plan --domain <domain> --name <product> [--density compact|balanced|spacious] [--theme light|dark|system] [--json]",
     "  ninerr design skills [list [--query <text>] | show <id> | render <id>] [--json]",
     "",
@@ -165,6 +181,10 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           err("ninerr design archetype: specify a domain id\n");
           return 2;
         }
+        if (!Object.hasOwn(DOMAIN_ARCHETYPES, id)) {
+          err(`ninerr design archetype: unknown domain id ${JSON.stringify(id)}; valid ids: ${ARCHETYPE_IDS.join(", ")}\n`);
+          return 2;
+        }
         const arch = getDomainArchetype(id);
         out(`${JSON.stringify(arch, null, 2)}\n`);
         return 0;
@@ -220,6 +240,15 @@ export async function runCliCommand(command: string, args: string[], options: Cl
         const filePath = positionals[1];
         if (!filePath) {
           err("ninerr motion lint: specify a CSS file path\n");
+          return 2;
+        }
+        const stat = lstatSync(filePath);
+        if (!stat.isFile()) {
+          err(`ninerr motion lint: ${JSON.stringify(filePath)} is not a regular file\n`);
+          return 2;
+        }
+        if (stat.size > MAX_CLI_CSS_BYTES) {
+          err(`ninerr motion lint: ${JSON.stringify(filePath)} exceeds ${MAX_CLI_CSS_BYTES} bytes\n`);
           return 2;
         }
         const cssText = readFileSync(filePath, "utf8");
