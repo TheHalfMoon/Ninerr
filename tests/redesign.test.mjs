@@ -647,29 +647,54 @@ test("PR 487 review regressions: Tier 3 allowlist, .git/node_modules block, CSS/
   );
 }));
 
-test("dogfooding regressions: BFS CSS reservation finds globals.css beyond 600 TSX files, Tailwind 3.4 detects v3, and >8 nested template fails closed", () => withTempWorkspace((root) => {
+test("dogfooding & PR 489 regressions: BFS CSS reservation uses full 600-file budget, Tailwind semver/comment parsing, and Symbol depth + ArrayExpression template fail-closed", () => withTempWorkspace((root) => {
   mkdirSync(join(root, "app", "routes"), { recursive: true });
   mkdirSync(join(root, "styles"), { recursive: true });
   writeFileSync(join(root, "package.json"), JSON.stringify({
     name: "large-tailwind-v3-app",
-    dependencies: { next: "15.1.0", react: "19.0.0", tailwindcss: "^3.4.17" },
+    dependencies: { next: "15.1.0", react: "19.0.0", tailwindcss: ">=3.4.0 <4.0.0" },
   }));
   // Create 620 TSX files in app/routes/ (exceeds default maxScanFiles=600) so DFS would starve styles/globals.css.
   for (let i = 0; i < 620; i += 1) {
     writeFileSync(join(root, "app", "routes", `view-${String(i).padStart(4, "0")}.tsx`), `export const V${i} = () => <div className="p-4" />;\n`);
   }
-  writeFileSync(join(root, "styles", "globals.css"), ":root { --bg-canvas: #ffffff; --brand-ink: #0f172a; }\n");
+  // Include a commented `@theme` so comment-unaware detection would falsely mark tailwind-v4.
+  writeFileSync(join(root, "styles", "globals.css"), "/* @theme { --fake: 1 } */\n:root { --bg-canvas: #ffffff; --brand-ink: #0f172a; }\n");
 
   const analysis = analyzeCodebase(root);
   assert.ok(analysis.styling.includes("tailwind-v3"), `expected tailwind-v3, got ${JSON.stringify(analysis.styling)}`);
-  assert.ok(!analysis.styling.includes("tailwind-v4"), `unexpected tailwind-v4 for ^3.4.17: ${JSON.stringify(analysis.styling)}`);
+  assert.ok(!analysis.styling.includes("tailwind-v4"), `unexpected tailwind-v4 for >=3.4.0 <4.0.0: ${JSON.stringify(analysis.styling)}`);
   assert.equal(analysis.counts.cssFiles, 1);
   assert.equal(analysis.counts.cssTokens, 2);
+  // M8: Full 600-file budget utilized (1 CSS + 599 TSX = 600 scanned, not capped at 481).
+  assert.equal(analysis.counts.scannedFiles, 600);
 
-  // Nested TemplateLiteral depth > 8 fails closed in verifyFunctionalInvariance (cannot smuggle url() past depth cap).
+  // Verify v4 variants (`^4-beta.1`, `v4.0.0`, `^5.0.0`) detect tailwind-v4, while `<4.0.0` detects tailwind-v3.
+  for (const [spec, expected] of [
+    ["^4-beta.1", "tailwind-v4"],
+    ["v4.0.0", "tailwind-v4"],
+    ["^5.0.0", "tailwind-v4"],
+    ["<4.0.0", "tailwind-v3"],
+  ]) {
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "tw-check", dependencies: { tailwindcss: spec } }));
+    const res = analyzeCodebase(root);
+    assert.ok(res.styling.includes(expected), `${spec}: expected ${expected}, got ${JSON.stringify(res.styling)}`);
+  }
+
+  // C1a: Nested TemplateLiteral depth > 8 WITH non-empty intermediate quasi prefix fails closed via Symbol propagation.
   let deep = `"l(https://evil.test/x)"`;
   for (let d = 0; d < 10; d += 1) deep = `\`\${${deep}}\``;
-  const before = 'export const A = () => <div className="p-4" />;';
-  const after = `export const A = () => <div className="p-4" style={{ backgroundImage: \`ur\${${deep}}\` }} />;`;
-  assert.equal(verifyFunctionalInvariance(before, after, "A.tsx").ok, false);
+  const before = 'export const A = ({ x }) => <div className="p-4">{x}</div>;';
+  const afterPrefixedDeep = `export const A = ({ x }) => <div className="p-4" style={{ backgroundImage: \`u\${\`r\${${deep}}\`}\` }}>{x}</div>;`;
+  assert.equal(verifyFunctionalInvariance(before, afterPrefixedDeep, "A.tsx").ok, false);
+
+  // C1b: Sibling dynamic expression cannot mask a depth-exceeded nested template in the same TemplateLiteral.
+  const afterDynamicPlusDeep = `export const A = ({ x }) => <div className="p-4" style={{ backgroundImage: \`\${x}\${${deep}}\` }}>{x}</div>;`;
+  assert.equal(verifyFunctionalInvariance(before, afterDynamicPlusDeep, "A.tsx").ok, false);
+
+  // C1c: ArrayExpression inside TemplateLiteral (`u${["rl(https://evil.test/x)"]}`) is blocked in BOTH style and className!
+  const afterArrayStyle = 'export const A = ({ x }) => <div className="p-4" style={{ backgroundImage: `u${["rl(https://evil.test/x)"]}` }}>{x}</div>;';
+  const afterArrayClass = 'export const A = ({ x }) => <div className={`bg-[u${["rl(https://evil.test/x)"]}]`}>{x}</div>;';
+  assert.equal(verifyFunctionalInvariance(before, afterArrayStyle, "A.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(before, afterArrayClass, "A.tsx").ok, false);
 }));

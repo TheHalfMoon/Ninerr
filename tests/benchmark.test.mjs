@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ARCHETYPE_IDS } from "@ninerr/design-intelligence";
 import { createDocument, newDesignSystemProps } from "@ninerr/document-model";
 import {
   BENCHMARK_CATEGORIES,
@@ -10,6 +11,7 @@ import {
   auditDesignSystem,
   runBenchmarkSuite,
   runCliCommand,
+  scoreAccessibilityFindings,
 } from "../packages/studio-host/src/index.ts";
 import * as sdk from "../packages/studio-host/src/sdk.ts";
 
@@ -27,13 +29,23 @@ function withTempDir(run) {
   }
 }
 
-test("BENCHMARK_CATEGORIES and BENCHMARK_RUBRIC define 14 categories and a 100-point rubric (65 automated + 35 human-blinded)", () => {
+test("BENCHMARK_CATEGORIES covers all 9 canonical ARCHETYPE_IDS and BENCHMARK_RUBRIC totals 100 (65 automated + 35 human-blinded)", () => {
   assert.equal(BENCHMARK_CATEGORIES.length, 14);
   const ids = new Set(BENCHMARK_CATEGORIES.map((c) => c.id));
   assert.equal(ids.size, 14);
   assert.ok(BENCHMARK_CATEGORIES.some((c) => c.kind === "authoring"));
   assert.ok(BENCHMARK_CATEGORIES.some((c) => c.kind === "theme-migration"));
   assert.ok(BENCHMARK_CATEGORIES.some((c) => c.kind === "existing-app-redesign"));
+
+  // Every category uses an exact canonical domain archetype ID, and all 9 archetypes are covered.
+  const coveredDomains = new Set();
+  for (const cat of BENCHMARK_CATEGORIES) {
+    assert.ok(ARCHETYPE_IDS.includes(cat.domain), `category ${cat.id} domain ${cat.domain} is not in ARCHETYPE_IDS`);
+    coveredDomains.add(cat.domain);
+  }
+  for (const archId of ARCHETYPE_IDS) {
+    assert.ok(coveredDomains.has(archId), `canonical archetype ${archId} is not covered by BENCHMARK_CATEGORIES`);
+  }
 
   assert.equal(BENCHMARK_RUBRIC.length, 9);
   const totalWeight = BENCHMARK_RUBRIC.reduce((sum, dim) => sum + dim.weight, 0);
@@ -44,7 +56,30 @@ test("BENCHMARK_CATEGORIES and BENCHMARK_RUBRIC define 14 categories and a 100-p
   assert.equal(humanWeight, 35);
 });
 
-test("runBenchmarkSuite executes all 14 categories offline and keeps blinded human rubrics strictly null", async () => {
+test("scoreAccessibilityFindings penalizes real a11y errors, warnings, and missing reduced-motion compliance", () => {
+  const clean = scoreAccessibilityFindings([], true);
+  assert.deepEqual(clean, { score: 100, a11yErrors: 0, a11yWarnings: 0 });
+
+  const penalized = scoreAccessibilityFindings(
+    [
+      { ruleId: "a11y:contrast-failure", severity: "error" },
+      { ruleId: "taste:touch-target-small", severity: "warning" },
+      { ruleId: "system:unused-token", severity: "info" },
+    ],
+    true,
+  );
+  assert.equal(penalized.a11yErrors, 1);
+  assert.equal(penalized.a11yWarnings, 1);
+  assert.equal(penalized.score, 70);
+
+  const noMotion = scoreAccessibilityFindings(
+    [{ ruleId: "taste:touch-target-small", severity: "warning" }],
+    false,
+  );
+  assert.equal(noMotion.score, 80);
+});
+
+test("runBenchmarkSuite executes all 14 categories offline, wires real findings/undo-redo, deduplicates categories, and keeps blinded human rubrics strictly null", async () => {
   const report = await runBenchmarkSuite();
   assert.equal(report.schemaVersion, 1);
   assert.equal(report.networkAttempts, 0);
@@ -67,22 +102,38 @@ test("runBenchmarkSuite executes all 14 categories offline and keeps blinded hum
       assert.equal(cat.details.hostileHandlerBlocked, true);
       assert.equal(cat.details.directiveDropBlocked, true);
       assert.equal(cat.details.restoredByteIdentical, true);
+      assert.equal(cat.details.a11yContractsPreserved, true);
+      assert.equal(cat.details.responsiveClassesPreserved, true);
+      assert.equal(cat.details.brandTokensCoherent, true);
     } else {
       assert.equal(cat.details.directionsPlanned, 3);
       assert.equal(cat.details.allSixFrameworkExportsValid, true);
       assert.equal(cat.details.reducedMotionCompliant, true);
+      assert.equal(cat.details.undoRedoRoundTripOk, true);
       assert.equal(cat.details.a11yErrors, 0);
     }
   }
+
+  // Real consumer-mobile archetype findings genuinely fire on mobile-app-shell and affect accessibility score.
+  const mobile = report.categories.find((c) => c.id === "mobile-app-shell");
+  assert.ok(mobile);
+  assert.ok(mobile.details.a11yWarnings >= 1, `expected mobile touch-target warning, got ${JSON.stringify(mobile.details)}`);
+  assert.ok(mobile.automated.dimensions.accessibility < 100);
+
+  // Deduplicates duplicate category requests & reports visionUsed=false when selected category doesn't invoke Vision.
+  const dedup = await runBenchmarkSuite({ categories: ["existing-app-redesign", "existing-app-redesign"], includeVision: true });
+  assert.equal(dedup.categoryCount, 1);
+  assert.equal(dedup.visionUsed, false);
 });
 
-test("auditDesignSystem matches hardcoded literals only against compatible token types", () => {
+test("auditDesignSystem normalizes camelCase keys, matches compatible token types, and fails closed on unmapped properties", () => {
   const dsProps = newDesignSystemProps();
   dsProps.collections = [{ id: "theme", name: "Theme", modes: [{ id: "light", name: "Light" }], defaultMode: "light" }];
   dsProps.tokens = [
     { name: "--radius-lg", type: "radius", collection: "theme", values: { light: "16px" } },
     { name: "--space-4", type: "spacing", collection: "theme", values: { light: "16px" } },
     { name: "--text-base", type: "fontSize", collection: "theme", values: { light: "16px" } },
+    { name: "--opacity-full", type: "opacity", collection: "theme", values: { light: "1" } },
   ];
   const doc = createDocument({
     id: "doc-prop-type",
@@ -96,9 +147,11 @@ test("auditDesignSystem matches hardcoded literals only against compatible token
           tag: "div",
           name: "Box",
           style: {
-            "font-size": "16px",
-            "border-radius": "16px",
+            fontSize: "16px",
+            borderRadius: "16px",
             gap: "16px",
+            width: "16px",
+            "z-index": "1",
           },
         },
         children: [],
@@ -111,12 +164,15 @@ test("auditDesignSystem matches hardcoded literals only against compatible token
       .filter((f) => f.ruleId === "system:hardcoded-literal-matches-token")
       .map((f) => [f.evidence.field, f.evidence.matchingTokens]),
   );
-  assert.deepEqual(byField.get("style.font-size"), ["--text-base"]);
-  assert.deepEqual(byField.get("style.border-radius"), ["--radius-lg"]);
+  assert.deepEqual(byField.get("style.fontSize"), ["--text-base"]);
+  assert.deepEqual(byField.get("style.borderRadius"), ["--radius-lg"]);
   assert.deepEqual(byField.get("style.gap"), ["--space-4"]);
+  // Unmapped properties fail closed (never suggest unrelated tokens).
+  assert.equal(byField.has("style.width"), false);
+  assert.equal(byField.has("style.z-index"), false);
 });
 
-test("ninerr benchmark CLI supports list, category filtering, --out overwrite/symlink guards, and SDK export parity", async () => {
+test("ninerr benchmark CLI supports list, category filtering, strict --out/positional guards, and SDK export parity", async () => {
   assert.equal(sdk.BENCHMARK_CATEGORIES.length, 14);
   assert.equal(sdk.BENCHMARK_RUBRIC.length, 9);
   assert.equal(typeof sdk.runBenchmarkSuite, "function");
@@ -134,24 +190,39 @@ test("ninerr benchmark CLI supports list, category filtering, --out overwrite/sy
     assert.equal(listed.categories.length, 14);
     assert.equal(listed.rubric.length, 9);
 
+    // Reject unexpected positional arguments on both list and run.
+    assert.equal(await runCliCommand("benchmark", ["list", "bogus"], { version: "0.1.0", stdout: () => {}, stderr: () => {} }), 2);
+    assert.equal(await runCliCommand("benchmark", ["run", "fintech-ledger"], { version: "0.1.0", stdout: () => {}, stderr: () => {} }), 2);
+
     // Reject empty or comma-only --category
     const emptyErr = [];
-    const emptyCode = await runCliCommand("benchmark", ["run", "--category", ""], {
-      version: "0.1.0",
-      stdout: () => {},
-      stderr: (s) => emptyErr.push(s),
-    });
-    assert.equal(emptyCode, 2);
+    assert.equal(
+      await runCliCommand("benchmark", ["run", "--category", ""], { version: "0.1.0", stdout: () => {}, stderr: (s) => emptyErr.push(s) }),
+      2,
+    );
     assert.match(emptyErr.join(""), /non-empty value/u);
 
     const commaErr = [];
-    const commaCode = await runCliCommand("benchmark", ["run", "--category", " , "], {
-      version: "0.1.0",
-      stdout: () => {},
-      stderr: (s) => commaErr.push(s),
-    });
-    assert.equal(commaCode, 2);
+    assert.equal(
+      await runCliCommand("benchmark", ["run", "--category", " , "], { version: "0.1.0", stdout: () => {}, stderr: (s) => commaErr.push(s) }),
+      2,
+    );
     assert.match(commaErr.join(""), /at least one category/u);
+
+    // Reject reserved Windows device names, trailing dots/spaces, and ADS colons in --out.
+    for (const badOut of [
+      join(dir, "CON .json"),
+      join(dir, "report.json."),
+      join(dir, "report.json:stream"),
+      join(dir, "CON", "report.json"),
+    ]) {
+      const badCode = await runCliCommand("benchmark", ["run", "--category", "fintech-ledger", "--out", badOut], {
+        version: "0.1.0",
+        stdout: () => {},
+        stderr: () => {},
+      });
+      assert.equal(badCode, 2, `expected exit 2 for unsafe --out ${badOut}`);
+    }
 
     // Write report to --out
     const outFile = join(dir, "bench-report.json");

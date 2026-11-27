@@ -137,10 +137,12 @@ export function auditDesignSystem(document: any) {
 
   // Single-pass index of every token used by layers (var() refs and local custom-property declarations)
   // AND hardcoded style values matching defined tokens, filtered by compatible CSS property -> token type
-  // so e.g. `font-size: 16px` never falsely suggests `--radius-lg` or `--space-4`.
-  const cssPropToTokenTypes = (field: string): readonly string[] | null => {
+  // (normalizing camelCase keys and failing closed for unmapped properties so e.g. `width: 16px` or
+  // `fontSize: 16px` never falsely suggests `--radius-lg` or `--space-4`).
+  const cssPropToTokenTypes = (field: string): readonly string[] => {
     const idx = field.lastIndexOf(".");
-    const prop = (idx >= 0 ? field.slice(idx + 1) : field).toLowerCase();
+    const rawProp = idx >= 0 ? field.slice(idx + 1) : field;
+    const prop = rawProp.replace(/[A-Z]/gu, (ch) => `-${ch.toLowerCase()}`).toLowerCase();
     if (prop === "font-size") return ["fontSize"];
     if (prop === "font-family") return ["fontFamily"];
     if (prop === "font-weight") return ["fontWeight"];
@@ -151,9 +153,25 @@ export function auditDesignSystem(document: any) {
     if (prop === "transition-duration" || prop === "animation-duration") return ["duration"];
     if (prop === "transition-timing-function" || prop === "animation-timing-function") return ["easing"];
     if (prop === "border-radius" || (prop.startsWith("border-") && prop.endsWith("-radius"))) return ["radius"];
-    if (prop === "gap" || prop === "row-gap" || prop === "column-gap" || prop === "padding" || prop.startsWith("padding-") || prop === "margin" || prop.startsWith("margin-")) return ["spacing"];
-    if (prop === "color" || prop === "background" || prop === "background-color" || prop === "outline-color" || prop === "fill" || prop === "stroke" || (prop.startsWith("border-") && prop.endsWith("-color"))) return ["color"];
-    return null;
+    if (
+      prop === "gap" || prop === "row-gap" || prop === "column-gap"
+      || prop === "padding" || prop.startsWith("padding-")
+      || prop === "margin" || prop.startsWith("margin-")
+      || prop === "inset" || prop.startsWith("inset-")
+      || prop === "top" || prop === "right" || prop === "bottom" || prop === "left"
+    ) {
+      return ["spacing"];
+    }
+    if (
+      prop === "color" || prop === "background" || prop === "background-color"
+      || prop === "border-color" || (prop.startsWith("border-") && prop.endsWith("-color"))
+      || prop === "outline-color" || prop === "caret-color" || prop === "accent-color"
+      || prop === "text-decoration-color" || prop === "column-rule-color"
+      || prop === "fill" || prop === "stroke"
+    ) {
+      return ["color"];
+    }
+    return [];
   };
   const literalToTokens = new Map<string, Array<{ name: string; type: string }>>();
   for (const token of tokens) {
@@ -182,9 +200,9 @@ export function auditDesignSystem(document: any) {
         const norm = value.trim().toLowerCase();
         const candidates = literalToTokens.get(norm);
         const allowedTypes = cssPropToTokenTypes(field);
-        const matched = candidates
-          ?.filter((entry) => allowedTypes === null || allowedTypes.includes(entry.type))
-          .map((entry) => entry.name);
+        const matched = allowedTypes.length > 0
+          ? candidates?.filter((entry) => allowedTypes.includes(entry.type)).map((entry) => entry.name)
+          : undefined;
         if (matched && matched.length > 0) {
           hardcodedMatches += 1;
           findings.push({

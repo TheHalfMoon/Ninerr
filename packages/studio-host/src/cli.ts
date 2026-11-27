@@ -2,7 +2,7 @@
 // `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
 // Pure local execution, zero network.
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, parse as parsePath, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   NINERR_COMPONENT_CATEGORIES,
@@ -1187,6 +1187,10 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       }
 
       if (sub === "list") {
+        if (positionals.length > 1) {
+          err(`ninerr benchmark list: unexpected positional argument ${JSON.stringify(positionals[1])}\n`);
+          return 2;
+        }
         if (asJson) {
           out(`${JSON.stringify({ categories: BENCHMARK_CATEGORIES, rubric: BENCHMARK_RUBRIC }, null, 2)}\n`);
         } else {
@@ -1199,6 +1203,10 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       }
 
       if (sub === "run") {
+        if (positionals.length > 1) {
+          err(`ninerr benchmark run: unexpected positional argument ${JSON.stringify(positionals[1])} (use --category <id>)\n`);
+          return 2;
+        }
         const catOpt = requireFlagValue("category");
         let categories: string[] | undefined;
         if (catOpt !== undefined) {
@@ -1208,31 +1216,67 @@ export async function runCliCommand(command: string, args: string[], options: Cl
             return 2;
           }
         }
+        const validateOutputTarget = (rawOpt: string): string => {
+          if (/[\u0000-\u001f\u007f]/u.test(rawOpt)) {
+            throw new Error(`--out ${JSON.stringify(rawOpt)} contains control characters`);
+          }
+          const resolvedOut = assertNoSymlinkPath(resolve(rawOpt), "--out path");
+          const parsed = parsePath(resolvedOut);
+          const tail = resolvedOut.slice(parsed.root.length);
+          const segments = tail.split(/[/\\]+/u).filter(Boolean);
+          if (segments.length === 0) {
+            throw new Error(`--out ${JSON.stringify(rawOpt)} must name a file`);
+          }
+          for (const seg of segments) {
+            if (/[<>:"|?*]/u.test(seg)) {
+              throw new Error(`--out ${JSON.stringify(rawOpt)} contains forbidden path characters`);
+            }
+            if (/[ .]$/u.test(seg)) {
+              throw new Error(`--out ${JSON.stringify(rawOpt)} must not have segments ending in a dot or space`);
+            }
+            if (/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:[\s.]|$)/iu.test(seg)) {
+              throw new Error(`--out ${JSON.stringify(rawOpt)} uses a reserved device name`);
+            }
+          }
+          return resolvedOut;
+        };
+        const assertLeafWritable = (filePath: string, rawOpt: string): string | null => {
+          let existing = null;
+          try { existing = lstatSync(filePath); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (existing !== null) {
+            if (existing.isSymbolicLink() || !existing.isFile()) {
+              throw new Error(`--out ${JSON.stringify(rawOpt)} must be a regular non-symlink file`);
+            }
+            if (flags.replace !== true) {
+              return `ninerr benchmark: ${filePath} already exists (pass --replace to overwrite)\n`;
+            }
+          }
+          return null;
+        };
         const outOpt = requireFlagValue("out");
         let targetOut: string | null = null;
         if (outOpt !== undefined) {
-          targetOut = assertNoSymlinkPath(resolve(outOpt), "--out path");
-          const outName = basename(targetOut);
-          if (!outName || /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/iu.test(outName)) {
-            throw new Error(`--out ${JSON.stringify(outOpt)} uses a reserved or invalid file name`);
-          }
-          let existing = null;
-          try { existing = lstatSync(targetOut); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
-          if (existing !== null) {
-            if (existing.isSymbolicLink() || !existing.isFile()) {
-              throw new Error(`--out ${JSON.stringify(outOpt)} must be a regular non-symlink file`);
-            }
-            if (flags.replace !== true) {
-              err(`ninerr benchmark: ${targetOut} already exists (pass --replace to overwrite)\n`);
-              return 2;
-            }
+          targetOut = validateOutputTarget(outOpt);
+          const preConflict = assertLeafWritable(targetOut, outOpt);
+          if (preConflict !== null) {
+            err(preConflict);
+            return 2;
           }
         }
         const report = await runBenchmarkSuite({ categories, includeVision: flags.vision === true });
-        if (targetOut !== null) {
+        if (targetOut !== null && outOpt !== undefined) {
           const realParent = ensureRealDirectory(dirname(targetOut), "--out parent directory");
           targetOut = join(realParent, basename(targetOut));
+          // Re-verify leaf symlink/file/overwrite guard right before writing to close TOCTOU window.
+          const postConflict = assertLeafWritable(targetOut, outOpt);
+          if (postConflict !== null) {
+            err(postConflict);
+            return 2;
+          }
           writeTrustedFile(targetOut, `${JSON.stringify(report, null, 2)}\n`);
+        }
+        if (report.visionNote && !asJson) {
+          err(`ninerr benchmark: ${report.visionNote}\n`);
         }
         if (asJson) {
           out(`${JSON.stringify({ ...report, ...(targetOut ? { reportPath: targetOut } : {}) }, null, 2)}\n`);

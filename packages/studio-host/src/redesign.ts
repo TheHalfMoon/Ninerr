@@ -447,7 +447,7 @@ function canonicalJsxTag(nameNode: any): string {
  * pure static styling passes invariance). Any dynamic binding, condition, helper callee, variable,
  * computed key, ObjectMethod, or unknown AST node fails closed into a canonicalized representation.
  */
-function dynamicStylingSkeleton(node: any, isStyleAttr: boolean): unknown | null {
+function dynamicStylingSkeleton(node: any, isStyleAttr: boolean, inTemplate = false): unknown | null {
   if (!node || typeof node !== "object") return null;
   switch (node.type) {
     case "StringLiteral":
@@ -462,25 +462,27 @@ function dynamicStylingSkeleton(node: any, isStyleAttr: boolean): unknown | null
       }
       return canonicalAstJson(node, { stripJsxStyling: true });
     case "ParenthesizedExpression":
-      return dynamicStylingSkeleton(node.expression, isStyleAttr);
+      return dynamicStylingSkeleton(node.expression, isStyleAttr, inTemplate);
     case "TSAsExpression":
     case "TSSatisfiesExpression": {
-      const inner = dynamicStylingSkeleton(node.expression, isStyleAttr);
+      const inner = dynamicStylingSkeleton(node.expression, isStyleAttr, inTemplate);
       return inner === null ? null : canonicalAstJson(node, { stripJsxStyling: true });
     }
     case "JSXExpressionContainer":
-      return dynamicStylingSkeleton(node.expression, isStyleAttr);
+      return dynamicStylingSkeleton(node.expression, isStyleAttr, inTemplate);
     case "TemplateLiteral": {
-      const exprs = (node.expressions ?? []).map((e: any) => dynamicStylingSkeleton(e, isStyleAttr)).filter((v: unknown) => v !== null);
+      const exprs = (node.expressions ?? []).map((e: any) => dynamicStylingSkeleton(e, isStyleAttr, true)).filter((v: unknown) => v !== null);
       return exprs.length > 0 ? { t: "tpl", exprs } : null;
     }
     case "ArrayExpression": {
+      if (inTemplate) return canonicalAstJson(node, { stripJsxStyling: true });
       const elems = (node.elements ?? [])
-        .map((e: any) => (e === null ? null : dynamicStylingSkeleton(e, isStyleAttr)))
+        .map((e: any) => (e === null ? null : dynamicStylingSkeleton(e, isStyleAttr, false)))
         .filter((v: unknown) => v !== null);
       return elems.length > 0 ? { t: "arr", elems } : null;
     }
     case "ObjectExpression": {
+      if (inTemplate) return canonicalAstJson(node, { stripJsxStyling: true });
       const entries: unknown[] = [];
       for (const prop of node.properties ?? []) {
         if (prop?.type === "SpreadElement") {
@@ -652,9 +654,10 @@ function collectUnsafeStylingOccurrences(ast: any): Map<string, number> {
   const counts = new Map<string, number>();
   const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
 
-  const staticFragment = (expr: any, depth = 0): string | null => {
+  const DEPTH_EXCEEDED = Symbol("depth-exceeded");
+  const staticFragment = (expr: any, depth = 0): string | typeof DEPTH_EXCEEDED | null => {
     if (!expr || typeof expr !== "object") return null;
-    if (depth > 8) return "__DEPTH_EXCEEDED__";
+    if (depth > 8) return DEPTH_EXCEEDED;
     if (expr.type === "StringLiteral") return expr.value;
     if (expr.type === "NumericLiteral") return String(expr.value);
     if (expr.type === "BooleanLiteral") return String(expr.value);
@@ -665,19 +668,46 @@ function collectUnsafeStylingOccurrences(ast: any): Map<string, number> {
     if (expr.type === "ParenthesizedExpression" || expr.type === "TSAsExpression" || expr.type === "TSSatisfiesExpression") {
       return staticFragment(expr.expression, depth + 1);
     }
+    if (expr.type === "ArrayExpression") {
+      const parts: string[] = [];
+      let hasDynamic = false;
+      for (const el of expr.elements ?? []) {
+        if (el === null) {
+          parts.push("");
+          continue;
+        }
+        if (el.type === "SpreadElement") {
+          hasDynamic = true;
+          continue;
+        }
+        const part = staticFragment(el, depth + 1);
+        if (part === DEPTH_EXCEEDED) return DEPTH_EXCEEDED;
+        if (part === null) {
+          hasDynamic = true;
+        } else {
+          parts.push(part);
+        }
+      }
+      return hasDynamic ? null : parts.join(",");
+    }
     if (expr.type === "TemplateLiteral") {
       let joined = "";
+      let hasDynamic = false;
       const quasis = expr.quasis ?? [];
       const exprs = expr.expressions ?? [];
       for (let i = 0; i < quasis.length; i += 1) {
         joined += String(quasis[i]?.value?.cooked ?? quasis[i]?.value?.raw ?? "");
         if (i < exprs.length) {
           const part = staticFragment(exprs[i], depth + 1);
-          if (part === null) return null;
-          joined += part;
+          if (part === DEPTH_EXCEEDED) return DEPTH_EXCEEDED;
+          if (part === null) {
+            hasDynamic = true;
+          } else {
+            joined += part;
+          }
         }
       }
-      return joined;
+      return hasDynamic ? null : joined;
     }
     return null;
   };
@@ -695,34 +725,34 @@ function collectUnsafeStylingOccurrences(ast: any): Map<string, number> {
         }
         continue;
       }
-    if (cur.type === "TemplateLiteral") {
-      let folded = "";
-      let allStatic = true;
-      let depthExceeded = false;
-      const quasis = cur.quasis ?? [];
-      const exprs = cur.expressions ?? [];
-      for (let i = 0; i < quasis.length; i += 1) {
-        folded += String(quasis[i]?.value?.cooked ?? quasis[i]?.value?.raw ?? "");
-        if (i < exprs.length) {
-          const part = staticFragment(exprs[i], 0);
-          if (part === "__DEPTH_EXCEEDED__") {
-            depthExceeded = true;
-          } else if (part !== null) {
-            folded += part;
-          } else {
-            allStatic = false;
-            folded += " __dyn__ ";
-            stack.push(exprs[i]);
+      if (cur.type === "TemplateLiteral") {
+        let folded = "";
+        let allStatic = true;
+        let depthExceeded = false;
+        const quasis = cur.quasis ?? [];
+        const exprs = cur.expressions ?? [];
+        for (let i = 0; i < quasis.length; i += 1) {
+          folded += String(quasis[i]?.value?.cooked ?? quasis[i]?.value?.raw ?? "");
+          if (i < exprs.length) {
+            const part = staticFragment(exprs[i], 0);
+            if (part === DEPTH_EXCEEDED) {
+              depthExceeded = true;
+            } else if (part !== null) {
+              folded += part;
+            } else {
+              allStatic = false;
+              folded += " __dyn__ ";
+              stack.push(exprs[i]);
+            }
           }
         }
+        if (depthExceeded || UNSAFE_STYLING_PATTERN.test(folded)) {
+          bump(`unsafe-tpl:${depthExceeded ? "depth-exceeded" : folded}`);
+        } else if (isStyleAttr && allStatic && cssValueProblem(folded) !== null) {
+          bump(`invalid-style:${folded}`);
+        }
+        continue;
       }
-      if (depthExceeded || UNSAFE_STYLING_PATTERN.test(folded)) {
-        bump(`unsafe-tpl:${depthExceeded ? "depth-exceeded" : folded}`);
-      } else if (isStyleAttr && allStatic && cssValueProblem(folded) !== null) {
-        bump(`invalid-style:${folded}`);
-      }
-      continue;
-    }
       if (cur.type === "TemplateElement") {
         const text = String(cur.value?.cooked ?? cur.value?.raw ?? "");
         if (UNSAFE_STYLING_PATTERN.test(text)) {
@@ -999,18 +1029,71 @@ export function extractCssCustomProperties(
   return found;
 }
 
+function detectTailwindMajor(spec: string): "tailwind-v4" | "tailwind-v3" {
+  // Strip upper-bound comparators (`<4.0.0`, `<=4.0.0`) so v3 ranges like `>=3.4.0 <4.0.0` stay tailwind-v3.
+  const withoutUpper = spec.replace(/<=?\s*v?[0-9A-Za-z._-]+/gu, " ");
+  const re = /(?:^|[\s|^~>=])v?(\d+)(?=[.\-xX*\s|]|$)/gu;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(withoutUpper)) !== null) {
+    if (Number(match[1]) >= 4) return "tailwind-v4";
+  }
+  return "tailwind-v3";
+}
+
+function stripCssCommentsForScan(css: string, scss = false): string {
+  let out = "";
+  let quote: string | null = null;
+  for (let i = 0; i < css.length; i += 1) {
+    const ch = css[i];
+    if (quote !== null) {
+      out += ch;
+      if (ch === "\\" && i + 1 < css.length) {
+        out += css[i + 1];
+        i += 1;
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && css[i + 1] === "*") {
+      const end = css.indexOf("*/", i + 2);
+      if (end < 0) break;
+      out += " ";
+      i = end + 1;
+      continue;
+    }
+    if (scss && ch === "/" && css[i + 1] === "/") {
+      const nl = css.indexOf("\n", i + 2);
+      if (nl < 0) break;
+      out += "\n";
+      i = nl;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 function scanWorkspacePaths(rootReal: string): string[] {
   // Breadth-first scan with a dedicated stylesheet reservation so large >600-file codebases
-  // never starve top-level CSS token stylesheets (e.g. `styles/globals.css`, `src/index.css`).
+  // never starve top-level CSS token stylesheets (e.g. `styles/globals.css`, `src/index.css`),
+  // while still utilizing the full `maxScanFiles` budget when a repo has fewer CSS files.
   const cssFound: string[] = [];
   const otherFound: string[] = [];
-  const maxOther = Math.max(1, REDESIGN_LIMITS.maxScanFiles - REDESIGN_LIMITS.maxScanCssFiles);
+  const minOtherWhenCssFull = Math.max(1, REDESIGN_LIMITS.maxScanFiles - REDESIGN_LIMITS.maxScanCssFiles);
   let entriesSeen = 0;
   const queue: Array<{ dir: string; depth: number }> = [{ dir: rootReal, depth: 0 }];
+  let head = 0;
 
-  while (queue.length > 0 && entriesSeen < REDESIGN_LIMITS.maxScanEntries) {
-    if (cssFound.length >= REDESIGN_LIMITS.maxScanCssFiles && otherFound.length >= maxOther) break;
-    const { dir, depth } = queue.shift()!;
+  while (head < queue.length && entriesSeen < REDESIGN_LIMITS.maxScanEntries) {
+    if (cssFound.length >= REDESIGN_LIMITS.maxScanCssFiles && otherFound.length >= minOtherWhenCssFull) break;
+    const { dir, depth } = queue[head];
+    head += 1;
     if (depth > REDESIGN_LIMITS.maxScanDepth) continue;
     let entries;
     try {
@@ -1028,11 +1111,11 @@ function scanWorkspacePaths(rootReal: string): string[] {
         }
       } else if (entry.isFile()) {
         const ext = extname(entry.name).toLowerCase();
-        const rel = relative(rootReal, join(dir, entry.name)).replace(/\\/gu, "/");
+        const rel = relative(rootReal, join(dir, entry.name)).split(sep).join("/");
         if (CSS_EXTS.has(ext)) {
           if (cssFound.length < REDESIGN_LIMITS.maxScanCssFiles) cssFound.push(rel);
         } else if (CODE_EXTS.has(ext) || ext === ".html") {
-          if (otherFound.length < maxOther) otherFound.push(rel);
+          if (otherFound.length < REDESIGN_LIMITS.maxScanFiles) otherFound.push(rel);
         }
       }
     }
@@ -1069,8 +1152,7 @@ export function analyzeCodebase(workspaceRoot: string) {
   // Detect styling systems & scan tokens + contracts
   const styling = new Set<string>();
   if (typeof allDeps.tailwindcss === "string") {
-    const isV4 = /(?:^|[\^~>=<\s])4(?:\.|$)/u.test(allDeps.tailwindcss);
-    styling.add(isV4 ? "tailwind-v4" : "tailwind-v3");
+    styling.add(detectTailwindMajor(allDeps.tailwindcss));
   }
   if (allDeps["@stylexjs/stylex"] || allDeps["@astryxdesign/core"]) styling.add("stylex");
 
@@ -1086,9 +1168,10 @@ export function analyzeCodebase(workspaceRoot: string) {
     } catch {
       continue;
     }
-    if (/@theme\b/u.test(text)) styling.add("tailwind-v4");
+    const isScss = rel.toLowerCase().endsWith(".scss");
+    if (/@theme\b/u.test(stripCssCommentsForScan(text, isScss))) styling.add("tailwind-v4");
     if (rel.endsWith(".module.css") || rel.endsWith(".module.scss")) styling.add("css-modules");
-    const props = extractCssCustomProperties(text, { scss: rel.toLowerCase().endsWith(".scss") });
+    const props = extractCssCustomProperties(text, { scss: isScss });
     if (props.length > 0) styling.add("css-variables");
     for (const prop of props) tokens.push({ file: rel, name: prop.name, value: prop.value });
   }

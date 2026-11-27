@@ -14,18 +14,18 @@ Ninerr requires Node.js `22.18+` (22.x) or `24.11+`. Installing fetches dependen
 ```bash
 npm ci --ignore-scripts
 
-# Verify environment, local browser availability, and zero-egress readiness
+# Verify environment, projects folder, and offline readiness
 node bin/ninerr.mjs doctor
 
 # Generate client config (Codex, Claude Code, OpenCode, Cursor, Gemini CLI) & install 19 official Ninerr skills
-node bin/ninerr.mjs connect --client codex --install-skills
+node bin/ninerr.mjs connect codex --install-skills ./ninerr-skills
 
-# Initialize a new design project with brief + semantic tokens
-node bin/ninerr.mjs init --domain enterprise-saas --name "Acme Console"
+# Initialize a new local design project folder
+node bin/ninerr.mjs init ./acme-console --name "Acme Console"
 
-# Plan 3 WCAG-AA aesthetic directions, audit taste/accessibility, or inspect an existing app
+# Plan 3 WCAG-AA aesthetic directions or inspect an existing app workspace
 node bin/ninerr.mjs design plan --domain fintech --name "Ledger"
-node bin/ninerr.mjs redesign inspect --workspace ./path/to/your-app
+node bin/ninerr.mjs redesign inspect ./path/to/your-app
 
 # Run the reproducible 14-category offline benchmark suite
 npm run benchmark
@@ -39,7 +39,7 @@ To build and install the standalone Ninerr Engine tarball locally, see `docs/ENG
 - **Ninerr Intelligence, Taste & Motion (`packages/design-intelligence`):** 9 domain archetypes, 3-direction WCAG-AA aesthetic planner, brief-aware Taste & anti-slop evaluator, 8 motion tokens + 13 presets with mandatory `prefers-reduced-motion` compilation, and 19 official Ninerr agent skills.
 - **Ninerr Components & Design Systems (`packages/component-sources`, `packages/document-model`, `packages/studio-host`):** 41 editable, token-bound WCAG-AA native components across 8 categories, multi-mode design tokens (Light / Dark / WCAG AAA High-Contrast), W3C DTCG import/export, CSS-property-type-aware design-system audits, responsive `@media`/`@container` breakpoints, and 3-way component registry updates.
 - **Ninerr Vision & Critic (`packages/vision`, `packages/design-assurance`):** Zero-dependency native Node CDP driver over local Chromium/Edge/Chrome with 3-layer zero-egress containment, multi-viewport screenshots, pure-JS PNG pixel diffing, computed DOM/contrast/overflow telemetry, unified static + rendered critique, and bounded in-memory auto-improvement.
-- **Existing-Application Redesign Engine (`packages/studio-host/src/redesign.ts`, `packages/code-ir`):** Offline framework/styling/token/contract discovery, 3-tier bounded CSS & JSX patching (`className`, `cn`, `clsx`, `twMerge`, `cva`), Whole-File `@babel/parser` AST Business-Logic Invariance Gate, SHA-256 plan tokens, atomic multi-file writes, and byte-for-byte rollback journals.
+- **Existing-Application Redesign Engine (`packages/studio-host/src/redesign.ts`, `packages/code-ir`):** Offline framework/styling/token/contract discovery, 3-tier bounded CSS & JSX patching (`className`, `cn`, `clsx`, `cx`, `twMerge`, `classNames`), Whole-File `@babel/parser` AST Business-Logic Invariance Gate, SHA-256 plan tokens, atomic multi-file writes, and byte-for-byte rollback journals.
 - **Ninerr Research (`packages/studio-host/src/research.ts`, `packages/import-stack`):** Local rights-aware reference packs (`observed-inspiration-only`), offline HTML/CSS pattern extraction, and explicit opt-in CLI-only pinned-IP HTTPS metric capture (`ninerr research capture --allow-network`).
 - **Multi-Framework Exporters & Local SDK (`packages/studio-host/src/code.ts`, `packages/studio-host/src/sdk.ts`):** Export designs to HTML, React JSX, Tailwind TSX, Vue 3 SFC, Svelte 5 SFC, and Astro, or embed Ninerr directly via `ninerr/sdk`.
 - **Reproducible Benchmarks & Real-World Dogfooding (`benchmarks/README.md`, `scripts/benchmark.mjs`):** 14-category offline benchmark with a 9-dimension rubric strictly separating deterministic automated scores (65%) from pending blinded human/evaluator rubrics (35%).

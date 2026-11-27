@@ -54,16 +54,16 @@ All three fixes are locked with permanent regression tests in `tests/redesign.te
 ### Local Research, Multi-Framework Export & Vision Verification
 
 - **Ninerr Research (`extractPatternsFromSource`):** Extracted structured palettes and custom properties offline across real app stylesheets (`app-gamma-web`: 32 colors, 570 custom properties; `app-gamma-astro`: 32 colors; `app-delta`: 32 colors, 1,089 custom properties).
-- **Ninerr Vision & Critic (`renderAndInspect` + `improveDesignInMemory`):** Rendered live desktop (`1280x800`) and mobile (`390x844`) viewports in local headless Chromium/Edge with zero network egress, reducing an intentional multi-defect test document's defect score from **80 -> 0** in 3 atomic node operations.
+- **Ninerr Vision & Critic (`renderAndInspect` + `improveDesignInMemory`):** Rendered live custom desktop (`1280x800`) and mobile (`390x844`) viewports in local headless Chromium/Edge with zero network egress, reducing an intentional multi-defect test document's defect score from **80 -> 0** in 3 atomic node operations.
 - **Multi-Framework Exporters:** Verified clean HTML, React JSX, Tailwind TSX, Vue 3 SFC, Svelte 5 SFC, and Astro static outputs across all authoring benchmark categories.
 
 ## 5. 14-Category Reproducible Benchmark Results
 
-Command: `npm run benchmark` (offline static suite) and `ninerr benchmark run --category mobile-app-shell --vision --json` (live local browser Vision spot check).
+Command: `npm run benchmark` (offline static suite covering all 9 canonical `ARCHETYPE_IDS`) and `ninerr benchmark run --category mobile-app-shell --vision --json` (live local browser Vision spot check over `STANDARD_VIEWPORTS`).
 
-- **Offline 14-category wall-clock duration:** `747.4 ms` (`networkAttempts = 0`)
-- **Automated Deterministic Mean:** **`64.51 / 65` pts (`99.2%`)** across all 14 categories (`saas-dashboard`, `landing-page`, `settings-console`, `data-analytics`, `auth-onboarding`, `checkout-pricing`, `mobile-app-shell`, `healthcare-clinical`, `fintech-ledger`, `developer-console`, `creative-portfolio`, `editorial-docs`, `theme-high-contrast`, `existing-app-redesign`).
-- **Live Vision Spot Check (`mobile-app-shell --vision`):** `visionUsed = true`, `networkAttempts = 0`, `10,889.6 ms` (<15s budget), defect score reduced **`56 -> 34`** (`0` errors, `0` accessibility errors/warnings), automated score **`64.5 / 65` pts (`99.2%`)**.
+- **Offline 14-category wall-clock duration:** `745.3 ms` (`networkAttempts = 0`)
+- **Automated Deterministic Mean:** **`64.14 / 65` pts (`98.7%`)** across all 14 categories (`saas-dashboard`, `landing-page`, `settings-console`, `data-analytics`, `auth-onboarding`, `checkout-pricing`, `mobile-app-shell`, `healthcare-clinical`, `fintech-ledger`, `developer-console`, `creative-portfolio`, `editorial-docs`, `theme-high-contrast`, `existing-app-redesign`).
+- **Live Vision Spot Check (`mobile-app-shell --vision`, `consumer-mobile` archetype):** `visionUsed = true`, `documentNetworkAttempts = 0` (`browserContainmentBlocked = 13` OS/browser background telemetry probes blocked by Layer 1 containment proxy), `3,410.2 ms` (<15s budget), defect score reduced **`59 -> 43`** (`0` errors, `1` mobile touch-target accessibility warning -> `accessibility: 95`), automated score **`63.5 / 65` pts (`97.7%`)**.
 - **Blinded Human/Evaluator Rubric (35 pts — `aesthetic` 20 + `ux` 15):** Explicitly recorded as `pending-blinded-human-review` (`null`). Ninerr never fabricates or auto-fills subjective human scores.
 
 ## 6. Explicit Remaining Limitations
