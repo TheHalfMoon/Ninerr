@@ -22,9 +22,9 @@ function makeConfig(names = MCP_TOOL_NAMES) {
   };
 }
 
-test("the catalog is Ninerr's 56-tool surface, frozen and without duplicates", () => {
-  assert.equal(MCP_TOOL_NAMES.length, 56);
-  assert.equal(new Set(MCP_TOOL_NAMES).size, 56);
+test("the catalog is Ninerr's 57-tool surface, frozen and without duplicates", () => {
+  assert.equal(MCP_TOOL_NAMES.length, 57);
+  assert.equal(new Set(MCP_TOOL_NAMES).size, 57);
   assert.ok(Object.isFrozen(MCP_TOOL_NAMES));
   for (const name of MCP_TOOL_NAMES) assert.match(name, /^[a-z]+(?:_[a-z]+)*$/u, name);
 });
@@ -39,7 +39,7 @@ test("each tool is classified by what it does to the document", () => {
   assert.throws(() => classifyTool(""), MCPContractError);
   const classes = MCP_TOOL_NAMES.map(classifyTool);
   assert.equal(classes.filter((value) => value === "read").length, 22);
-  assert.equal(classes.filter((value) => value === "write").length, 31);
+  assert.equal(classes.filter((value) => value === "write").length, 32);
   assert.equal(classes.filter((value) => value === "consequential").length, 3);
   // Design tokens and components (ADR-0004, ADR-0005): deleting a token needs the person.
   assert.equal(classifyTool("design_tokens"), "read");

@@ -14,7 +14,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const DEFAULT_TIMEOUT_MS = 25_000;
+const DEFAULT_TIMEOUT_MS = 35_000;
 const MAX_STDERR_BYTES = 16_384;
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
@@ -427,13 +427,21 @@ export async function withContainedBrowser({ browserPath, allowedOrigin = null, 
       "--remote-debugging-address=127.0.0.1",
       "--remote-debugging-port=0",
       `--user-data-dir=${userDataDir}`,
+      ...(process.platform === "linux" ? ["--disable-dev-shm-usage"] : []),
       ...(process.platform === "linux" && typeof process.getuid === "function" && process.getuid() === 0 ? ["--no-sandbox"] : []),
       "about:blank",
     ];
 
+    const childEnv = { ...process.env };
+    if (process.platform === "linux") {
+      // Avoid Chromium hanging on broken container DBUS_SESSION_BUS_ADDRESS values in headless CI.
+      delete childEnv.DBUS_SESSION_BUS_ADDRESS;
+    }
+
     child = spawn(executable, args, {
       stdio: ["ignore", "ignore", "pipe"],
       detached: process.platform !== "win32",
+      env: childEnv,
     });
 
     const wsUrl = await new Promise((resolve, reject) => {

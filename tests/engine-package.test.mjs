@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildEngine, workspaceImportsIn } from "../scripts/build-engine.mjs";
 
@@ -125,6 +125,14 @@ test("installed with npm, the engine checks out with `ninerr doctor`, and its ta
     assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr);
     assert.match(doctor.stdout, /ok {3}the engine creates a project, designs in it and writes a preview/u);
     assert.match(doctor.stdout, /Everything Ninerr needs is in place\./u);
+    // Programmatic local SDK entrypoint (`sdk.mjs`) loads and executes offline from the installed tarball.
+    const sdkProbe = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", `import * as sdk from ${JSON.stringify(pathToFileURL(join(home, "sdk.mjs")).href)}; const p = sdk.planDesignDirections({ domain: "saas-dashboard", productName: "Probe" }); const pat = sdk.extractPatternsFromSource({ html: "<main><h1>Hi</h1></main>", css: ":root { --a: #111; }" }); console.log(JSON.stringify({ dirs: p.directions.length, policy: pat.rightsPolicy, vue: typeof sdk.exportVue, inv: typeof sdk.verifyFunctionalInvariance }));`],
+      { encoding: "utf8" },
+    );
+    assert.equal(sdkProbe.status, 0, sdkProbe.stdout + sdkProbe.stderr);
+    assert.deepEqual(JSON.parse(sdkProbe.stdout), { dirs: 3, policy: "observed-inspiration-only", vue: "function", inv: "function" });
   } finally {
     for (const folder of [packs, prefix, projects]) rmSync(folder, { recursive: true, force: true, maxRetries: 5 });
   }

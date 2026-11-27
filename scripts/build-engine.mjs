@@ -187,14 +187,24 @@ export function buildEngine(out) {
   const bin = readFileSync(join(ROOT, "bin", "ninerr.mjs"), "utf8").replace('"../packages/studio-host/src/index.ts"', '"@ninerr/studio-host"');
   if (!bin.includes('from "@ninerr/studio-host"')) fail("bin/ninerr.mjs no longer imports the studio host as the build expects");
   writeFileSync(join(out, "bin", "ninerr.mjs"), bin);
+  // The programmatic local SDK entrypoint (`import { ... } from "ninerr"` or `"ninerr/sdk"`).
+  writeFileSync(
+    join(out, "sdk.mjs"),
+    'export * from "./node_modules/@ninerr/studio-host/src/sdk.js";\n',
+  );
   for (const file of ["LICENSE", "THIRD_PARTY_NOTICES.md", "SECURITY.md", "README.md"]) cpSync(join(ROOT, file), join(out, file));
 
   const engine = {
     name: "ninerr",
     version: product.version,
-    description: "Ninerr Engine: an agent-first, local design engine with a headless MCP server.",
+    description: "Ninerr Engine: an agent-first, local design intelligence engine, SDK, and headless MCP server.",
     license: product.license,
     type: "module",
+    main: "./sdk.mjs",
+    exports: {
+      ".": "./sdk.mjs",
+      "./sdk": "./sdk.mjs",
+    },
     bin: { ninerr: "bin/ninerr.mjs" },
     engines: { node: "^22.18.0 || >=24.11.0" },
     dependencies: Object.fromEntries([...[...external].sort(), ...bundled.map((name) => [name, "0.0.0"])]),

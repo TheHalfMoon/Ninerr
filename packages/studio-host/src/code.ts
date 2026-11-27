@@ -364,6 +364,65 @@ export function exportHtml(
   return { componentName, html, layers, codeParts };
 }
 
+function frameworkExportBundle(document: any, nodeId: unknown) {
+  const { design, componentName, layers, codeParts, stylesheet, tokens } = exportDesign(document, nodeId);
+  let markup: string;
+  try {
+    markup = designToMarkup(design);
+  } catch (error) {
+    throw refused(error);
+  }
+  const safeCss = (css: string) => css.replace(/<\/style/giu, "<\\/style");
+  return { componentName, markup, layers, codeParts, stylesheet: stylesheet ? safeCss(stylesheet) : null, tokens: tokens ? safeCss(tokens) : null };
+}
+
+function escapeTemplateBraces(markup: string, mode: "vue" | "single"): string {
+  // Preserve HTML comments verbatim while preventing text braces from being evaluated as template expressions.
+  return markup.replace(/<!--[\s\S]*?-->|[\s\S]+?(?=<!--|$)/gu, (segment) => {
+    if (segment.startsWith("<!--")) return segment;
+    if (mode === "vue") return segment.replaceAll("{{", "&#123;&#123;").replaceAll("}}", "&#125;&#125;");
+    return segment.replaceAll("{", "&#123;").replaceAll("}", "&#125;");
+  });
+}
+
+/** Export a layer as a static Vue 3 Single-File Component (`.vue`), sanitized identically to the canvas. */
+export function exportVue(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number } {
+  const { componentName, markup, layers, codeParts, stylesheet, tokens } = frameworkExportBundle(document, nodeId);
+  const safeTemplate = escapeTemplateBraces(markup, "vue").replace(/<\/template/giu, "<\\/template");
+  const blocks = [`<template>\n${safeTemplate}\n</template>`];
+  if (tokens !== null) blocks.push(`<style>\n${tokens.trimEnd()}\n</style>`);
+  if (stylesheet !== null) blocks.push(`<style scoped>\n${stylesheet.trimEnd()}\n</style>`);
+  return { componentName, code: `${blocks.join("\n\n")}\n`, layers, codeParts };
+}
+
+/** Export a layer as a static Svelte 5 component (`.svelte`), sanitized identically to the canvas. */
+export function exportSvelte(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number } {
+  const { componentName, markup, layers, codeParts, stylesheet, tokens } = frameworkExportBundle(document, nodeId);
+  const safeMarkup = escapeTemplateBraces(markup, "single").replace(/<\/style/giu, "<\\/style");
+  const blocks = [safeMarkup];
+  const cssParts: string[] = [];
+  if (tokens !== null) {
+    // Wrap token root and mode selectors in :global(...) so var(--...) resolves cleanly in Svelte scoped styles.
+    const globalTokens = tokens
+      .replace(/(^|\n)\s*(:root|\[data-ninerr-mode[^\n{]*\])\s*\{/gu, "$1:global($2) {")
+      .trimEnd();
+    cssParts.push(globalTokens);
+  }
+  if (stylesheet !== null) cssParts.push(stylesheet.trimEnd());
+  if (cssParts.length > 0) blocks.push(`<style>\n${cssParts.join("\n\n")}\n</style>`);
+  return { componentName, code: `${blocks.join("\n\n")}\n`, layers, codeParts };
+}
+
+/** Export a layer as a static Astro component (`.astro`), sanitized identically to the canvas. */
+export function exportAstro(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number } {
+  const { componentName, markup, layers, codeParts, stylesheet, tokens } = frameworkExportBundle(document, nodeId);
+  const safeMarkup = escapeTemplateBraces(markup, "single").replace(/<\/style/giu, "<\\/style");
+  const blocks = [`---\n// Exported by Ninerr (${componentName})\n---`, safeMarkup];
+  if (tokens !== null) blocks.push(`<style is:global>\n${tokens.trimEnd()}\n</style>`);
+  if (stylesheet !== null) blocks.push(`<style>\n${stylesheet.trimEnd()}\n</style>`);
+  return { componentName, code: `${blocks.join("\n\n")}\n`, layers, codeParts };
+}
+
 /** Layers for JSX source, inside a new page frame, as one operation. */
 /** Where a layer brought in from a connected codebase came from (PC11). */
 export interface CodeSource {
