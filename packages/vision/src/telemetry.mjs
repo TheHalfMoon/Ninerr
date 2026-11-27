@@ -117,7 +117,7 @@ function telemetryScriptFor(targetWidth, targetHeight) {
             nodeId: id,
             label,
             tag,
-            contrastRatio: Number(cr.toFixed(2)),
+            contrastRatio: Math.floor(cr * 100) / 100,
             required: min,
             color: style.color,
             effectiveBackground: "rgb(" + bg[0] + ", " + bg[1] + ", " + bg[2] + ")",

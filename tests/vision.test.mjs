@@ -191,4 +191,26 @@ test("unified Ninerr Critic and bounded in-memory improveDesign reduce defects c
   assert.ok(improved.final.defectScore < improved.baseline.defectScore, `score dropped from ${improved.baseline.defectScore} to ${improved.final.defectScore}`);
   assert.equal(improved.final.errors, 0, "all deterministic errors resolved in memory");
   assert.ok(improved.operations.length >= 2, "collapsed into one atomic operations array");
+
+  // Non-pixel units (rem / %) are preserved, not mistakenly deleted by target-size fix.
+  const remDoc = applyTransaction(createDocument({ id: "doc-rem", name: "Rem" }), {
+    id: "tx-rem",
+    baseRevision: 0,
+    actor: "test",
+    actorKind: "agent",
+    intent: "seed",
+    timestamp: "2026-11-27T00:00:00.000Z",
+    operations: [
+      { type: "insert-node", parentId: null, index: 0, node: { id: "btn-rem", type: "element", props: { tag: "button", text: "Go", style: { height: "2.5rem", width: "100%" } } } },
+    ],
+  }).document;
+  const remReport = buildCritiqueReport({
+    document: remDoc,
+    visionCaptures: [{ viewport: { id: "mobile", width: 375, height: 812 }, telemetry: { horizontalOverflow: false, overflowPx: 0, viewport: { width: 375, height: 812 }, documentSize: { scrollWidth: 375, scrollHeight: 400 }, overflowingElements: [], clippedText: [], lowContrast: [], smallTargets: [{ nodeId: "btn-rem", label: "btn-rem", tag: "button", width: 20, height: 20, severity: "error", threshold: 24 }], brokenImages: [], overlappingControls: [] } }],
+  });
+  const remImp = await improveDesignInMemory(remDoc, {
+    maxIterations: 1,
+    evaluate: (cand) => (cand.nodes["btn-rem"].props.style["min-height"] === "36px" ? buildCritiqueReport({ document: cand }) : remReport),
+  });
+  assert.equal(remImp.operations[0].set.style.height, "2.5rem", "rem height is preserved");
 });

@@ -119,7 +119,7 @@ function tokensUsedUnder(document: any, nodeId: string): string | null {
 }
 
 // A layer and what it holds as the design subset code-ir writes, as the canvas draws it.
-function exportDesign(document: any, nodeId: unknown): { design: DesignDoc; componentName: string; layers: number; codeParts: number; stylesheet: string | null; tokens: string | null } {
+function exportDesign(document: any, nodeId: unknown, { includeNodeIds = false }: { includeNodeIds?: boolean } = {}): { design: DesignDoc; componentName: string; layers: number; codeParts: number; stylesheet: string | null; tokens: string | null } {
   if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes, nodeId)) throw new StudioError(404, "node-not-found", "no such layer");
   // Instances export as the layers they draw (ADR-0005), as the canvas shows them.
   const stored = document;
@@ -224,6 +224,7 @@ function exportDesign(document: any, nodeId: unknown): { design: DesignDoc; comp
     // The design-system modes it takes (ADR-0004), which the exported token CSS selects on.
     const modes = modeAttribute(node.props);
     if (modes !== null) props["data-ninerr-mode"] = modes;
+    if (includeNodeIds) props["data-ninerr-id"] = id;
     if (exportedId.has(id)) props.id = exportedId.get(id)!;
     if (labelTarget.has(id)) props.htmlFor = labelTarget.get(id)!;
     else if (props.htmlFor !== undefined) delete props.htmlFor; // names nothing in this export
@@ -317,13 +318,20 @@ const HTML_EXPORT_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-in
  * canvas (@scope, whose root takes what the canvas renamed html, body and :root to). A {…} part
  * is code and is written as a comment. The page loads nothing and runs nothing.
  */
-export function exportHtml(document: any, nodeId: unknown): { componentName: string; html: string; layers: number; codeParts: number } {
-  const { design, componentName, layers, codeParts, stylesheet, tokens } = exportDesign(document, nodeId);
+export function exportHtml(
+  document: any,
+  nodeId: unknown,
+  options: { includeNodeIds?: boolean; modeOverride?: string } = {},
+): { componentName: string; html: string; layers: number; codeParts: number } {
+  const { design, componentName, layers, codeParts, stylesheet, tokens } = exportDesign(document, nodeId, { includeNodeIds: options.includeNodeIds === true });
   // The page's stylesheet applies to the layer that holds it (on the canvas, @scope of that frame).
   // Exporting that layer, its element is the scope; exporting one inside it, a wrapper stands in.
   const owner = typeof nodeId === "string" && typeof document.nodes[nodeId]?.props?.stylesheet === "string";
   const root = design.root;
   if (stylesheet !== null && owner) root.props = { ...root.props, "data-ninerr-page": "" };
+  if (typeof options.modeOverride === "string" && /^[A-Za-z0-9_.-]{1,64}:[A-Za-z0-9_.-]{1,64}$/u.test(options.modeOverride)) {
+    root.props = { ...root.props, "data-ninerr-mode": options.modeOverride };
+  }
   // The modes the layer is drawn in on the canvas, set on it or on a layer above it.
   if (root.props["data-ninerr-mode"] === undefined && typeof nodeId === "string") {
     for (let id = document.nodes[nodeId]?.parentId ?? null, depth = 0; id !== null && depth <= MAX_EXPORT_DEPTH; depth += 1) {

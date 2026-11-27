@@ -9,7 +9,6 @@
   "dependencies": {
     "@ninerr/design-assurance": "0.0.0",
     "@ninerr/document-model": "0.0.0",
-    "@ninerr/history": "0.0.0",
-    "@ninerr/network-policy": "0.0.0"
+    "@ninerr/history": "0.0.0"
   }
 }

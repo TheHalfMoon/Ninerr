@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, briefProblem, compileTokens, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setBreakpoints, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
@@ -7,13 +7,14 @@ import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
 import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride, setLayout } from "@ninerr/canvas";
 import { NINERR_COMPONENT_CATEGORIES, RECORD_SOURCES, UI_COMPONENT_SOURCES, buildComponentOperations, getNinerrComponent, loadComponentRecords, searchComponents, searchNinerrComponents } from "@ninerr/component-sources";
 import { ARCHETYPE_IDS, DOMAIN_ARCHETYPES, MOTION_PRESETS, MOTION_PRESET_IDS, MOTION_TOKENS, compileMotionReact, compileMotionStylesheet, evaluateMotionFrequency, evaluateTaste, getDomainArchetype, getSkill, lintMotionCss, listSkills, planDesignDirections, renderSkillMarkdown } from "@ninerr/design-intelligence";
+import { STANDARD_VIEWPORTS, buildCritiqueReport, diffPngBuffers, discoverBrowser, improveDesignInMemory, renderAndInspect } from "@ninerr/vision";
 import { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
 import { auditDesignSystem, compileBreakpointsStylesheet, generateHighContrastMode, planThemeMigration } from "./design-system-ops.ts";
 import { StudioError } from "./errors.ts";
 import { ImportDesk } from "./imports.ts";
 import { planTokenCss } from "./token-import.ts";
 import { exportDtcgTokens, planDtcgTokens } from "./tokens-dtcg.ts";
-import { writeTrustedFile } from "./trusted-file.ts";
+import { writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
@@ -109,6 +110,7 @@ const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   export_design: ["name"],
   instantiate_component: ["label", "title", "description"],
   migrate_theme: ["tokens[].name", "tokens[].description", "breakpoints[].name"],
+  render_preview: ["name"],
 });
 const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
 
@@ -388,6 +390,7 @@ const TOOLS: Tool[] = [
         "Library components: search_components finds native editable Ninerr components (source: \"ninerr\", 41 components across 8 categories) as well as pinned component source records (Meta Astryx) by name or purpose; get_component gives one's exact props, variants, accessibility criteria, limitations, import path and provenance. instantiate_component places any native Ninerr component into the project in one atomic undoable change (as editable layers or as a reusable component definition and instance).",
         "Design systems: audit_design_system inspects token coverage, duplicates, unused tokens, hardcoded literal matches, and cross-mode WCAG contrast; migrate_theme atomically migrates light and dark semantic tokens, generates a WCAG AAA high-contrast mode, or configures responsive breakpoints and scoped responsive rules.",
         "Design intelligence: design_intelligence reads domain archetypes, plans multi-direction aesthetic tokens, runs brief-aware taste critique, inspects motion presets, checks motion frequency or CSS linting, and lists or renders official Ninerr skills. set_design_brief stores the structured product brief on the design system (optionally seeding a planned direction's tokens), and apply_motion attaches reduced-motion-safe keyframes and transitions to a layer stylesheet along with motion tokens.",
+        "Visual assurance and critique: render_preview renders a layer inside a local zero-egress browser across responsive viewports (saving PNG screenshots and optional pixel diffs to exports/previews); critique_design returns a unified deterministic and heuristic critique across accessibility, taste, design systems, and optional live browser telemetry; improve_design runs bounded in-memory non-regressing repairs and commits at most one atomic undoable change.",
       ].join("\n"),
     }),
   },
@@ -1950,6 +1953,363 @@ const TOOLS: Tool[] = [
       throw new ToolError(`unsupported migrate_theme action ${JSON.stringify(shownPlainly(String(action).slice(0, 64)))}`);
     },
   },
+  {
+    name: "render_preview",
+    title: "Render multi-viewport visual preview",
+    description: "Render a layer in a local 3-layer zero-egress Chromium/Edge browser across responsive viewports (mobile, tablet, desktop, etc.), writing PNG screenshots to the project's exports/previews folder, returning real computed DOM contrast/overflow/clipping/target telemetry, and optionally pixel-diffing against a prior preview.",
+    inputSchema: object({
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      name: { type: "string", minLength: 1, maxLength: 64 },
+      viewports: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", enum: Object.keys(STANDARD_VIEWPORTS) } },
+      colorScheme: { type: "string", enum: ["light", "dark"] },
+      reducedMotion: { type: "string", enum: ["no-preference", "reduce"] },
+      mode: { type: "string", minLength: 1, maxLength: 64 },
+      compareTo: { type: "string", minLength: 1, maxLength: 64 },
+      replace: { type: "boolean" },
+    }, ["nodeId"]),
+    run: async ({ session, dryRun }, given) => {
+      const args = onlyArguments(given, ["nodeId", "name", "viewports", "colorScheme", "reducedMotion", "mode", "compareTo", "replace"]);
+      const node = nodeOf(session, args.nodeId);
+      if (node.type === "design-system") throw new ToolError("cannot render a design-system node; choose a frame or element");
+
+      const baseName = typeof args.name === "string" && args.name !== "" ? args.name : "preview";
+      if (!EXPORT_NAME.test(baseName)) {
+        throw new ToolError("name must be 1-64 letters, digits, dashes or underscores, starting with a letter or digit");
+      }
+      if (args.compareTo !== undefined && (typeof args.compareTo !== "string" || !EXPORT_NAME.test(args.compareTo))) {
+        throw new ToolError("compareTo must be a valid preview name (1-64 letters, digits, dashes or underscores)");
+      }
+      if (args.replace !== undefined && typeof args.replace !== "boolean") {
+        throw new ToolError("replace must be a boolean");
+      }
+      const validViewports = Object.keys(STANDARD_VIEWPORTS);
+      const requestedViewports = args.viewports === undefined ? ["mobile", "desktop"] : args.viewports;
+      if (!Array.isArray(requestedViewports) || requestedViewports.length === 0 || requestedViewports.length > 5) {
+        throw new ToolError("viewports must contain 1 to 5 standard viewport ids");
+      }
+      const viewports: string[] = [];
+      for (const vp of requestedViewports) {
+        if (typeof vp !== "string" || !validViewports.includes(vp)) {
+          throw new ToolError(`unknown viewport ${JSON.stringify(shownPlainly(String(vp).slice(0, 40)))}; valid: ${validViewports.join(", ")}`);
+        }
+        if (!viewports.includes(vp)) viewports.push(vp);
+      }
+      if (args.colorScheme !== undefined && args.colorScheme !== "light" && args.colorScheme !== "dark") {
+        throw new ToolError("colorScheme must be \"light\" or \"dark\"");
+      }
+      if (args.reducedMotion !== undefined && args.reducedMotion !== "no-preference" && args.reducedMotion !== "reduce") {
+        throw new ToolError("reducedMotion must be \"no-preference\" or \"reduce\"");
+      }
+      const colorScheme = args.colorScheme === "dark" ? "dark" : "light";
+      const reducedMotion = args.reducedMotion === "reduce" ? "reduce" : "no-preference";
+      let modeOverride: string | undefined;
+      if (args.mode !== undefined) {
+        if (typeof args.mode !== "string" || !/^[A-Za-z0-9_.-]{1,64}(?::[A-Za-z0-9_.-]{1,64})?$/u.test(args.mode)) {
+          throw new ToolError("mode must be a mode id or collection:mode token identifier");
+        }
+        if (args.mode.includes(":")) {
+          modeOverride = args.mode;
+        } else {
+          const ds = designSystemOf(session.document as any);
+          const colId = ds?.props?.collections?.[0]?.id ?? "base";
+          modeOverride = `${colId}:${args.mode}`;
+        }
+      }
+
+      const exportsDir = join(session.root, "exports");
+      const previewsDir = join(exportsDir, "previews");
+      for (const dir of [exportsDir, previewsDir]) {
+        if (existsSync(dir)) {
+          const stat = lstatSync(dir);
+          if (stat.isSymbolicLink() || !stat.isDirectory()) {
+            throw new ToolError(`${dir} is not a real folder, so Ninerr will not write there`);
+          }
+        }
+      }
+      const plannedPaths = viewports.map((vp) => join(previewsDir, `${baseName}-${vp}.png`));
+      const plannedDiffPaths = typeof args.compareTo === "string"
+        ? viewports.map((vp) => join(previewsDir, `${baseName}-${vp}-diff.png`))
+        : [];
+      for (const p of [...plannedPaths, ...plannedDiffPaths]) {
+        if (existsSync(p)) {
+          const stat = lstatSync(p);
+          if (stat.isSymbolicLink() || !stat.isFile()) throw new ToolError(`refusing to overwrite non-regular file ${p}`);
+          if (args.replace !== true) throw new ToolError(`preview ${p} already exists; choose another name or pass replace: true`);
+        }
+      }
+
+      const browserPath = discoverBrowser();
+      if (dryRun) {
+        return {
+          dryRun: true,
+          nodeId: node.id,
+          viewports,
+          wouldWrite: plannedPaths,
+          browserAvailable: browserPath !== null,
+          revision: session.revision,
+        } as unknown as Json;
+      }
+      if (!browserPath) {
+        throw new ToolError("No local Chromium, Chrome, or Edge browser was found. Install Edge/Chrome/Chromium or set NINERR_BROWSER.");
+      }
+
+      const { html } = exportHtml(session.document, node.id, { includeNodeIds: true, ...(modeOverride ? { modeOverride } : {}) });
+      const rendered = await renderAndInspect({
+        html,
+        viewports,
+        colorScheme,
+        contrast: modeOverride?.includes("high-contrast") ? "more" : "no-preference",
+        reducedMotion,
+        captureScreenshot: true,
+        fullPage: true,
+        browserPath,
+      });
+
+      mkdirSync(previewsDir, { recursive: true });
+      const realPreviewsDir = realpathSync(previewsDir);
+      const readRegularBytes = (filePath: string, maxBytes: number): Buffer | null => {
+        const flags = constants.O_RDONLY | (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0);
+        let fd: number;
+        try {
+          fd = openSync(filePath, flags);
+        } catch {
+          return null;
+        }
+        try {
+          const st = fstatSync(fd);
+          if (!st.isFile() || st.size > maxBytes) return null;
+          const buf = Buffer.allocUnsafe(st.size);
+          let off = 0;
+          while (off < st.size) {
+            const n = readSync(fd, buf, off, st.size - off, off);
+            if (n === 0) break;
+            off += n;
+          }
+          return buf.subarray(0, off);
+        } finally {
+          closeSync(fd);
+        }
+      };
+
+      const results = [];
+      for (const cap of rendered.captures) {
+        const vpId = cap.viewport.id;
+        const outPath = join(realPreviewsDir, `${baseName}-${vpId}.png`);
+        if (existsSync(outPath) && lstatSync(outPath).isSymbolicLink()) {
+          throw new ToolError(`refusing to write through symbolic link ${outPath}`);
+        }
+        writeTrustedBytes(outPath, cap.pngBuffer);
+
+        let diffSummary: Record<string, unknown> | null = null;
+        if (typeof args.compareTo === "string") {
+          const baselinePath = join(realPreviewsDir, `${args.compareTo}-${vpId}.png`);
+          const baselineBytes = readRegularBytes(baselinePath, 32 * 1024 * 1024);
+          if (baselineBytes !== null) {
+            const diff = diffPngBuffers(baselineBytes, cap.pngBuffer, { emitDiffImage: true });
+            let diffPath: string | null = null;
+            if (diff.diffPng) {
+              diffPath = join(realPreviewsDir, `${baseName}-${vpId}-diff.png`);
+              if (existsSync(diffPath) && lstatSync(diffPath).isSymbolicLink()) {
+                throw new ToolError(`refusing to write through symbolic link ${diffPath}`);
+              }
+              writeTrustedBytes(diffPath, diff.diffPng);
+            }
+            diffSummary = {
+              baselinePath,
+              diffPath,
+              diffPixels: diff.diffPixels,
+              totalPixels: diff.totalPixels,
+              diffPercent: diff.diffPercent,
+              dimensionMismatch: diff.dimensionMismatch,
+              changedRegion: diff.changedRegion,
+            };
+          }
+        }
+
+        results.push({
+          viewport: cap.viewport,
+          path: outPath,
+          bytes: cap.bytes,
+          telemetry: cap.telemetry,
+          ...(diffSummary ? { diff: diffSummary } : {}),
+        });
+      }
+
+      return {
+        nodeId: node.id,
+        emulation: rendered.emulation,
+        egressBlocked: rendered.egress.totalBlocked,
+        captures: results,
+        revision: session.revision,
+      } as unknown as Json;
+    },
+  },
+  {
+    name: "critique_design",
+    title: "Unified Ninerr Critic",
+    description: "Read-only unified design critique combining static WCAG accessibility, brief-aware Ninerr Taste and Motion rules, Design System health audit, and optional real-browser Vision telemetry (overflow, clipping, computed contrast, overlap, touch targets) strictly classified into deterministic defects, heuristic observations, and subjective suggestions.",
+    inputSchema: object({
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      includeVision: { type: "boolean" },
+      viewports: { type: "array", minItems: 1, maxItems: 3, items: { type: "string", enum: Object.keys(STANDARD_VIEWPORTS) } },
+      colorScheme: { type: "string", enum: ["light", "dark"] },
+    }),
+    run: async ({ session }, given) => {
+      const args = onlyArguments(given, ["nodeId", "includeVision", "viewports", "colorScheme"]);
+      const rootId = args.nodeId === undefined ? null : nodeOf(session, args.nodeId).id;
+      if (args.includeVision !== undefined && typeof args.includeVision !== "boolean") {
+        throw new ToolError("includeVision must be a boolean");
+      }
+      if (args.colorScheme !== undefined && args.colorScheme !== "light" && args.colorScheme !== "dark") {
+        throw new ToolError("colorScheme must be \"light\" or \"dark\"");
+      }
+      const validViewports = Object.keys(STANDARD_VIEWPORTS);
+      const requestedViewports = args.viewports === undefined ? ["mobile", "desktop"] : args.viewports;
+      if (!Array.isArray(requestedViewports) || requestedViewports.length === 0 || requestedViewports.length > 3) {
+        throw new ToolError("viewports must contain 1 to 3 standard viewport ids");
+      }
+      const viewports: string[] = [];
+      for (const vp of requestedViewports) {
+        if (typeof vp !== "string" || !validViewports.includes(vp)) {
+          throw new ToolError(`unknown viewport ${JSON.stringify(shownPlainly(String(vp).slice(0, 40)))}`);
+        }
+        if (!viewports.includes(vp)) viewports.push(vp);
+      }
+
+      const document = session.document as any;
+      const taste = evaluateTaste(document, { rootId });
+      const systemAudit = auditDesignSystem(document);
+      let visionCaptures: any[] = [];
+      let visionUsed = false;
+      let visionNote: string | null = null;
+
+      if (args.includeVision === true) {
+        const targetId = rootId ?? (document.rootIds ?? []).find((id: string) => document.nodes[id]?.type !== "design-system") ?? null;
+        if (!targetId) {
+          visionNote = "No renderable frame or element found in the document.";
+        } else {
+          const browserPath = discoverBrowser();
+          if (!browserPath) {
+            visionNote = "No local Chromium/Chrome/Edge browser found; static critique returned without live browser telemetry.";
+          } else {
+            const { html } = exportHtml(document, targetId, { includeNodeIds: true });
+            const rendered = await renderAndInspect({
+              html,
+              viewports,
+              colorScheme: args.colorScheme === "dark" ? "dark" : "light",
+              captureScreenshot: false,
+              browserPath,
+            });
+            visionCaptures = rendered.captures;
+            visionUsed = true;
+          }
+        }
+      }
+
+      const report = buildCritiqueReport({
+        document,
+        rootId,
+        tasteFindings: taste.findings,
+        systemFindings: systemAudit.hasDesignSystem ? systemAudit.findings : [],
+        visionCaptures,
+      });
+
+      return {
+        nodeId: rootId,
+        visionUsed,
+        ...(visionNote ? { visionNote } : {}),
+        ...report,
+      } as unknown as Json;
+    },
+  },
+  {
+    name: "improve_design",
+    title: "Bounded iterative design improvement",
+    description: "Run bounded in-memory non-regressing deterministic repairs (contrast, touch targets, overflow, spacing grid, line-height, heavy shadows, GPU-safe motion, reduced-motion, missing alt) across up to 5 passes and commit at most one collapsed atomic undoable transaction. Supports dryRun preview.",
+    inputSchema: object({
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      maxIterations: { type: "integer", minimum: 1, maximum: 5 },
+      includeVision: { type: "boolean" },
+      viewports: { type: "array", minItems: 1, maxItems: 2, items: { type: "string", enum: Object.keys(STANDARD_VIEWPORTS) } },
+    }),
+    run: async ({ session, edit, dryRun }, given) => {
+      const args = onlyArguments(given, ["nodeId", "maxIterations", "includeVision", "viewports"]);
+      const rootId = args.nodeId === undefined ? null : nodeOf(session, args.nodeId).id;
+      if (args.maxIterations !== undefined && (!Number.isInteger(args.maxIterations) || (args.maxIterations as number) < 1 || (args.maxIterations as number) > 5)) {
+        throw new ToolError("maxIterations must be a whole number from 1 to 5");
+      }
+      if (args.includeVision !== undefined && typeof args.includeVision !== "boolean") {
+        throw new ToolError("includeVision must be a boolean");
+      }
+      const validViewports = Object.keys(STANDARD_VIEWPORTS);
+      const requestedViewports = args.viewports === undefined ? ["mobile", "desktop"] : args.viewports;
+      if (!Array.isArray(requestedViewports) || requestedViewports.length === 0 || requestedViewports.length > 2) {
+        throw new ToolError("viewports must contain 1 to 2 standard viewport ids");
+      }
+      const viewports: string[] = [];
+      for (const vp of requestedViewports) {
+        if (typeof vp !== "string" || !validViewports.includes(vp)) {
+          throw new ToolError(`unknown viewport ${JSON.stringify(shownPlainly(String(vp).slice(0, 40)))}`);
+        }
+        if (!viewports.includes(vp)) viewports.push(vp);
+      }
+
+      const browserPath = args.includeVision === true ? discoverBrowser() : null;
+      const maxIterations = typeof args.maxIterations === "number" ? args.maxIterations : 3;
+
+      const result = await improveDesignInMemory(session.document as any, {
+        maxIterations,
+        evaluate: async (candidateDoc: any) => {
+          const taste = evaluateTaste(candidateDoc, { rootId });
+          const systemAudit = auditDesignSystem(candidateDoc);
+          let visionCaptures: any[] = [];
+          if (args.includeVision === true && browserPath) {
+            const targetId = rootId ?? (candidateDoc.rootIds ?? []).find((id: string) => candidateDoc.nodes[id]?.type !== "design-system") ?? null;
+            if (targetId) {
+              const { html } = exportHtml(candidateDoc, targetId, { includeNodeIds: true });
+              const rendered = await renderAndInspect({
+                html,
+                viewports,
+                captureScreenshot: false,
+                browserPath,
+              });
+              visionCaptures = rendered.captures;
+            }
+          }
+          return buildCritiqueReport({
+            document: candidateDoc,
+            rootId,
+            tasteFindings: taste.findings,
+            systemFindings: systemAudit.hasDesignSystem ? systemAudit.findings : [],
+            visionCaptures,
+          });
+        },
+      });
+
+      if (result.operations.length === 0) {
+        return {
+          nodeId: rootId,
+          improved: false,
+          iterationsRun: result.iterationsRun,
+          baseline: result.baseline,
+          final: result.final,
+          history: result.history,
+          ...(dryRun ? { dryRun: true, wouldChange: [], operations: 0 } : {}),
+          revision: session.revision,
+        } as unknown as Json;
+      }
+
+      return {
+        nodeId: rootId,
+        improved: result.improved,
+        iterationsRun: result.iterationsRun,
+        baseline: result.baseline,
+        final: result.final,
+        history: result.history,
+        ...(edit(result.operations, `Improve design (${result.baseline.defectScore} -> ${result.final.defectScore})`) as object),
+      } as unknown as Json;
+    },
+  },
 ];
 
 const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
@@ -2141,7 +2501,7 @@ export interface McpContext {
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
-const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history", "design_intelligence", "audit_design_system"]);
+const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history", "design_intelligence", "audit_design_system", "critique_design"]);
 
 const rpcError = (id: Json, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 const toolResult = (value: Json, isError = false) => ({

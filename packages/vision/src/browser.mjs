@@ -8,9 +8,8 @@
 //            any explicitly human-authorized local preview origin.
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
-import { connect as netConnect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,21 +46,29 @@ function candidatePathsForPlatform() {
   ];
 }
 
+function isRegularExecutable(filePath) {
+  try {
+    return existsSync(filePath) && statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /** Discover an installed local Chromium-based browser executable (Edge, Chrome, or Chromium). */
 export function discoverBrowser(overridePath = process.env.NINERR_BROWSER) {
   if (typeof overridePath === "string" && overridePath.trim() !== "") {
     const trimmed = overridePath.trim();
-    if (existsSync(trimmed)) return trimmed;
+    if (isRegularExecutable(trimmed)) return trimmed;
     throw new Error(`NINERR_BROWSER executable not found at ${trimmed}`);
   }
   for (const candidate of candidatePathsForPlatform()) {
-    if (existsSync(candidate)) return candidate;
+    if (isRegularExecutable(candidate)) return candidate;
   }
   if (process.platform !== "win32") {
     for (const cmd of ["chromium", "chromium-browser", "google-chrome", "microsoft-edge"]) {
       try {
         const resolved = execFileSync("which", [cmd], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-        if (resolved && existsSync(resolved)) return resolved;
+        if (resolved && isRegularExecutable(resolved)) return resolved;
       } catch {
         // continue scanning
       }
@@ -127,17 +134,21 @@ export async function startStrictContainmentProxy({ allowedOrigin = null } = {})
     }
     const targetPort = target.port === "" ? 80 : Number(target.port);
     const targetHost = target.hostname.toLowerCase();
+    const hostMatches = allowed !== null && (
+      targetHost === allowed.hostname
+      || (allowed.hostname === "localhost" && targetHost === "127.0.0.1")
+    );
     const isAllowed = allowed !== null
       && target.protocol === "http:"
       && targetPort === allowed.port
-      && (targetHost === allowed.hostname || targetHost === "127.0.0.1" || targetHost === "localhost");
+      && hostMatches;
     if (!isAllowed) {
       recordDenied(target.href, "denied by Ninerr Vision zero-egress proxy");
       res.writeHead(403).end("Blocked by Ninerr Vision offline policy");
       return;
     }
     const upstream = httpRequest(
-      { host: "127.0.0.1", port: allowed.port, method: req.method, path: `${target.pathname}${target.search}`, headers: { ...req.headers, host: target.host } },
+      { host: allowed.host, port: allowed.port, method: req.method, path: `${target.pathname}${target.search}`, headers: { ...req.headers, host: target.host } },
       (reply) => {
         res.writeHead(reply.statusCode ?? 502, reply.headers);
         reply.pipe(res);
@@ -233,8 +244,10 @@ class CdpConnection {
         this.#pending.delete(id);
         reject(new Error(`CDP ${method} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
+      timer.unref?.();
       this.#pending.set(id, {
         method,
+        timer,
         resolve: (value) => { clearTimeout(timer); resolve(value); },
         reject: (err) => { clearTimeout(timer); reject(err); },
       });
@@ -243,9 +256,23 @@ class CdpConnection {
     });
   }
 
-  close() {
+  async close() {
+    for (const entry of this.#pending.values()) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error("CDP connection closed"));
+    }
+    this.#pending.clear();
+    this.#listeners.clear();
     try {
-      this.#ws.close();
+      if (this.#ws.readyState === WebSocket.OPEN || this.#ws.readyState === WebSocket.CONNECTING) {
+        const closed = new Promise((resolve) => {
+          const t = setTimeout(resolve, 500);
+          this.#ws.addEventListener("close", () => { clearTimeout(t); resolve(); }, { once: true });
+          this.#ws.addEventListener("error", () => { clearTimeout(t); resolve(); }, { once: true });
+        });
+        this.#ws.close();
+        await closed;
+      }
     } catch {
       // ignore close errors
     }
@@ -363,14 +390,18 @@ export async function withContainedBrowser({ browserPath, allowedOrigin = null, 
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
 
     // Layer 3: CDP Fetch.enable blocks any network request outside data:, about:, or allowed loopback origin.
-    const allowedPrefix = proxy.allowedOrigin ? `${proxy.allowedOrigin.origin}/` : null;
     const allowedExact = proxy.allowedOrigin ? proxy.allowedOrigin.origin : null;
     cdp.on("Fetch.requestPaused", ({ requestId, request }, sid) => {
       if (sid !== sessionId) return;
       const reqUrl = String(request?.url ?? "");
-      const ok = reqUrl === "about:blank"
-        || reqUrl.startsWith("data:")
-        || (allowedExact !== null && (reqUrl === allowedExact || reqUrl.startsWith(allowedPrefix)));
+      let ok = reqUrl === "about:blank" || reqUrl.startsWith("data:");
+      if (!ok && allowedExact !== null) {
+        try {
+          ok = new URL(reqUrl).origin === allowedExact;
+        } catch {
+          ok = false;
+        }
+      }
       if (ok) {
         void cdp.send("Fetch.continueRequest", { requestId }, sessionId).catch(() => {});
       } else {
@@ -432,15 +463,18 @@ export async function withContainedBrowser({ browserPath, allowedOrigin = null, 
   } finally {
     if (cdp) {
       await cdp.send("Browser.close", {}, undefined, 2_000).catch(() => {});
-      cdp.close();
+      await cdp.close();
     }
     terminateTree(child);
     if (child.exitCode === null) {
-      await Promise.race([
-        new Promise((resolve) => child.once("exit", resolve)),
-        new Promise((resolve) => setTimeout(resolve, 2_000)),
-      ]);
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, 2_000);
+        child.once("exit", () => { clearTimeout(t); resolve(); });
+      });
     }
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.unref?.();
     await proxy.close().catch(() => {});
     for (let attempt = 0; attempt < 10; attempt += 1) {
       try {

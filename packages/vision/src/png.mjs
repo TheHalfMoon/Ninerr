@@ -36,10 +36,13 @@ function paethPredictor(a, b, c) {
   return c;
 }
 
+const MAX_PNG_BYTES = 32 * 1024 * 1024;
+const MAX_PNG_PIXELS = 25_000_000;
+
 /** Decode an 8-bit RGB or RGBA non-interlaced PNG Buffer into { width, height, data: Uint8Array (RGBA) }. */
 export function decodePng(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 33 || !buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
-    throw new Error("invalid PNG signature");
+  if (!Buffer.isBuffer(buffer) || buffer.length < 33 || buffer.length > MAX_PNG_BYTES || !buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    throw new Error("invalid PNG signature or oversized buffer");
   }
   let offset = 8;
   let width = 0;
@@ -48,6 +51,7 @@ export function decodePng(buffer) {
   let colorType = 0;
   let interlace = 0;
   const idatChunks = [];
+  let totalIdatBytes = 0;
 
   while (offset + 12 <= buffer.length) {
     const length = buffer.readUInt32BE(offset);
@@ -66,11 +70,15 @@ export function decodePng(buffer) {
       bitDepth = data[8];
       colorType = data[9];
       interlace = data[12];
-      if (width === 0 || height === 0 || width > 16_384 || height > 16_384) throw new Error("PNG dimensions out of bounds");
+      if (width === 0 || height === 0 || width > 16_384 || height > 16_384 || width * height > MAX_PNG_PIXELS) {
+        throw new Error("PNG dimensions out of bounds");
+      }
       if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6) || interlace !== 0) {
         throw new Error(`unsupported PNG format (depth=${bitDepth}, colorType=${colorType}, interlace=${interlace})`);
       }
     } else if (type === "IDAT") {
+      totalIdatBytes += length;
+      if (totalIdatBytes > MAX_PNG_BYTES) throw new Error("PNG IDAT exceeds size limit");
       idatChunks.push(data);
     } else if (type === "IEND") {
       break;
@@ -81,8 +89,9 @@ export function decodePng(buffer) {
   if (width === 0 || height === 0 || idatChunks.length === 0) throw new Error("incomplete PNG image");
   const channels = colorType === 6 ? 4 : 3;
   const stride = width * channels;
-  const raw = inflateSync(Buffer.concat(idatChunks));
-  if (raw.length < height * (stride + 1)) throw new Error("PNG inflated data shorter than expected");
+  const expectedRawBytes = height * (stride + 1);
+  const raw = inflateSync(Buffer.concat(idatChunks), { maxOutputLength: expectedRawBytes });
+  if (raw.length < expectedRawBytes) throw new Error("PNG inflated data shorter than expected");
 
   const reconstructed = new Uint8Array(height * stride);
   for (let y = 0; y < height; y += 1) {

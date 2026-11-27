@@ -9,10 +9,16 @@
 // non-regression after every candidate pass, and returns ONE atomic operation batch.
 
 import { auditAccessibility, contrastRatio, parseOpaqueColor } from "@ninerr/design-assurance";
+import { isCodePart } from "@ninerr/document-model";
 import { applyTransaction } from "@ninerr/history";
 import { visionTelemetryFindings } from "./telemetry.mjs";
 
 const SEVERITY_RANK = Object.freeze({ error: 0, warning: 1, info: 2 });
+const PX_VALUE = /^(\d+(?:\.\d+)?)px$/iu;
+
+function compareCodeUnits(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
 function toNeutralTree(document, nodeId) {
   const node = document.nodes[nodeId];
@@ -101,8 +107,9 @@ export function buildCritiqueReport({
 
   findings.sort((a, b) => (
     SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
-    || a.ruleId.localeCompare(b.ruleId)
-    || String(a.nodeId ?? "").localeCompare(String(b.nodeId ?? ""))
+    || compareCodeUnits(a.ruleId, b.ruleId)
+    || compareCodeUnits(String(a.nodeId ?? ""), String(b.nodeId ?? ""))
+    || compareCodeUnits(a.message, b.message)
   ));
 
   const deterministicDefects = findings.filter((f) => f.kind === "deterministic-defect").length;
@@ -153,7 +160,7 @@ function proposeDeterministicFixes(document, report) {
   const patchFor = (nodeId) => {
     if (!Object.hasOwn(document.nodes, nodeId)) return null;
     const node = document.nodes[nodeId];
-    if (node.type === "design-system" || node.type === "component-instance") return null;
+    if (node.type === "design-system" || node.type === "component-instance" || node.type === "component-definition" || isCodePart(node)) return null;
     let entry = patchesByNode.get(nodeId);
     if (!entry) {
       entry = {
@@ -187,18 +194,23 @@ function proposeDeterministicFixes(document, report) {
     } else if (finding.ruleId === "taste:interactive-target-size" || finding.ruleId === "vision:target-below-24px") {
       patch.style["min-height"] = "36px";
       patch.style["min-width"] = "36px";
-      if (patch.style.height && parseFloat(patch.style.height) < 36) delete patch.style.height;
+      delete patch.style.minHeight;
+      delete patch.style.minWidth;
+      if (typeof patch.style.height === "string" && PX_VALUE.test(patch.style.height) && parseFloat(patch.style.height) < 36) delete patch.style.height;
       patch.styleChanged = true;
       patch.reasons.push(`raised target size on ${finding.nodeId} to >=36px`);
     } else if (finding.ruleId === "taste:mobile-touch-target" || finding.ruleId === "vision:mobile-target-below-44px") {
       patch.style["min-height"] = "44px";
-      if (patch.style.height && parseFloat(patch.style.height) < 44) delete patch.style.height;
+      delete patch.style.minHeight;
+      if (typeof patch.style.height === "string" && PX_VALUE.test(patch.style.height) && parseFloat(patch.style.height) < 44) delete patch.style.height;
       patch.styleChanged = true;
       patch.reasons.push(`raised mobile touch target on ${finding.nodeId} to >=44px`);
     } else if (finding.ruleId === "vision:horizontal-overflow") {
       patch.style["max-width"] = "100%";
       patch.style["box-sizing"] = "border-box";
-      if (patch.style.width && parseFloat(patch.style.width) > 320) patch.style.width = "100%";
+      delete patch.style.maxWidth;
+      delete patch.style.boxSizing;
+      if (typeof patch.style.width === "string" && PX_VALUE.test(patch.style.width) && parseFloat(patch.style.width) > 320) patch.style.width = "100%";
       patch.styleChanged = true;
       patch.reasons.push(`constrained horizontal overflow on ${finding.nodeId}`);
     } else if (finding.ruleId === "taste:body-tight-leading") {
@@ -227,7 +239,7 @@ function proposeDeterministicFixes(document, report) {
       patch.styleChanged = true;
       patch.reasons.push(`replaced heavy drop shadow on ${finding.nodeId} with subtle elevation`);
     } else if (finding.ruleId === "motion:gpu-composited-only" && typeof patch.stylesheet === "string") {
-      const updated = patch.stylesheet.replace(/\btransition\s*:\s*[^;{}]+/giu, "transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), opacity 150ms cubic-bezier(0.23, 1, 0.32, 1)");
+      const updated = patch.stylesheet.replace(/(?<![\w-])transition\s*:\s*[^;{}]+/giu, "transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), opacity 150ms cubic-bezier(0.23, 1, 0.32, 1)");
       if (updated !== patch.stylesheet) {
         patch.stylesheet = updated;
         patch.stylesheetChanged = true;
@@ -240,7 +252,7 @@ function proposeDeterministicFixes(document, report) {
         patch.reasons.push(`added prefers-reduced-motion fallback to ${finding.nodeId}`);
       }
     } else if (finding.ruleId === "a11y:image-alt") {
-      if (patch.attributes.alt === undefined) {
+      if (!Object.hasOwn(patch.attributes, "alt")) {
         patch.attributes.alt = "";
         patch.attributesChanged = true;
         patch.reasons.push(`added decorative alt="" attribute on ${finding.nodeId}`);
