@@ -17,7 +17,7 @@ import { createInterface } from "node:readline";
 import * as studioHost from "../packages/studio-host/src/index.ts";
 const { prepareProjectsFolder, resolveProjectsFolder, runHeadless } = studioHost;
 
-const USAGE = "usage: ninerr mcp [--projects <folder>] [--workspace <folder>] | ninerr doctor [--projects <folder>] | ninerr init [<folder>] | ninerr connect <codex|claude|opencode|cursor|gemini|all> | ninerr export <project-folder> --format <fmt> | ninerr design <plan|archetypes|archetype|skills> | ninerr motion <presets|compile|lint|react|frequency> | ninerr components <list|show> | ninerr tokens <audit|merge> | ninerr <preview|critique|audit|improve> <project-folder> | ninerr redesign <inspect|plan|apply|rollback> <workspace> | ninerr research <list|extract|create|capture> | ninerr --version";
+const USAGE = "usage: ninerr mcp [--projects <folder>] [--workspace <folder>] | ninerr doctor [--projects <folder>] | ninerr init [<folder>] | ninerr connect <codex|claude|opencode|cursor|gemini|all> | ninerr export <project-folder> --format <fmt> | ninerr design <plan|archetypes|archetype|skills> | ninerr motion <presets|compile|lint|react|frequency> | ninerr components <list|show> | ninerr tokens <audit|merge> | ninerr <preview|critique|audit|improve> <project-folder> | ninerr redesign <inspect|plan|apply|rollback> <workspace> | ninerr research <list|extract|create|capture> | ninerr benchmark <list|run> | ninerr --version";
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 function fail(message) {

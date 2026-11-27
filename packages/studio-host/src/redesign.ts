@@ -33,6 +33,7 @@ import { readWithSecurity } from "./windows-security.ts";
 
 export const REDESIGN_LIMITS = Object.freeze({
   maxScanFiles: 600,
+  maxScanCssFiles: 120,
   maxScanDepth: 12,
   maxScanEntries: 20_000,
   maxFileBytes: 512 * 1024,
@@ -652,7 +653,8 @@ function collectUnsafeStylingOccurrences(ast: any): Map<string, number> {
   const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
 
   const staticFragment = (expr: any, depth = 0): string | null => {
-    if (!expr || typeof expr !== "object" || depth > 8) return null;
+    if (!expr || typeof expr !== "object") return null;
+    if (depth > 8) return "__DEPTH_EXCEEDED__";
     if (expr.type === "StringLiteral") return expr.value;
     if (expr.type === "NumericLiteral") return String(expr.value);
     if (expr.type === "BooleanLiteral") return String(expr.value);
@@ -693,31 +695,34 @@ function collectUnsafeStylingOccurrences(ast: any): Map<string, number> {
         }
         continue;
       }
-      if (cur.type === "TemplateLiteral") {
-        let folded = "";
-        let allStatic = true;
-        const quasis = cur.quasis ?? [];
-        const exprs = cur.expressions ?? [];
-        for (let i = 0; i < quasis.length; i += 1) {
-          folded += String(quasis[i]?.value?.cooked ?? quasis[i]?.value?.raw ?? "");
-          if (i < exprs.length) {
-            const part = staticFragment(exprs[i], 0);
-            if (part !== null) {
-              folded += part;
-            } else {
-              allStatic = false;
-              folded += " __dyn__ ";
-              stack.push(exprs[i]);
-            }
+    if (cur.type === "TemplateLiteral") {
+      let folded = "";
+      let allStatic = true;
+      let depthExceeded = false;
+      const quasis = cur.quasis ?? [];
+      const exprs = cur.expressions ?? [];
+      for (let i = 0; i < quasis.length; i += 1) {
+        folded += String(quasis[i]?.value?.cooked ?? quasis[i]?.value?.raw ?? "");
+        if (i < exprs.length) {
+          const part = staticFragment(exprs[i], 0);
+          if (part === "__DEPTH_EXCEEDED__") {
+            depthExceeded = true;
+          } else if (part !== null) {
+            folded += part;
+          } else {
+            allStatic = false;
+            folded += " __dyn__ ";
+            stack.push(exprs[i]);
           }
         }
-        if (UNSAFE_STYLING_PATTERN.test(folded)) {
-          bump(`unsafe-tpl:${folded}`);
-        } else if (isStyleAttr && allStatic && cssValueProblem(folded) !== null) {
-          bump(`invalid-style:${folded}`);
-        }
-        continue;
       }
+      if (depthExceeded || UNSAFE_STYLING_PATTERN.test(folded)) {
+        bump(`unsafe-tpl:${depthExceeded ? "depth-exceeded" : folded}`);
+      } else if (isStyleAttr && allStatic && cssValueProblem(folded) !== null) {
+        bump(`invalid-style:${folded}`);
+      }
+      continue;
+    }
       if (cur.type === "TemplateElement") {
         const text = String(cur.value?.cooked ?? cur.value?.raw ?? "");
         if (UNSAFE_STYLING_PATTERN.test(text)) {
@@ -995,34 +1000,44 @@ export function extractCssCustomProperties(
 }
 
 function scanWorkspacePaths(rootReal: string): string[] {
-  const files: string[] = [];
+  // Breadth-first scan with a dedicated stylesheet reservation so large >600-file codebases
+  // never starve top-level CSS token stylesheets (e.g. `styles/globals.css`, `src/index.css`).
+  const cssFound: string[] = [];
+  const otherFound: string[] = [];
+  const maxOther = Math.max(1, REDESIGN_LIMITS.maxScanFiles - REDESIGN_LIMITS.maxScanCssFiles);
   let entriesSeen = 0;
-  const walk = (dir: string, depth: number) => {
-    if (depth > REDESIGN_LIMITS.maxScanDepth || files.length >= REDESIGN_LIMITS.maxScanFiles || entriesSeen >= REDESIGN_LIMITS.maxScanEntries) {
-      return;
-    }
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: rootReal, depth: 0 }];
+
+  while (queue.length > 0 && entriesSeen < REDESIGN_LIMITS.maxScanEntries) {
+    if (cssFound.length >= REDESIGN_LIMITS.maxScanCssFiles && otherFound.length >= maxOther) break;
+    const { dir, depth } = queue.shift()!;
+    if (depth > REDESIGN_LIMITS.maxScanDepth) continue;
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => compareCodeUnits(a.name, b.name));
     } catch {
-      return;
+      continue;
     }
     for (const entry of entries) {
       entriesSeen += 1;
-      if (files.length >= REDESIGN_LIMITS.maxScanFiles || entriesSeen >= REDESIGN_LIMITS.maxScanEntries) break;
+      if (entriesSeen > REDESIGN_LIMITS.maxScanEntries) break;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name.toLowerCase())) walk(join(dir, entry.name), depth + 1);
+        if (!SKIP_DIRS.has(entry.name.toLowerCase()) && depth + 1 <= REDESIGN_LIMITS.maxScanDepth) {
+          queue.push({ dir: join(dir, entry.name), depth: depth + 1 });
+        }
       } else if (entry.isFile()) {
         const ext = extname(entry.name).toLowerCase();
-        if (CODE_EXTS.has(ext) || CSS_EXTS.has(ext) || ext === ".html") {
-          files.push(relative(rootReal, join(dir, entry.name)).replace(/\\/gu, "/"));
+        const rel = relative(rootReal, join(dir, entry.name)).replace(/\\/gu, "/");
+        if (CSS_EXTS.has(ext)) {
+          if (cssFound.length < REDESIGN_LIMITS.maxScanCssFiles) cssFound.push(rel);
+        } else if (CODE_EXTS.has(ext) || ext === ".html") {
+          if (otherFound.length < maxOther) otherFound.push(rel);
         }
       }
     }
-  };
-  walk(rootReal, 0);
-  return files;
+  }
+  return [...cssFound, ...otherFound].slice(0, REDESIGN_LIMITS.maxScanFiles);
 }
 
 /**
@@ -1054,7 +1069,8 @@ export function analyzeCodebase(workspaceRoot: string) {
   // Detect styling systems & scan tokens + contracts
   const styling = new Set<string>();
   if (typeof allDeps.tailwindcss === "string") {
-    styling.add(allDeps.tailwindcss.includes("4") ? "tailwind-v4" : "tailwind-v3");
+    const isV4 = /(?:^|[\^~>=<\s])4(?:\.|$)/u.test(allDeps.tailwindcss);
+    styling.add(isV4 ? "tailwind-v4" : "tailwind-v3");
   }
   if (allDeps["@stylexjs/stylex"] || allDeps["@astryxdesign/core"]) styling.add("stylex");
 

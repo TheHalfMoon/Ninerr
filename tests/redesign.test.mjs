@@ -646,3 +646,30 @@ test("PR 487 review regressions: Tier 3 allowlist, .git/node_modules block, CSS/
     false,
   );
 }));
+
+test("dogfooding regressions: BFS CSS reservation finds globals.css beyond 600 TSX files, Tailwind 3.4 detects v3, and >8 nested template fails closed", () => withTempWorkspace((root) => {
+  mkdirSync(join(root, "app", "routes"), { recursive: true });
+  mkdirSync(join(root, "styles"), { recursive: true });
+  writeFileSync(join(root, "package.json"), JSON.stringify({
+    name: "large-tailwind-v3-app",
+    dependencies: { next: "15.1.0", react: "19.0.0", tailwindcss: "^3.4.17" },
+  }));
+  // Create 620 TSX files in app/routes/ (exceeds default maxScanFiles=600) so DFS would starve styles/globals.css.
+  for (let i = 0; i < 620; i += 1) {
+    writeFileSync(join(root, "app", "routes", `view-${String(i).padStart(4, "0")}.tsx`), `export const V${i} = () => <div className="p-4" />;\n`);
+  }
+  writeFileSync(join(root, "styles", "globals.css"), ":root { --bg-canvas: #ffffff; --brand-ink: #0f172a; }\n");
+
+  const analysis = analyzeCodebase(root);
+  assert.ok(analysis.styling.includes("tailwind-v3"), `expected tailwind-v3, got ${JSON.stringify(analysis.styling)}`);
+  assert.ok(!analysis.styling.includes("tailwind-v4"), `unexpected tailwind-v4 for ^3.4.17: ${JSON.stringify(analysis.styling)}`);
+  assert.equal(analysis.counts.cssFiles, 1);
+  assert.equal(analysis.counts.cssTokens, 2);
+
+  // Nested TemplateLiteral depth > 8 fails closed in verifyFunctionalInvariance (cannot smuggle url() past depth cap).
+  let deep = `"l(https://evil.test/x)"`;
+  for (let d = 0; d < 10; d += 1) deep = `\`\${${deep}}\``;
+  const before = 'export const A = () => <div className="p-4" />;';
+  const after = `export const A = () => <div className="p-4" style={{ backgroundImage: \`ur\${${deep}}\` }} />;`;
+  assert.equal(verifyFunctionalInvariance(before, after, "A.tsx").ok, false);
+}));

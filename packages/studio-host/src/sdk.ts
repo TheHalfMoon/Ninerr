@@ -92,3 +92,9 @@ export {
   listLocalReferencePacks,
   writeLocalReferencePack,
 } from "./research.ts";
+
+export {
+  BENCHMARK_CATEGORIES,
+  BENCHMARK_RUBRIC,
+  runBenchmarkSuite,
+} from "./benchmark.ts";

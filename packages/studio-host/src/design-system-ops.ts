@@ -136,18 +136,36 @@ export function auditDesignSystem(document: any) {
   const collectionsById = new Map<string, any>(collections.map((c) => [c.id, c]));
 
   // Single-pass index of every token used by layers (var() refs and local custom-property declarations)
-  // AND hardcoded style values matching defined tokens, avoiding O(tokens * nodes * styles).
-  const literalToTokens = new Map<string, string[]>();
+  // AND hardcoded style values matching defined tokens, filtered by compatible CSS property -> token type
+  // so e.g. `font-size: 16px` never falsely suggests `--radius-lg` or `--space-4`.
+  const cssPropToTokenTypes = (field: string): readonly string[] | null => {
+    const idx = field.lastIndexOf(".");
+    const prop = (idx >= 0 ? field.slice(idx + 1) : field).toLowerCase();
+    if (prop === "font-size") return ["fontSize"];
+    if (prop === "font-family") return ["fontFamily"];
+    if (prop === "font-weight") return ["fontWeight"];
+    if (prop === "line-height") return ["lineHeight"];
+    if (prop === "letter-spacing") return ["letterSpacing"];
+    if (prop === "opacity") return ["opacity"];
+    if (prop === "box-shadow" || prop === "text-shadow") return ["shadow"];
+    if (prop === "transition-duration" || prop === "animation-duration") return ["duration"];
+    if (prop === "transition-timing-function" || prop === "animation-timing-function") return ["easing"];
+    if (prop === "border-radius" || (prop.startsWith("border-") && prop.endsWith("-radius"))) return ["radius"];
+    if (prop === "gap" || prop === "row-gap" || prop === "column-gap" || prop === "padding" || prop.startsWith("padding-") || prop === "margin" || prop.startsWith("margin-")) return ["spacing"];
+    if (prop === "color" || prop === "background" || prop === "background-color" || prop === "outline-color" || prop === "fill" || prop === "stroke" || (prop.startsWith("border-") && prop.endsWith("-color"))) return ["color"];
+    return null;
+  };
+  const literalToTokens = new Map<string, Array<{ name: string; type: string }>>();
   for (const token of tokens) {
     const defaultMode = defaultModes.get(token.collection);
     const val = defaultMode && Object.hasOwn(token.values ?? {}, defaultMode) ? token.values[defaultMode] : undefined;
     if (typeof val !== "string" || tokenReferences(val).length > 0) continue;
     const norm = val.trim().toLowerCase();
     const list = literalToTokens.get(norm) ?? [];
-    list.push(token.name);
+    list.push({ name: token.name, type: token.type });
     literalToTokens.set(norm, list);
   }
-  for (const list of literalToTokens.values()) list.sort(compareCodeUnits);
+  for (const list of literalToTokens.values()) list.sort((a, b) => compareCodeUnits(a.name, b.name));
 
   const usedByLayers = new Set<string>();
   let hardcodedMatches = 0;
@@ -162,7 +180,11 @@ export function auditDesignSystem(document: any) {
         for (const match of stripped.matchAll(DECL_RE)) usedByLayers.add(match[1]);
       } else if (field !== "stylesheet" && refs.length === 0) {
         const norm = value.trim().toLowerCase();
-        const matched = literalToTokens.get(norm);
+        const candidates = literalToTokens.get(norm);
+        const allowedTypes = cssPropToTokenTypes(field);
+        const matched = candidates
+          ?.filter((entry) => allowedTypes === null || allowedTypes.includes(entry.type))
+          .map((entry) => entry.name);
         if (matched && matched.length > 0) {
           hardcodedMatches += 1;
           findings.push({

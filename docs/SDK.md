@@ -58,6 +58,9 @@ import {
 - `extractPatternsFromSource({ html, css })` — offline palette, typography, spacing, layout, and custom-property extractor (`observed-inspiration-only`)
 - `createLocalReferencePack({ packId, entries })`, `writeLocalReferencePack(...)`, `listLocalReferencePacks(dir)`
 
+### 6. Reproducible Benchmarks
+- `BENCHMARK_CATEGORIES`, `BENCHMARK_RUBRIC`, `runBenchmarkSuite({ categories, includeVision })` — runs the 14-category offline benchmark suite with strict separation of automated metrics (65 pts) and pending blinded human rubrics (35 pts).
+
 ## Example: Plan, Critique, and Export Offline
 
 ```js
