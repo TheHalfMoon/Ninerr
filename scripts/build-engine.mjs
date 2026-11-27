@@ -18,9 +18,41 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-// The desktop app (Electron) is frozen and is not part of the engine (founder, 2026-11-14).
-const LEFT_OUT = new Set(["desktop"]);
+// Only workspace packages actually reachable from bin/ninerr.mjs (through @ninerr/* imports
+// and workspace dependencies) are bundled into the headless engine package; the frozen desktop
+// app, browser studio-web UI, and unreferenced research/governance packages stay out.
+const LEFT_OUT = new Set(["desktop", "studio-web"]);
 const RELATIVE_TS = /((?:from|import)\s*\(?\s*)(["'])(\.{1,2}\/[^"'\n]+?)\.ts\2/gu;
+const WORKSPACE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)["']@ninerr\/([a-z][a-z0-9-]*)["']/gmu;
+
+/** Workspace packages reachable from `entry` (excluding desktop and browser UI). */
+export function engineReachablePackages(entry = join(ROOT, "bin", "ninerr.mjs")) {
+  const found = new Set();
+  const queue = [];
+  const enqueue = (name) => {
+    if (LEFT_OUT.has(name) || found.has(name)) return;
+    if (!existsSync(join(ROOT, "packages", name, "package.json"))) fail(`unknown workspace package @ninerr/${name}`);
+    found.add(name);
+    queue.push(name);
+  };
+  const entryText = readFileSync(entry, "utf8");
+  for (const [, name] of entryText.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)["']\.\.\/packages\/([a-z][a-z0-9-]*)\//gu)) enqueue(name);
+  for (const [, name] of entryText.matchAll(WORKSPACE_IMPORT)) enqueue(name);
+  while (queue.length > 0) {
+    const name = queue.pop();
+    const pkgDir = join(ROOT, "packages", name);
+    const manifest = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+    for (const dep of Object.keys(manifest.dependencies ?? {})) {
+      if (dep.startsWith("@ninerr/")) enqueue(dep.slice("@ninerr/".length));
+    }
+    for (const rel of filesUnder(pkgDir)) {
+      if (!/\.(?:mjs|js|cjs|ts)$/u.test(rel)) continue;
+      const text = readFileSync(join(pkgDir, rel), "utf8");
+      for (const [, imported] of text.matchAll(WORKSPACE_IMPORT)) enqueue(imported);
+    }
+  }
+  return [...found].sort();
+}
 
 function fail(message) {
   process.stderr.write(`build-engine: ${message}\n`);
@@ -56,8 +88,7 @@ export function buildEngine(out) {
 
   const bundled = [];
   const external = new Map();
-  for (const name of readdirSync(join(ROOT, "packages")).sort()) {
-    if (LEFT_OUT.has(name)) continue;
+  for (const name of engineReachablePackages()) {
     const source = join(ROOT, "packages", name);
     const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8"));
     const target = join(out, "node_modules", "@ninerr", name);

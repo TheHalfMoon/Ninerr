@@ -44,6 +44,9 @@ test("the engine package carries no TypeScript, every import in it resolves, and
   assert.equal(engine.version, product.version);
   assert.deepEqual(engine.bin, { ninerr: "bin/ninerr.mjs" });
   assert.ok(!engine.bundleDependencies.includes("@ninerr/desktop"), "the frozen desktop app is not in the engine");
+  for (const excluded of ["@ninerr/studio-web", "@ninerr/agent-supervisor", "@ninerr/visual-git", "@ninerr/decision-router", "@ninerr/architecture", "@ninerr/delivery-governance"]) {
+    assert.ok(!engine.bundleDependencies.includes(excluded), `${excluded} is not bundled in the headless engine`);
+  }
   for (const name of ["@ninerr/studio-host", "@ninerr/persistence", "@ninerr/mcp-protocol", "@ninerr/document-model"]) assert.ok(engine.bundleDependencies.includes(name), name);
   for (const [name, version] of Object.entries(engine.dependencies)) {
     if (name.startsWith("@ninerr/")) continue;

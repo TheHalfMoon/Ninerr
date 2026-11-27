@@ -19,6 +19,8 @@ on:
       - scripts/check-release-tag.mjs
       - package.json
       - package-lock.json
+      - bin/ninerr.mjs
+      - scripts/build-engine.mjs
       - scripts/package-desktop.mjs
       - scripts/fetch-electron.mjs
       - scripts/desktop/electron.mjs
@@ -222,4 +224,4 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" out/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
             --title "Ninerr $TAG" \
-            --notes "Desktop archives for Linux x64, macOS arm64 and Windows x64, and the signed evidence bundle for $GITHUB_SHA. Every file carries a Sigstore build-provenance attestation from this repository's release workflow; see docs/RELEASE.md to verify one. Local web mode runs from the tagged source (docs/RELEASE.md)."
+            --notes "Ninerr Engine package tarball and the signed release-evidence bundle for $GITHUB_SHA. Every file carries a Sigstore build-provenance attestation from this repository's release workflow; see docs/ENGINE.md to install and docs/RELEASE.md to verify provenance."
