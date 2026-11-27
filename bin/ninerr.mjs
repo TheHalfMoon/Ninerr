@@ -14,9 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
-import { prepareProjectsFolder, resolveProjectsFolder, runHeadless } from "../packages/studio-host/src/index.ts";
+import * as studioHost from "../packages/studio-host/src/index.ts";
+const { prepareProjectsFolder, resolveProjectsFolder, runHeadless } = studioHost;
 
-const USAGE = "usage: ninerr mcp [--projects <folder>] | ninerr doctor [--projects <folder>] | ninerr --version";
+const USAGE = "usage: ninerr mcp [--projects <folder>] | ninerr doctor [--projects <folder>] | ninerr design <plan|archetypes|skills> | ninerr motion <presets|compile|lint|react|frequency> | ninerr --version";
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 function fail(message) {
@@ -32,6 +33,10 @@ if (command === "--version" || command === "version") {
 if (command === "help" || command === "--help" || command === "-h") {
   process.stdout.write(`${USAGE}\n`);
   process.exit(0);
+}
+if (Array.isArray(studioHost.EXTENDED_CLI_COMMANDS) && studioHost.EXTENDED_CLI_COMMANDS.includes(command) && typeof studioHost.runCliCommand === "function") {
+  process.exitCode = await studioHost.runCliCommand(command, args, { version: VERSION });
+  process.exit(process.exitCode);
 }
 if (command !== "mcp" && command !== "doctor") fail(command === undefined ? "name a command" : `unknown command ${JSON.stringify(command)}`);
 let projects;
