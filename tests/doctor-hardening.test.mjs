@@ -50,3 +50,76 @@ test("doctor exits with a failed check if MCP initialize never answers", { timeo
     assert.match(result.stdout, /MCP initialize timed out/);
   });
 });
+
+test("doctor rejects a JSON-RPC error response instead of accepting it as a successful initialization", () => {
+  withFakeEngine('await new Promise((resolve) => input.once("data", resolve)); output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: "engine refused initialize" } }) + "\\n"); await new Promise((resolve) => input.on("close", resolve));', (cli, root) => {
+    const result = spawnSync(process.execPath, [cli, "doctor", "--projects", root], {
+      encoding: "utf8", timeout: 5_000,
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /FAIL the engine creates a project/);
+    assert.match(result.stdout, /MCP error -32603: engine refused initialize/);
+  });
+});
+
+test("doctor rejects falsy and non-object JSON-RPC error values without crashing", () => {
+  for (const errorValue of [null, "denied", 0]) {
+    withFakeEngine(`await new Promise((resolve) => input.once("data", resolve)); output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, error: ${JSON.stringify(errorValue)} }) + "\\n"); await new Promise((resolve) => input.on("close", resolve));`, (cli, root) => {
+      const result = spawnSync(process.execPath, [cli, "doctor", "--projects", root], {
+        encoding: "utf8", timeout: 5_000,
+      });
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stdout, /FAIL the engine creates a project/);
+      assert.match(result.stdout, /MCP error:/);
+    });
+  }
+});
+
+test("doctor rejects a JSON-RPC response missing result instead of passing", () => {
+  withFakeEngine('await new Promise((resolve) => input.once("data", resolve)); output.write(JSON.stringify({ jsonrpc: "2.0", id: 1 }) + "\\n"); await new Promise((resolve) => input.on("close", resolve));', (cli, root) => {
+    const result = spawnSync(process.execPath, [cli, "doctor", "--projects", root], {
+      encoding: "utf8", timeout: 5_000,
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /FAIL the engine creates a project/);
+    assert.match(result.stdout, /MCP response missing result/);
+  });
+});
+
+test("doctor rejects a JSON-RPC error on a subsequent tool call", () => {
+  withFakeEngine(`
+    let seen = 0;
+    let buf = "";
+    input.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      while (buf.includes("\\n")) {
+        const at = buf.indexOf("\\n");
+        const line = buf.slice(0, at);
+        buf = buf.slice(at + 1);
+        if (!line.trim()) continue;
+        seen += 1;
+        if (seen === 1) output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-06-18" } }) + "\\n");
+        else if (seen === 2) output.write(JSON.stringify({ jsonrpc: "2.0", id: 2, error: { code: -32000, message: "disk full" } }) + "\\n");
+      }
+    });
+    await new Promise((resolve) => input.on("close", resolve));
+  `, (cli, root) => {
+    const result = spawnSync(process.execPath, [cli, "doctor", "--projects", root], {
+      encoding: "utf8", timeout: 5_000,
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /FAIL the engine creates a project/);
+    assert.match(result.stdout, /MCP error -32000: disk full/);
+  });
+});
+
+test("doctor exits cleanly with code 1 even if a broken engine never resolves after an RPC error", () => {
+  withFakeEngine('await new Promise((resolve) => input.once("data", resolve)); output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: "hung after error" } }) + "\\n"); await new Promise(() => {});', (cli, root) => {
+    const result = spawnSync(process.execPath, [cli, "doctor", "--projects", root], {
+      encoding: "utf8", timeout: 8_000,
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /MCP error -32603: hung after error/);
+    assert.match(result.stdout, /1 check failed\./);
+  });
+});
