@@ -125,14 +125,30 @@ test("installed with npm, the engine checks out with `ninerr doctor`, and its ta
     assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr);
     assert.match(doctor.stdout, /ok {3}the engine creates a project, designs in it and writes a preview/u);
     assert.match(doctor.stdout, /Everything Ninerr needs is in place\./u);
-    // Programmatic local SDK entrypoint (`sdk.mjs`) loads and executes offline from the installed tarball.
+    // Programmatic local SDK entrypoint (`sdk.mjs`) loads via @ninerr/studio-host/sdk exports from both global and local installs.
     const sdkProbe = spawnSync(
       process.execPath,
-      ["--input-type=module", "-e", `import * as sdk from ${JSON.stringify(pathToFileURL(join(home, "sdk.mjs")).href)}; const p = sdk.planDesignDirections({ domain: "saas-dashboard", productName: "Probe" }); const pat = sdk.extractPatternsFromSource({ html: "<main><h1>Hi</h1></main>", css: ":root { --a: #111; }" }); console.log(JSON.stringify({ dirs: p.directions.length, policy: pat.rightsPolicy, vue: typeof sdk.exportVue, inv: typeof sdk.verifyFunctionalInvariance }));`],
+      ["--input-type=module", "-e", `import * as sdk from ${JSON.stringify(pathToFileURL(join(home, "sdk.mjs")).href)}; const p = sdk.planDesignDirections({ domain: "enterprise-saas", productName: "Probe" }); const pat = sdk.extractPatternsFromSource({ html: "<main><h1>Hi</h1></main>", css: ":root { --a: #111; }" }); console.log(JSON.stringify({ dirs: p.directions.length, policy: pat.rightsPolicy, vue: typeof sdk.exportVue, inv: typeof sdk.verifyFunctionalInvariance }));`],
       { encoding: "utf8" },
     );
     assert.equal(sdkProbe.status, 0, sdkProbe.stdout + sdkProbe.stderr);
     assert.deepEqual(JSON.parse(sdkProbe.stdout), { dirs: 3, policy: "observed-inspiration-only", vue: "function", inv: "function" });
+
+    // Local `npm install <tarball>` supports bare-specifier `import("ninerr")` and `import("ninerr/sdk")`.
+    const consumer = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-sdk-consumer-")));
+    try {
+      const localInstall = npm(["install", "--ignore-scripts", "--prefer-offline", "--no-audit", "--no-fund", tarball], consumer);
+      assert.equal(localInstall.status, 0, localInstall.stderr);
+      const bareProbe = spawnSync(
+        process.execPath,
+        ["--input-type=module", "-e", 'import * as a from "ninerr"; import * as b from "ninerr/sdk"; console.log(JSON.stringify({ same: a.planDesignDirections === b.planDesignDirections, dirs: a.planDesignDirections({ domain: "fintech", productName: "Desk" }).directions.length, vue: typeof b.exportVue }));'],
+        { cwd: consumer, encoding: "utf8" },
+      );
+      assert.equal(bareProbe.status, 0, bareProbe.stdout + bareProbe.stderr);
+      assert.deepEqual(JSON.parse(bareProbe.stdout), { same: true, dirs: 3, vue: "function" });
+    } finally {
+      rmSync(consumer, { recursive: true, force: true, maxRetries: 5 });
+    }
   } finally {
     for (const folder of [packs, prefix, projects]) rmSync(folder, { recursive: true, force: true, maxRetries: 5 });
   }

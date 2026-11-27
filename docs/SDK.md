@@ -64,7 +64,7 @@ import {
 import { createDocument, planDesignDirections, exportVue, extractPatternsFromSource } from "ninerr";
 
 const plan = planDesignDirections({
-  domain: "fintech-ledger",
+  domain: "fintech",
   productName: "Treasury Desk",
   density: "compact",
 });

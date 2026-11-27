@@ -2695,8 +2695,23 @@ const TOOLS: Tool[] = [
       if (args.action === "load_pack") {
         const validName = validatePackFileName(args.fileName);
         const dir = projectRefsDir();
-        const available = listLocalReferencePacks(dir);
-        if (!available.includes(validName)) {
+        const target = join(dir, validName);
+        let stat = null;
+        try {
+          stat = lstatSync(target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT" && (error as NodeJS.ErrnoException)?.code !== "ENOTDIR") {
+            throw new ToolError(`could not inspect reference pack ${validName}`);
+          }
+        }
+        if (stat === null) {
+          throw new ToolError(`reference pack ${validName} was not found in this project's references folder`);
+        }
+        if (stat.isSymbolicLink() || !stat.isFile()) {
+          throw new ToolError(`reference pack ${validName} is not a regular non-symlink file`);
+        }
+        // Require exact filename match on case-insensitive filesystems.
+        if (!readdirSync(dir).includes(validName)) {
           throw new ToolError(`reference pack ${validName} was not found in this project's references folder`);
         }
         if (dryRun) {
@@ -2747,8 +2762,20 @@ const TOOLS: Tool[] = [
 
         const { pack, digest } = createLocalReferencePack({ packId, entries: normalizedEntries, now });
         const dir = projectRefsDir();
-        const existing = listLocalReferencePacks(dir);
-        if (existing.includes(validName) && args.replace !== true) {
+        const target = join(dir, validName);
+        let existingStat = null;
+        try {
+          existingStat = lstatSync(target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT" && (error as NodeJS.ErrnoException)?.code !== "ENOTDIR") {
+            throw new ToolError(`could not inspect reference pack ${validName}`);
+          }
+        }
+        if (existingStat !== null && (existingStat.isSymbolicLink() || !existingStat.isFile())) {
+          throw new ToolError(`refusing to overwrite symlink or non-regular file ${validName}`);
+        }
+        const caseCollision = existsSync(dir) && readdirSync(dir).some((entry) => entry.toLowerCase() === validName.toLowerCase());
+        if ((existingStat !== null || caseCollision) && args.replace !== true) {
           throw new ToolError(`reference pack ${validName} already exists (pass replace: true to overwrite)`);
         }
         if (dryRun) {

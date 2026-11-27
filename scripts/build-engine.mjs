@@ -190,7 +190,7 @@ export function buildEngine(out) {
   // The programmatic local SDK entrypoint (`import { ... } from "ninerr"` or `"ninerr/sdk"`).
   writeFileSync(
     join(out, "sdk.mjs"),
-    'export * from "./node_modules/@ninerr/studio-host/src/sdk.js";\n',
+    'export * from "@ninerr/studio-host/sdk";\n',
   );
   for (const file of ["LICENSE", "THIRD_PARTY_NOTICES.md", "SECURITY.md", "README.md"]) cpSync(join(ROOT, file), join(out, file));
 

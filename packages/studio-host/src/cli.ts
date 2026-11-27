@@ -1,7 +1,7 @@
 // Extended Ninerr CLI subcommands dispatched from bin/ninerr.mjs (`ninerr design ...`,
 // `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
 // Pure local execution, zero network.
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -39,7 +39,7 @@ import { exportAstro, exportHtml, exportJsx, exportSvelte, exportTailwind, expor
 import { auditDesignSystem, planRegistryItemUpdate } from "./design-system-ops.ts";
 import { resolveProjectsFolder } from "./projects-folder.ts";
 import { analyzeCodebase, applyRedesignPlan, assertNoSymlinkPath, assertWorkspaceRoot, planRedesign, rollbackRedesign } from "./redesign.ts";
-import { captureUrlReferenceMetrics, createLocalReferencePack, extractPatternsFromSource, listLocalReferencePacks, writeLocalReferencePack } from "./research.ts";
+import { captureUrlReferenceMetrics, createLocalReferencePack, ensureRealDirectory, extractPatternsFromSource, listLocalReferencePacks, validatePackFileName, writeLocalReferencePack } from "./research.ts";
 import { exportDtcgTokens } from "./tokens-dtcg.ts";
 import { writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
 
@@ -842,8 +842,12 @@ export async function runCliCommand(command: string, args: string[], options: Cl
         return 0;
       }
       const targetArg = positionals[0] ?? ".";
-      const targetDir = assertNoSymlinkPath(resolve(targetArg), "project directory");
-      mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+      const resolvedTarget = resolve(targetArg);
+      if (dirname(resolvedTarget) === resolvedTarget) {
+        err("ninerr init: choose a project subfolder, not the filesystem root\n");
+        return 2;
+      }
+      const targetDir = ensureRealDirectory(resolvedTarget, "project directory");
       const rawTitle = requireFlagValue("name") ?? (basename(targetDir) || "Ninerr Project");
       const title = rawTitle.slice(0, 200);
       const projectId = `proj-${randomUUID().slice(0, 12)}`;
@@ -918,13 +922,16 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       const installedSkills: string[] = [];
       const installSkillsDir = requireFlagValue("install-skills");
       if (installSkillsDir !== undefined) {
-        const skillsRoot = assertNoSymlinkPath(resolve(installSkillsDir), "--install-skills directory");
-        mkdirSync(skillsRoot, { recursive: true, mode: 0o700 });
+        const skillsRoot = ensureRealDirectory(resolve(installSkillsDir), "--install-skills directory");
         for (const skill of listSkills()) {
           if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(skill.id)) continue;
-          const skillDir = assertNoSymlinkPath(join(skillsRoot, skill.id), `skill directory ${skill.id}`);
-          mkdirSync(skillDir, { recursive: true, mode: 0o700 });
+          const skillDir = ensureRealDirectory(join(skillsRoot, skill.id), `skill directory ${skill.id}`);
           const skillPath = assertNoSymlinkPath(join(skillDir, "SKILL.md"), `skill file ${skill.id}`);
+          let skillStat = null;
+          try { skillStat = lstatSync(skillPath); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (skillStat !== null && (skillStat.isSymbolicLink() || !skillStat.isFile())) {
+            throw new Error(`refusing to overwrite symlink or non-regular file ${skillPath}`);
+          }
           writeTrustedFile(skillPath, renderSkillMarkdown(skill.id));
           installedSkills.push(skillPath);
         }
@@ -1011,15 +1018,15 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           let existing = null;
           try { existing = lstatSync(target); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
           if (existing !== null) {
-            if (existing.isSymbolicLink() || existing.isDirectory()) {
-              throw new Error(`--out ${JSON.stringify(outOpt)} must not be a symlink or directory`);
+            if (existing.isSymbolicLink() || !existing.isFile()) {
+              throw new Error(`--out ${JSON.stringify(outOpt)} must be a regular non-symlink file`);
             }
             if (flags.replace !== true) {
               err(`ninerr export: ${target} already exists (pass --replace to overwrite)\n`);
               return 2;
             }
           }
-          mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+          ensureRealDirectory(dirname(target), "--out parent directory");
           writeTrustedFile(target, text);
           if (asJson) {
             out(`${JSON.stringify({ path: target, format, componentName, layers, bytes: Buffer.byteLength(text, "utf8") }, null, 2)}\n`);
@@ -1124,6 +1131,27 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           err("ninerr research capture: <https-url>, --out-dir <dir>, and --name <pack.json> are required\n");
           return 2;
         }
+        // Validate pack filename, directory symlink safety, and overwrite policy BEFORE making any network call.
+        const validName = validatePackFileName(fileName);
+        const safeOutDir = assertNoSymlinkPath(resolve(outDir), "--out-dir directory");
+        let dirStat = null;
+        try { dirStat = lstatSync(safeOutDir); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+        if (dirStat !== null) {
+          if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+            throw new Error("--out-dir must be a regular non-symlink directory");
+          }
+          const target = join(safeOutDir, validName);
+          let fileStat = null;
+          try { fileStat = lstatSync(target); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (fileStat !== null && (fileStat.isSymbolicLink() || !fileStat.isFile())) {
+            throw new Error(`refusing to overwrite symlink or non-regular file ${validName}`);
+          }
+          const collision = readdirSync(safeOutDir).some((entry) => entry.toLowerCase() === validName.toLowerCase());
+          if ((fileStat !== null || collision) && flags.replace !== true) {
+            err(`ninerr research capture: ${validName} already exists in ${safeOutDir} (pass --replace to overwrite)\n`);
+            return 2;
+          }
+        }
         const title = requireFlagValue("title");
         const tagsOpt = requireFlagValue("tags");
         const tags = tagsOpt !== undefined ? tagsOpt.split(",").map((t) => t.trim()).filter(Boolean) : ["captured", "web"];
@@ -1133,7 +1161,7 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           ...(title ? { title } : {}),
           tags,
         });
-        const written = writeLocalReferencePack({ directory: resolve(outDir), fileName, pack: captured.pack, replace: flags.replace === true });
+        const written = writeLocalReferencePack({ directory: safeOutDir, fileName: validName, pack: captured.pack, replace: flags.replace === true });
         if (asJson) {
           out(`${JSON.stringify({ ...written, sourceUri: captured.sourceUri, rightsPolicy: "observed-inspiration-only", patterns: captured.patterns }, null, 2)}\n`);
         } else {

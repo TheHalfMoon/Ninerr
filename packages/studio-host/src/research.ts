@@ -3,11 +3,12 @@
 
 import { createHash } from "node:crypto";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { lstatSync, mkdirSync, readdirSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, realpathSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { join } from "node:path";
 import { normalizeReferencePack, referencePackDigest, withoutUnsafeText } from "@ninerr/import-stack";
+import { classifyAddress } from "@ninerr/network-policy";
 import { StudioError } from "./errors.ts";
 import { assertNoSymlinkPath, extractCssCustomProperties } from "./redesign.ts";
 import { writeTrustedFile } from "./trusted-file.ts";
@@ -15,14 +16,16 @@ import { writeTrustedFile } from "./trusted-file.ts";
 export const RESEARCH_LIMITS = Object.freeze({
   maxInputBytes: 512 * 1024,
   maxEntries: 64,
-  maxCaptureBytes: 1024 * 1024,
+  maxCaptureBytes: 512 * 1024,
   captureTimeoutMs: 10_000,
   maxPacksListed: 200,
 });
 
 const PACK_FILE_NAME = /^[a-z0-9][a-z0-9._-]{0,63}\.json$/u;
+const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu;
 const SAFE_TAG = /^[a-z0-9][a-z0-9._/-]{0,31}$/u;
 const OBJECT_KINDS = new Set(["screen", "flow", "pattern", "asset", "token", "component"]);
+const ALLOWED_CAPTURE_MIME = /^(?:text\/html|application\/xhtml\+xml|text\/css)(?:\s*;|$)/iu;
 const compareCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 function lstatOrNull(targetPath: string) {
@@ -35,9 +38,38 @@ function lstatOrNull(targetPath: string) {
   }
 }
 
+/**
+ * Create `dirPath` owner-only (`0o700`) and prove AFTER `mkdirSync` that neither the directory
+ * nor any ancestor component is a user symlink (closing post-mkdir symlink TOCTOU).
+ */
+export function ensureRealDirectory(dirPath: string, label: string): string {
+  const safeDir = assertNoSymlinkPath(dirPath, label);
+  const existing = lstatOrNull(safeDir);
+  if (existing !== null && (existing.isSymbolicLink() || !existing.isDirectory())) {
+    throw new StudioError(409, "symlink-refused", `${label} is not a regular directory`);
+  }
+  mkdirSync(safeDir, { recursive: true, mode: 0o700 });
+  const after = lstatOrNull(safeDir);
+  if (!after || after.isSymbolicLink() || !after.isDirectory()) {
+    throw new StudioError(409, "symlink-refused", `${label} is not a trusted directory`);
+  }
+  const real = realpathSync.native(safeDir);
+  const cmpSafe = process.platform === "win32" || process.platform === "darwin" ? safeDir.toLowerCase() : safeDir;
+  const cmpReal = process.platform === "win32" || process.platform === "darwin" ? real.toLowerCase() : real;
+  if (cmpReal !== cmpSafe) {
+    throw new StudioError(409, "symlink-refused", `${label} resolved through an unexpected symlink`);
+  }
+  return real;
+}
+
 export function validatePackFileName(fileName: unknown): string {
-  if (typeof fileName !== "string" || !PACK_FILE_NAME.test(fileName) || fileName.includes("..")) {
-    throw new StudioError(400, "invalid-pack-name", "pack fileName must match [a-z0-9][a-z0-9._-]{0,63}.json without '..'");
+  if (
+    typeof fileName !== "string" ||
+    !PACK_FILE_NAME.test(fileName) ||
+    fileName.includes("..") ||
+    WINDOWS_RESERVED_NAME.test(fileName)
+  ) {
+    throw new StudioError(400, "invalid-pack-name", "pack fileName must match [a-z0-9][a-z0-9._-]{0,63}.json without '..' or reserved device names");
   }
   return fileName;
 }
@@ -59,8 +91,73 @@ function topCounts(map: Map<string, number>, limit: number): Array<{ value: stri
     .map(([value, count]) => ({ value, count }));
 }
 
+/** Linear O(N) CSS block-comment stripper (avoids regex backtracking). */
 function stripCssComments(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//gu, " ");
+  let out = "";
+  let i = 0;
+  while (i < css.length) {
+    const open = css.indexOf("/*", i);
+    if (open === -1) {
+      out += css.slice(i);
+      break;
+    }
+    out += css.slice(i, open) + " ";
+    const close = css.indexOf("*/", open + 2);
+    if (close === -1) break;
+    i = close + 2;
+  }
+  return out;
+}
+
+/**
+ * Strictly O(N) scanner that splits `<style>` block bodies out of HTML and strips both `<script>`
+ * and `<style>` blocks without lazy regex backtracking on repeated unclosed tags.
+ */
+function scanHtmlTagsLinear(html: string): { styleBlocks: string[]; strippedHtml: string } {
+  const lower = html.toLowerCase();
+  const len = html.length;
+  const styleBlocks: string[] = [];
+  const kept: string[] = [];
+  let cursor = 0;
+
+  while (cursor < len) {
+    const lt = lower.indexOf("<", cursor);
+    if (lt === -1) {
+      kept.push(html.slice(cursor));
+      break;
+    }
+    const isStyle =
+      lower.startsWith("<style", lt) &&
+      (lt + 6 === len || /[\s/>]/u.test(lower[lt + 6]));
+    const isScript =
+      lower.startsWith("<script", lt) &&
+      (lt + 7 === len || /[\s/>]/u.test(lower[lt + 7]));
+
+    if (!isStyle && !isScript) {
+      kept.push(html.slice(cursor, lt + 1));
+      cursor = lt + 1;
+      continue;
+    }
+
+    kept.push(html.slice(cursor, lt));
+    const openEnd = lower.indexOf(">", lt + (isStyle ? 6 : 7));
+    if (openEnd === -1) {
+      // Unclosed opening tag: discard remainder cleanly in O(1).
+      break;
+    }
+    const closeNeedle = isStyle ? "</style" : "</script";
+    const closeStart = lower.indexOf(closeNeedle, openEnd + 1);
+    if (closeStart === -1) {
+      if (isStyle) styleBlocks.push(html.slice(openEnd + 1));
+      break;
+    }
+    if (isStyle) styleBlocks.push(html.slice(openEnd + 1, closeStart));
+    const closeEnd = lower.indexOf(">", closeStart + closeNeedle.length);
+    if (closeEnd === -1) break;
+    cursor = closeEnd + 1;
+  }
+
+  return { styleBlocks, strippedHtml: kept.join("") };
 }
 
 /**
@@ -76,15 +173,12 @@ export function extractPatternsFromSource({ html = "", css = "" }: { html?: stri
     throw new StudioError(413, "input-too-large", `html and css inputs may each be at most ${RESEARCH_LIMITS.maxInputBytes} bytes`);
   }
 
-  // Pull inline <style> blocks and inline style="..." attributes into CSS analysis without executing scripts.
-  const styleBlocks: string[] = [css];
-  for (const match of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/giu)) {
-    styleBlocks.push(match[1]);
+  const { styleBlocks, strippedHtml } = scanHtmlTagsLinear(html);
+  const allStyleParts: string[] = [css, ...styleBlocks];
+  for (const match of strippedHtml.matchAll(/\bstyle\s*=\s*(?:"([^"]{1,4000})"|'([^']{1,4000})')/giu)) {
+    allStyleParts.push(`:scope { ${match[1] ?? match[2] ?? ""} }`);
   }
-  for (const match of html.matchAll(/\bstyle\s*=\s*(?:"([^"]{1,4000})"|'([^']{1,4000})')/giu)) {
-    styleBlocks.push(`:scope { ${match[1] ?? match[2] ?? ""} }`);
-  }
-  const combinedCss = stripCssComments(styleBlocks.join("\n"));
+  const combinedCss = stripCssComments(allStyleParts.join("\n"));
 
   const colorCounts = new Map<string, number>();
   const bump = (map: Map<string, number>, raw: string) => {
@@ -123,11 +217,8 @@ export function extractPatternsFromSource({ html = "", css = "" }: { html?: stri
   const landmarks: Record<string, number> = Object.create(null);
   const headings: Record<string, number> = Object.create(null);
   const interactive: Record<string, number> = Object.create(null);
-  const htmlWithoutScriptStyle = html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/giu, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, "");
 
-  for (const m of htmlWithoutScriptStyle.matchAll(/<([a-z][a-z0-9-]*)\b/giu)) {
+  for (const m of strippedHtml.matchAll(/<([a-z][a-z0-9-]*)\b/giu)) {
     const tag = m[1].toLowerCase();
     if (["header", "nav", "main", "section", "article", "aside", "footer"].includes(tag)) {
       landmarks[tag] = (landmarks[tag] ?? 0) + 1;
@@ -305,7 +396,7 @@ export function createLocalReferencePack({
   return { pack, digest };
 }
 
-/** Write a normalized reference pack safely (symlink-checked directory, owner-only `writeTrustedFile`). */
+/** Write a normalized reference pack safely (post-mkdir symlink-checked directory, owner-only `writeTrustedFile`). */
 export function writeLocalReferencePack({
   directory,
   fileName,
@@ -318,12 +409,7 @@ export function writeLocalReferencePack({
   replace?: boolean;
 }) {
   const validName = validatePackFileName(fileName);
-  const safeDir = assertNoSymlinkPath(directory, "references directory");
-  const existingDir = lstatOrNull(safeDir);
-  if (existingDir !== null && !existingDir.isDirectory()) {
-    throw new StudioError(400, "invalid-directory", "references path is not a directory");
-  }
-  mkdirSync(safeDir, { recursive: true, mode: 0o700 });
+  const safeDir = ensureRealDirectory(directory, "references directory");
   const target = join(safeDir, validName);
   const existing = lstatOrNull(target);
   if (existing !== null) {
@@ -333,6 +419,10 @@ export function writeLocalReferencePack({
     if (!replace) {
       throw new StudioError(409, "pack-exists", `reference pack ${validName} already exists (pass replace: true to overwrite)`);
     }
+  }
+  const caseCollision = readdirSync(safeDir).some((entry) => entry.toLowerCase() === validName.toLowerCase());
+  if (caseCollision && !replace) {
+    throw new StudioError(409, "pack-exists", `reference pack ${validName} already exists (pass replace: true to overwrite)`);
   }
   const normalized = normalizeReferencePack(pack);
   const digest = referencePackDigest(normalized);
@@ -347,49 +437,28 @@ export function listLocalReferencePacks(directory: string): string[] {
   if (stat === null) return [];
   if (!stat.isDirectory()) throw new StudioError(400, "invalid-directory", "references path is not a directory");
   return readdirSync(safeDir, { withFileTypes: true })
-    .filter((entry) => !entry.isSymbolicLink() && entry.isFile() && PACK_FILE_NAME.test(entry.name))
+    .filter((entry) => !entry.isSymbolicLink() && entry.isFile() && PACK_FILE_NAME.test(entry.name) && !WINDOWS_RESERVED_NAME.test(entry.name))
     .map((entry) => entry.name)
     .sort(compareCodeUnits)
     .slice(0, RESEARCH_LIMITS.maxPacksListed);
 }
 
-/** Check whether an IPv4/IPv6 address belongs to loopback, private, link-local, metadata, or non-global ranges. */
+/**
+ * Check whether an IPv4/IPv6 address belongs to loopback, private, link-local, metadata,
+ * transition/NAT64/6to4/Teredo/SIIT, or non-global ranges. Delegates to `@ninerr/network-policy`
+ * so every network decision in Ninerr shares one authoritative classifier.
+ */
 export function isPrivateOrNonGlobalIp(address: string): boolean {
-  const ip = address.toLowerCase();
-  if (ip.startsWith("::ffff:")) {
-    return isPrivateOrNonGlobalIp(ip.slice("::ffff:".length));
-  }
-  const v = isIP(ip);
-  if (v === 4) {
-    const parts = ip.split(".").map(Number);
-    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-    const [a, b] = parts;
-    if (a === 0 || a === 10 || a === 127) return true; // 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8
-    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
-    if (a === 169 && b === 254) return true; // link-local / cloud metadata 169.254.0.0/16
-    if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918 172.16.0.0/12
-    if (a === 192 && b === 168) return true; // RFC1918 192.168.0.0/16
-    if (a === 192 && b === 0 && (parts[2] === 0 || parts[2] === 2)) return true; // IETF / TEST-NET-1
-    if (a === 198 && (b === 18 || b === 19)) return true; // benchmark 198.18.0.0/15
-    if (a >= 224) return true; // multicast / reserved
-    return false;
-  }
-  if (v === 6) {
-    if (ip === "::" || ip === "::1") return true;
-    // ULA fc00::/7, link-local fe80::/10, multicast ff00::/8
-    if (ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe8") || ip.startsWith("fe9") || ip.startsWith("fea") || ip.startsWith("feb") || ip.startsWith("ff")) {
-      return true;
-    }
-    return false;
-  }
-  return true;
+  if (typeof address !== "string" || address.trim() === "" || address.includes("%")) return true;
+  return classifyAddress(address) !== "public";
 }
 
 /**
  * Strictly human-invoked CLI-only URL design-metric capture.
- * Refuses execution unless `allowNetwork === true`, enforces HTTPS + public-IP SSRF checks +
- * no redirects + 1 MiB cap, extracts ONLY metric patterns (discarding raw HTML/CSS), and emits
- * an `observed-inspiration-only` (`restricted`, non-redistributable) local reference pack.
+ * Refuses execution unless `allowNetwork === true`, enforces HTTPS + public-IP SSRF checks
+ * via `@ninerr/network-policy` + pinned TLS SNI + total wall-clock timeout + no redirects +
+ * HTML/CSS Content-Type allowlist + 512 KiB cap, extracts ONLY metric patterns (discarding raw
+ * HTML/CSS), and emits an `observed-inspiration-only` (`restricted`) local reference pack.
  */
 export async function captureUrlReferenceMetrics({
   url,
@@ -419,14 +488,19 @@ export async function captureUrlReferenceMetrics({
   if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "" || (parsed.port !== "" && parsed.port !== "443")) {
     throw new StudioError(400, "invalid-url", "only standard-port https:// URLs without credentials are allowed");
   }
-  const host = parsed.hostname.toLowerCase();
+  const rawHost = parsed.hostname.toLowerCase();
+  if (rawHost.endsWith(".") || rawHost.startsWith("[") || rawHost.endsWith("]")) {
+    throw new StudioError(403, "ssrf-refused", `refusing trailing-dot or bracketed IP host ${JSON.stringify(rawHost)}`);
+  }
+  const host = rawHost.replace(/\.+$/u, "");
+  const bareHost = host.replace(/^\[|\]$/gu, "");
   if (
     host === "localhost" ||
     host.endsWith(".localhost") ||
     host.endsWith(".local") ||
     host.endsWith(".internal") ||
     !host.includes(".") ||
-    isIP(host) !== 0
+    isIP(bareHost) !== 0
   ) {
     throw new StudioError(403, "ssrf-refused", `refusing to fetch local, private, or literal-IP host ${JSON.stringify(host)}`);
   }
@@ -441,13 +515,25 @@ export async function captureUrlReferenceMetrics({
     throw new StudioError(403, "ssrf-refused", `refusing to fetch host ${host} resolving to a non-global IP address`);
   }
 
-  const pinnedIp = resolved[0].address;
+  const pinned = resolved[0];
   const canonicalUri = `${parsed.origin}${parsed.pathname}`;
   const { rawText, contentType } = await new Promise<{ rawText: string; contentType: string }>((resolveReq, rejectReq) => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      fn();
+    };
     const req = httpsRequest(
       {
-        host: pinnedIp,
+        host: pinned.address,
         port: 443,
+        family: pinned.family,
+        agent: false,
+        lookup: (_hostname, _options, callback) => {
+          callback(null, pinned.address, pinned.family);
+        },
         path: `${parsed.pathname}${parsed.search}`,
         method: "GET",
         servername: host,
@@ -456,6 +542,7 @@ export async function captureUrlReferenceMetrics({
         headers: {
           Host: host,
           Accept: "text/html, text/css;q=0.5",
+          "Accept-Encoding": "identity",
           "User-Agent": "Ninerr-Research/0.1 (local metric capture)",
           Connection: "close",
         },
@@ -464,12 +551,21 @@ export async function captureUrlReferenceMetrics({
         const status = res.statusCode ?? 0;
         if (status >= 300 && status < 400) {
           res.resume();
-          rejectReq(new StudioError(403, "redirect-refused", `refusing HTTP ${status} redirect during URL capture`));
+          req.destroy();
+          finish(() => rejectReq(new StudioError(403, "redirect-refused", `refusing HTTP ${status} redirect during URL capture`)));
           return;
         }
         if (status < 200 || status >= 300) {
           res.resume();
-          rejectReq(new StudioError(502, "fetch-failed", `remote host returned HTTP ${status}`));
+          req.destroy();
+          finish(() => rejectReq(new StudioError(502, "fetch-failed", `remote host returned HTTP ${status}`)));
+          return;
+        }
+        const mime = String(res.headers["content-type"] ?? "");
+        if (!ALLOWED_CAPTURE_MIME.test(mime)) {
+          res.resume();
+          req.destroy();
+          finish(() => rejectReq(new StudioError(415, "unsupported-media-type", `refusing non-HTML/CSS content-type ${JSON.stringify(mime.slice(0, 60))}`)));
           return;
         }
         const chunks: Buffer[] = [];
@@ -478,29 +574,39 @@ export async function captureUrlReferenceMetrics({
           total += chunk.byteLength;
           if (total > RESEARCH_LIMITS.maxCaptureBytes) {
             res.destroy();
-            rejectReq(new StudioError(413, "capture-too-large", `remote response exceeded ${RESEARCH_LIMITS.maxCaptureBytes} bytes`));
+            req.destroy();
+            finish(() => rejectReq(new StudioError(413, "capture-too-large", `remote response exceeded ${RESEARCH_LIMITS.maxCaptureBytes} bytes`)));
             return;
           }
           chunks.push(chunk);
         });
         res.on("end", () => {
-          resolveReq({
+          finish(() => resolveReq({
             rawText: Buffer.concat(chunks).toString("utf8"),
-            contentType: String(res.headers["content-type"] ?? ""),
-          });
+            contentType: mime,
+          }));
         });
-        res.on("error", (err) => rejectReq(new StudioError(502, "fetch-failed", err.message)));
+        res.on("error", (err) => finish(() => rejectReq(new StudioError(502, "fetch-failed", err.message))));
       },
     );
+    // Total wall-clock deadline prevents slow-drip / Slowloris stalls.
+    const deadline = setTimeout(() => {
+      req.destroy();
+      finish(() => rejectReq(new StudioError(504, "capture-timeout", `capture exceeded ${RESEARCH_LIMITS.captureTimeoutMs}ms total deadline`)));
+    }, RESEARCH_LIMITS.captureTimeoutMs);
+    deadline.unref?.();
+
     req.on("timeout", () => {
-      req.destroy(new Error(`capture timed out after ${RESEARCH_LIMITS.captureTimeoutMs}ms`));
+      req.destroy();
+      finish(() => rejectReq(new StudioError(504, "capture-timeout", `capture socket timed out after ${RESEARCH_LIMITS.captureTimeoutMs}ms`)));
     });
     req.on("error", (err) => {
-      rejectReq(err instanceof StudioError ? err : new StudioError(502, "fetch-failed", err.message));
+      finish(() => rejectReq(err instanceof StudioError ? err : new StudioError(502, "fetch-failed", err.message)));
     });
     req.end();
   });
-  const isCss = contentType.toLowerCase().includes("text/css");
+
+  const isCss = contentType.toLowerCase().startsWith("text/css");
   const patterns = extractPatternsFromSource(isCss ? { css: rawText } : { html: rawText });
 
   const { pack, digest } = createLocalReferencePack({
