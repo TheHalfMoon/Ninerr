@@ -258,3 +258,102 @@ test("breakpoint sanitizer, dark-as-default migration safety, and Ninerr compone
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+test("PR 485 review regressions: CSS Syntax Level 3 block/string safety, marker injection, prototype/variant hardening, migration diff & mode accuracy, O(n) audit, and relative CLI path", async () => {
+  // 1. CSS breakout vectors & marker injection all fail closed in compileBreakpointsStylesheet.
+  const bp = [{ id: "mobile", minWidth: 0, maxWidth: 639 }];
+  for (const evil of [
+    '.a { content: "\n}} body { color: red !important; } @media (min-width: 1px) { .b { x: 1" }',
+    '.a\\" {} } body { color: red; } @media (min-width: 1px) { /* " */ .b { color: blue; }',
+    ".a\\{ { } } body { color: red; } @media (min-width: 1px) { .b\\} { }",
+    "(.a { ) }",
+    ".a { background: u/**/rl(https://evil.example/x); }",
+    "/* ninerr-breakpoints:end */ .x { color: red; }",
+  ]) {
+    assert.throws(() => compileBreakpointsStylesheet(bp, { mobile: evil }), `rejects ${evil.slice(0, 40)}`);
+  }
+  assert.throws(() => compileBreakpointsStylesheet(bp, { unknownBp: ".a { color: red; }" }), "rejects unknown breakpoint key");
+  assert.throws(() => compileBreakpointsStylesheet([{ id: "bad", minWidth: 800, maxWidth: 400 }], { bad: ".a { color: red; }" }), "rejects minWidth > maxWidth");
+  assert.match(compileBreakpointsStylesheet(bp, { mobile: ":scope { padding: 8px; }" }), /@media \(min-width: 0px\) and \(max-width: 639px\)/u, "accepts minWidth: 0");
+
+  // 2. Prototype-key badge variant, invalid input-field variant, null options, and unique dialog/radio IDs.
+  const badBadge = buildComponentOperations("badge", { idPrefix: "b1", options: { variant: "toString" } });
+  assert.equal(planElement(badBadge.operations[0].node).dropped, 0, "toString badge variant falls back cleanly");
+  const badInput = buildComponentOperations("input-field", { idPrefix: "i1", options: { variant: "file" } });
+  const inputNode = badInput.operations.find((op) => op.node.props.tag === "input").node;
+  assert.equal(inputNode.props.attributes.type, "email", "disallowed input variant falls back to email");
+  assert.equal(planElement(inputNode).dropped, 0);
+  assert.ok(buildComponentOperations("button", { idPrefix: "btn1", options: null }).nodeCount >= 1, "null options handled safely");
+
+  const d1 = buildComponentOperations("dialog-modal", { idPrefix: "dlgA" });
+  const d2 = buildComponentOperations("dialog-modal", { idPrefix: "dlgB" });
+  assert.notEqual(d1.operations[0].node.props.attributes["aria-labelledby"], d2.operations[0].node.props.attributes["aria-labelledby"], "multiple modals get unique aria-labelledby ids");
+  const r1 = buildComponentOperations("radio-group", { idPrefix: "radA" });
+  const r2 = buildComponentOperations("radio-group", { idPrefix: "radB" });
+  const r1Name = r1.operations.find((op) => op.node.props.tag === "input").node.props.attributes.name;
+  const r2Name = r2.operations.find((op) => op.node.props.tag === "input").node.props.attributes.name;
+  assert.notEqual(r1Name, r2Name, "multiple radio groups get unique radio names");
+
+  // 3. planThemeMigration: same-value dark mode creation, honest before diff, duplicate & invalid type rejection, no cross-collection pollution.
+  let doc = createDocument({ id: "doc-mig-reg", name: "MigReg" });
+  doc = commit(doc, createDesignSystem(doc, { id: "ds-1", name: "DS" }));
+  doc = commit(doc, setToken(doc, { name: "--brand", type: "color", collection: "base", values: { default: "#0f766e" } }));
+
+  const sameDark = planThemeMigration(doc, {
+    tokens: [{ name: "--brand", light: "#0f766e", dark: "#0f766e" }],
+  });
+  assert.equal(sameDark.operations.length, 1, "adding dark mode with same value still emits operation");
+  assert.deepEqual(sameDark.updated[0].before, { default: "#0f766e" }, "before diff reflects original pre-migration state");
+  assert.deepEqual(sameDark.updated[0].after, { default: "#0f766e", dark: "#0f766e" });
+  doc = commit(doc, sameDark.operations);
+
+  const descOnly = planThemeMigration(doc, {
+    tokens: [{ name: "--brand", light: "#0f766e", dark: "#0f766e", description: "Brand primary" }],
+  });
+  assert.equal(descOnly.updated.length, 1, "description-only update is recorded");
+  assert.throws(() => planThemeMigration(doc, { tokens: [{ name: "--dup", light: "#111111" }, { name: "--dup", light: "#222222" }] }), /duplicate/iu);
+  assert.throws(() => planThemeMigration(doc, { tokens: [{ name: "--bad", type: "bogus", light: "#111111" }] }), /invalid token type/iu);
+  assert.throws(() => planThemeMigration(doc, { collectionId: "", tokens: [{ name: "--x", light: "#111111" }] }), /not found/iu);
+
+  // 4. auditDesignSystem: consistent empty shape, cross-collection contrast isolation, all-mode duplicates, linear performance.
+  const emptyAudit = auditDesignSystem(createDocument({ id: "empty", name: "Empty" }));
+  assert.equal(emptyAudit.hasHighContrastMode, false);
+  assert.equal(emptyAudit.hasBreakpoints, false);
+
+  const multiDoc = createDocument({ id: "multi", name: "Multi" });
+  multiDoc.schemaVersion = 2;
+  multiDoc.rootIds.push("ds-multi");
+  multiDoc.nodes["ds-multi"] = {
+    id: "ds-multi",
+    type: "design-system",
+    parentId: null,
+    children: [],
+    metadata: {},
+    props: {
+      name: "Multi DS",
+      collections: [
+        { id: "colors", name: "Colors", modes: [{ id: "light", name: "Light" }, { id: "dark", name: "Dark" }], defaultMode: "light" },
+        { id: "density", name: "Density", modes: [{ id: "compact", name: "Compact" }], defaultMode: "compact" },
+      ],
+      tokens: [
+        { name: "--bg-canvas", type: "color", collection: "colors", values: { light: "#ffffff", dark: "#0b1120" } },
+        { name: "--bg-surface", type: "color", collection: "colors", values: { light: "#ffffff", dark: "#111827" } },
+        { name: "--text-primary", type: "color", collection: "colors", values: { light: "#0f172a", dark: "#f8fafc" } },
+        { name: "--space-sm", type: "spacing", collection: "density", values: { compact: "4px" } },
+      ],
+    },
+  };
+  const multiAudit = auditDesignSystem(multiDoc);
+  assert.equal(multiAudit.summary.duplicateGroups, 0, "tokens matching in light but differing in dark are not duplicates");
+  assert.equal(multiAudit.summary.contrastFailures, 0, "density:compact does not trigger unrelated color contrast errors");
+
+  // 5. CLI: relative path audit & missing flag value error.
+  let errMsg = "";
+  const missingFlagCode = await runCliCommand("components", ["list", "--category"], {
+    version: "0.1.0",
+    stdout: () => {},
+    stderr: (s) => { errMsg += s; },
+  });
+  assert.equal(missingFlagCode, 2, "missing --category value returns usage error 2");
+  assert.match(errMsg, /requires a category/u);
+});

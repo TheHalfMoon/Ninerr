@@ -849,14 +849,28 @@ test("an agent searches and instantiates native Ninerr components, audits the de
   const bps = await agent.call("migrate_theme", {
     action: "set_breakpoints",
     breakpoints: [
-      { id: "mobile", name: "Mobile", maxWidth: 639 },
+      { id: "mobile", name: "Mobile", minWidth: 0, maxWidth: 639 },
       { id: "desktop", name: "Desktop", minWidth: 1024 },
     ],
     nodeId: pageId,
     rulesByBreakpoint: { mobile: ":scope { padding: 16px; }", desktop: ":scope { padding: 48px; }" },
   });
   assert.equal(bps.isError, undefined, text(bps));
-  assert.match(bps.structuredContent.compiledCss, /@media \(max-width: 639px\)/u);
+  assert.match(bps.structuredContent.compiledCss, /@media \(min-width: 0px\) and \(max-width: 639px\)/u);
+
+  // Strict MCP validation: extra arguments, invalid variant, partial set_breakpoints, and no-op dryRun contract.
+  assert.equal((await agent.call("audit_design_system", { extra: 1 })).isError, true, "audit_design_system rejects extra args");
+  assert.equal((await agent.call("instantiate_component", { componentId: "badge", variant: "toString" })).isError, true, "invalid component variant rejected");
+  assert.equal((await agent.call("migrate_theme", { action: "set_breakpoints", breakpoints: [{ id: "m", name: "M", maxWidth: 600 }], nodeId: pageId })).isError, true, "nodeId without rulesByBreakpoint rejected");
+  const noopDry = await agent.call("migrate_theme", {
+    dryRun: true,
+    action: "migrate",
+    tokens: [{ name: "--bg-canvas", light: "#f8fafc", dark: "#0b1120" }],
+  });
+  assert.equal(noopDry.isError, undefined, text(noopDry));
+  assert.equal(noopDry.structuredContent.dryRun, true, "no-op dryRun returns dryRun: true");
+  assert.deepEqual(noopDry.structuredContent.wouldChange, []);
+  assert.equal(noopDry.structuredContent.operations, 0);
 
   const audit = (await agent.call("audit_design_system")).structuredContent;
   assert.equal(audit.hasDesignSystem, true);
@@ -868,7 +882,7 @@ test("an agent searches and instantiates native Ninerr components, audits the de
   const htmlOut = (await agent.call("export_design", { nodeId: pageId, format: "html", name: "landing" })).structuredContent;
   const htmlText = readFileSync(htmlOut.path, "utf8");
   assert.match(htmlText, /Build reliable interfaces/u);
-  assert.match(htmlText, /@media \(max-width: 639px\)/u);
+  assert.match(htmlText, /@media \(min-width: 0px\) and \(max-width: 639px\)/u);
   const tsxOut = (await agent.call("export_design", { nodeId: pageId, format: "tsx", name: "LandingPage" })).structuredContent;
   assert.match(readFileSync(tsxOut.path, "utf8"), /import type React from "react";/u);
 

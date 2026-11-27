@@ -1,7 +1,8 @@
 // Extended Ninerr CLI subcommands dispatched from bin/ninerr.mjs (`ninerr design ...`,
 // `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
 // Pure local execution, zero network.
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   NINERR_COMPONENT_CATEGORIES,
   getNinerrComponent,
@@ -37,14 +38,30 @@ const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient"]);
 const MAX_CLI_FILE_BYTES = 2 * 1024 * 1024;
 
 function readBoundedTextFile(filePath: string, commandLabel: string): string {
-  const stat = lstatSync(filePath);
-  if (!stat.isFile()) {
-    throw new Error(`${commandLabel}: ${JSON.stringify(filePath)} is not a regular file`);
+  const flags = constants.O_RDONLY | (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0);
+  const fd = openSync(filePath, flags);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) {
+      throw new Error(`${commandLabel}: ${JSON.stringify(filePath)} is not a regular file`);
+    }
+    if (stat.size > MAX_CLI_FILE_BYTES) {
+      throw new Error(`${commandLabel}: ${JSON.stringify(filePath)} exceeds ${MAX_CLI_FILE_BYTES} bytes`);
+    }
+    const buf = Buffer.allocUnsafe(MAX_CLI_FILE_BYTES + 1);
+    let total = 0;
+    while (total < buf.length) {
+      const n = readSync(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+      if (total > MAX_CLI_FILE_BYTES) {
+        throw new Error(`${commandLabel}: ${JSON.stringify(filePath)} exceeds ${MAX_CLI_FILE_BYTES} bytes`);
+      }
+    }
+    return buf.subarray(0, total).toString("utf8");
+  } finally {
+    closeSync(fd);
   }
-  if (stat.size > MAX_CLI_FILE_BYTES) {
-    throw new Error(`${commandLabel}: ${JSON.stringify(filePath)} exceeds ${MAX_CLI_FILE_BYTES} bytes`);
-  }
-  return readFileSync(filePath, "utf8");
 }
 
 function parseFlags(argv: string[]) {
@@ -309,6 +326,14 @@ export async function runCliCommand(command: string, args: string[], options: Cl
         return 0;
       }
       if (sub === "list") {
+        if (flags.category === true) {
+          err("ninerr components list: --category requires a category value\n");
+          return 2;
+        }
+        if (flags.query === true) {
+          err("ninerr components list: --query requires a search query\n");
+          return 2;
+        }
         const category = typeof flags.category === "string" ? flags.category : "";
         const query = typeof flags.query === "string" ? flags.query : "";
         const components = searchNinerrComponents({ category, query });
@@ -354,7 +379,7 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           err("ninerr tokens audit: specify a Ninerr project folder\n");
           return 2;
         }
-        const opened = openProject(projectDir, { owner: "ninerr-cli-audit", at: new Date().toISOString() });
+        const opened = openProject(resolve(projectDir), { owner: "ninerr-cli-audit", at: new Date().toISOString() });
         let report;
         try {
           report = auditDesignSystem(opened.document);

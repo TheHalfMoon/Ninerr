@@ -1636,7 +1636,28 @@ const TOOLS: Tool[] = [
       initials: { type: "string", maxLength: 8 },
       count: { type: "string", maxLength: 24 },
     }, ["componentId"]),
-    run: ({ session, edit }, args) => {
+    run: ({ session, edit }, given) => {
+      const OPTION_LIMITS: Readonly<Record<string, { max: number; multiline?: boolean }>> = {
+        variant: { max: 32 },
+        label: { max: 120 },
+        title: { max: 160 },
+        body: { max: 600, multiline: true },
+        headline: { max: 200 },
+        subcopy: { max: 600, multiline: true },
+        placeholder: { max: 160 },
+        helper: { max: 240 },
+        cta: { max: 80 },
+        brand: { max: 80 },
+        product: { max: 120 },
+        value: { max: 80 },
+        delta: { max: 80 },
+        description: { max: 400, multiline: true },
+        message: { max: 400, multiline: true },
+        legend: { max: 120 },
+        initials: { max: 8 },
+        count: { max: 24 },
+      };
+      const args = onlyArguments(given, ["componentId", "parentId", "index", "asDefinition", ...Object.keys(OPTION_LIMITS)]);
       const rawId = typeof args.componentId === "string" ? args.componentId.trim() : "";
       const componentId = rawId.startsWith("ninerr:") ? rawId.slice(7) : rawId;
       const meta = getNinerrComponent(componentId);
@@ -1644,15 +1665,23 @@ const TOOLS: Tool[] = [
         throw new ToolError(`unknown native Ninerr component ${JSON.stringify(shownPlainly(rawId.slice(0, 64)))}; call search_components({ source: "ninerr" }) to list available ids`);
       }
 
-      const optionKeys = ["variant", "label", "title", "body", "headline", "subcopy", "placeholder", "helper", "cta", "brand", "product", "value", "delta", "description", "message", "legend", "initials", "count"] as const;
+      if (args.asDefinition !== undefined && typeof args.asDefinition !== "boolean") {
+        throw new ToolError("asDefinition must be a boolean");
+      }
+
       const options: Record<string, string> = {};
-      for (const key of optionKeys) {
+      for (const [key, spec] of Object.entries(OPTION_LIMITS)) {
         if (args[key] === undefined) continue;
         if (typeof args[key] !== "string") throw new ToolError(`${key} must be a string`);
         const val = args[key] as string;
-        const body = val.replace(JOINERS, "");
+        if (val.length > spec.max) throw new ToolError(`${key} exceeds maximum length of ${spec.max} characters`);
+        const visible = val.replace(JOINERS, "");
+        const body = spec.multiline ? visible.replace(LINE_BREAKS, "") : visible;
         if (!val.isWellFormed() || HIDDEN_TEXT.test(body) || SELECTOR_SMUGGLING.test(val)) {
           throw new ToolError(`${key} holds hidden or reordering characters, so nothing was changed`);
+        }
+        if (key === "variant" && !meta.variants.includes(val)) {
+          throw new ToolError(`invalid variant ${JSON.stringify(shownPlainly(val))} for ${meta.id}; valid variants: ${meta.variants.join(", ")}`);
         }
         options[key] = val;
       }
@@ -1668,9 +1697,13 @@ const TOOLS: Tool[] = [
         targetParentId = parent.id;
         targetSiblings = parent.children;
       }
-      const targetIndex = Number.isInteger(args.index) && args.index >= 0 && args.index <= targetSiblings.length
-        ? args.index
-        : targetSiblings.length;
+      let targetIndex = targetSiblings.length;
+      if (args.index !== undefined) {
+        if (!Number.isInteger(args.index) || (args.index as number) < 0 || (args.index as number) > targetSiblings.length) {
+          throw new ToolError(`index must be a whole number from 0 to ${targetSiblings.length}`);
+        }
+        targetIndex = args.index as number;
+      }
 
       const asDefinition = args.asDefinition === true;
       let idPrefix = `cmp-${meta.id}-${randomUUID().slice(0, 8)}`;
@@ -1680,7 +1713,7 @@ const TOOLS: Tool[] = [
 
       const built = buildComponentOperations(meta.id, {
         parentId: asDefinition ? null : targetParentId,
-        insertIndex: asDefinition ? document.rootIds.length : targetIndex,
+        insertIndex: asDefinition ? (targetParentId === null ? targetIndex : document.rootIds.length) : targetIndex,
         idPrefix,
         asDefinition,
         options,
@@ -1727,7 +1760,10 @@ const TOOLS: Tool[] = [
     title: "Audit design system health",
     description: "Read-only deterministic audit of the project's design system: unused tokens, duplicate literal values, missing mode values, hardcoded layer style values matching existing tokens, and cross-mode WCAG contrast compliance.",
     inputSchema: object({}),
-    run: ({ session }) => auditDesignSystem(session.document as any) as unknown as Json,
+    run: ({ session }, given) => {
+      onlyArguments(given, []);
+      return auditDesignSystem(session.document as any) as unknown as Json;
+    },
   },
   {
     name: "migrate_theme",
@@ -1757,25 +1793,29 @@ const TOOLS: Tool[] = [
         items: object({
           id: { type: "string", minLength: 1, maxLength: 64 },
           name: { type: "string", minLength: 1, maxLength: 80 },
-          minWidth: { type: "integer", minimum: 1, maximum: 16384 },
-          maxWidth: { type: "integer", minimum: 1, maximum: 16384 },
+          minWidth: { type: "integer", minimum: 0, maximum: 10000 },
+          maxWidth: { type: "integer", minimum: 0, maximum: 10000 },
         }, ["id", "name"]),
       },
       nodeId: { type: "string", minLength: 1, maxLength: 128 },
       rulesByBreakpoint: { type: "object", additionalProperties: { type: "string", maxLength: 64000 } },
       useContainer: { type: "boolean" },
     }),
-    run: ({ session, edit }, args) => {
+    run: ({ session, edit, dryRun }, given) => {
+      const args = onlyArguments(given, ["action", "themeName", "collectionId", "tokens", "breakpoints", "nodeId", "rulesByBreakpoint", "useContainer"]);
       const action = args.action ?? "migrate";
-      const checkSafeString = (field: string, value: unknown) => {
-        if (typeof value !== "string") return;
+      const checkSafeString = (field: string, value: unknown, maxLen: number) => {
+        if (value === undefined) return;
+        if (typeof value !== "string" || value.trim() === "" || value.length > maxLen) {
+          throw new ToolError(`${field} must be a non-empty string of at most ${maxLen} characters`);
+        }
         const body = value.replace(JOINERS, "");
         if (!value.isWellFormed() || HIDDEN_TEXT.test(body) || SELECTOR_SMUGGLING.test(value)) {
           throw new ToolError(`${field} holds hidden or reordering characters, so nothing was changed`);
         }
       };
-      checkSafeString("themeName", args.themeName);
-      checkSafeString("collectionId", args.collectionId);
+      checkSafeString("themeName", args.themeName, 120);
+      checkSafeString("collectionId", args.collectionId, 128);
 
       const document = session.document as any;
       if (action === "generate_high_contrast") {
@@ -1799,6 +1839,9 @@ const TOOLS: Tool[] = [
         if (!Array.isArray(args.breakpoints) || args.breakpoints.length === 0) {
           throw new ToolError("set_breakpoints requires a non-empty breakpoints array");
         }
+        if ((args.nodeId !== undefined) !== (args.rulesByBreakpoint !== undefined)) {
+          throw new ToolError("set_breakpoints requires both nodeId and rulesByBreakpoint together when attaching responsive CSS");
+        }
         const system = designSystemOf(document);
         let operations: unknown[];
         if (system === null) {
@@ -1821,27 +1864,39 @@ const TOOLS: Tool[] = [
           if (typeof args.rulesByBreakpoint !== "object" || args.rulesByBreakpoint === null || Array.isArray(args.rulesByBreakpoint)) {
             throw new ToolError("rulesByBreakpoint must be a plain object mapping breakpoint ids to CSS strings");
           }
+          for (const [bpKey, cssText] of Object.entries(args.rulesByBreakpoint as Record<string, unknown>)) {
+            if (typeof cssText !== "string") throw new ToolError(`rulesByBreakpoint[${JSON.stringify(shownPlainly(bpKey.slice(0, 40)))}] must be a string`);
+            if (cssText.length > 64_000) throw new ToolError(`rulesByBreakpoint[${JSON.stringify(shownPlainly(bpKey.slice(0, 40)))}] exceeds 64000 characters`);
+          }
           const node = nodeOf(session, args.nodeId);
           if (node.type === "design-system" || node.type === "component-instance" || isCodePart(node)) {
             throw new ToolError(`cannot attach responsive stylesheet directly to ${isCodePart(node) ? "code expression" : node.type} ${node.id}`);
           }
           try {
-            compiledCss = compileBreakpointsStylesheet(args.breakpoints, args.rulesByBreakpoint, { useContainer: args.useContainer === true });
+            compiledCss = compileBreakpointsStylesheet(
+              args.breakpoints as any,
+              args.rulesByBreakpoint as Record<string, string>,
+              { useContainer: args.useContainer === true },
+            );
           } catch (error) {
             throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
           }
-          if (compiledCss !== "") {
-            const startMark = "/* ninerr-breakpoints:start */";
-            const endMark = "/* ninerr-breakpoints:end */";
-            const existingSheet = typeof node.props?.stylesheet === "string" ? node.props.stylesheet : "";
-            const stripped = existingSheet.replace(/\/\*\s*ninerr-breakpoints:start\s*\*\/[\s\S]*?\/\*\s*ninerr-breakpoints:end\s*\*\//gu, "").trim();
-            const nextSheet = `${stripped === "" ? "" : `${stripped}\n\n`}${startMark}\n${compiledCss}\n${endMark}`;
+          const startMark = "/* ninerr-breakpoints:start */";
+          const endMark = "/* ninerr-breakpoints:end */";
+          const existingSheet = typeof node.props?.stylesheet === "string" ? node.props.stylesheet : "";
+          const stripped = existingSheet.replace(/\/\*\s*ninerr-breakpoints:start\s*\*\/[\s\S]*?\/\*\s*ninerr-breakpoints:end\s*\*\//gu, "").trim();
+          const nextSheet = compiledCss === ""
+            ? stripped
+            : `${stripped === "" ? "" : `${stripped}\n\n`}${startMark}\n${compiledCss}\n${endMark}`;
+          if (nextSheet !== existingSheet) {
             if (Buffer.byteLength(nextSheet, "utf8") > 512 * 1024) {
               throw new ToolError("combined node stylesheet exceeds 512 KiB budget");
             }
-            const plannedNode = planElement({ id: node.id, type: node.type, props: { stylesheet: nextSheet } } as any);
-            if (plannedNode.stylesheet === null || plannedNode.dropped > 0) {
-              throw new ToolError("responsive stylesheet was rejected by the renderer sanitizer, so nothing was changed");
+            if (nextSheet !== "") {
+              const plannedNode = planElement({ id: node.id, type: node.type, props: { stylesheet: nextSheet } } as any);
+              if (plannedNode.stylesheet === null || plannedNode.dropped > 0) {
+                throw new ToolError("responsive stylesheet was rejected by the renderer sanitizer, so nothing was changed");
+              }
             }
             operations = [...operations, { type: "set-props", nodeId: node.id, set: { stylesheet: nextSheet } }];
           }
@@ -1862,7 +1917,7 @@ const TOOLS: Tool[] = [
         let planned;
         try {
           planned = planThemeMigration(document, {
-            tokens: args.tokens,
+            tokens: args.tokens as any,
             ...(typeof args.themeName === "string" ? { themeName: args.themeName } : {}),
             ...(typeof args.collectionId === "string" ? { collectionId: args.collectionId } : {}),
           });
@@ -1877,6 +1932,7 @@ const TOOLS: Tool[] = [
             updated: planned.updated,
             added: planned.added,
             unchanged: planned.unchanged,
+            ...(dryRun ? { dryRun: true, wouldChange: [], operations: 0 } : {}),
             revision: session.revision,
           } as unknown as Json;
         }

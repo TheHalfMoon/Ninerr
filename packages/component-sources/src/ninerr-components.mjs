@@ -166,7 +166,7 @@ const RAW_COMPONENTS = [
         warning: { bg: "#fef3c7", fg: "#92400e" },
         danger: { bg: "#fee2e2", fg: "#991b1b" },
       };
-      const tone = tones[variant] ?? tones.neutral;
+      const tone = Object.hasOwn(tones, variant) ? tones[variant] : tones.neutral;
       return el("span", "Badge", {
         text: label,
         style: {
@@ -229,15 +229,26 @@ const RAW_COMPONENTS = [
   def("skeleton", "Skeleton Loader", "basic", "Reduced-motion-safe content loading placeholder.", {
     variants: ["text", "card"],
     accessibility: { ariaBusy: "true", ariaLive: "polite", reducedMotion: true },
-    build: ({ label = "Loading content" } = {}) => el("div", "Skeleton", {
+    build: ({ label = "Loading content", variant = "card" } = {}) => el("div", "Skeleton", {
       attributes: { role: "status", "aria-busy": "true", "aria-label": label, class: "ninerr-skeleton" },
-      style: { display: "flex", "flex-direction": "column", gap: "10px", padding: "16px", "border-radius": "var(--radius-md, 10px)", border: "1px solid var(--border-subtle, #e2e8f0)" },
+      style: {
+        display: "flex",
+        "flex-direction": "column",
+        gap: "10px",
+        padding: variant === "text" ? "8px 0" : "16px",
+        ...(variant === "text" ? {} : { "border-radius": "var(--radius-md, 10px)", border: "1px solid var(--border-subtle, #e2e8f0)" }),
+      },
       stylesheet: "@keyframes ninerr-skel { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.85; } }\n.ninerr-skeleton > div { animation: ninerr-skel 1400ms ease-in-out infinite; }\n@media (prefers-reduced-motion: reduce) { .ninerr-skeleton > div { animation: none !important; opacity: 0.7; } }",
-      children: [
-        el("div", "Skeleton Title", { style: { height: "18px", width: "45%", "border-radius": "4px", "background-color": "var(--bg-subtle, #e2e8f0)" } }),
-        el("div", "Skeleton Line 1", { style: { height: "14px", width: "92%", "border-radius": "4px", "background-color": "var(--bg-subtle, #e2e8f0)" } }),
-        el("div", "Skeleton Line 2", { style: { height: "14px", width: "74%", "border-radius": "4px", "background-color": "var(--bg-subtle, #e2e8f0)" } }),
-      ],
+      children: variant === "text"
+        ? [
+          el("div", "Skeleton Line 1", { style: { height: "14px", width: "92%", "border-radius": "4px", "background-color": "var(--bg-subtle, #e2e8f0)" } }),
+          el("div", "Skeleton Line 2", { style: { height: "14px", width: "74%", "border-radius": "4px", "background-color": "var(--bg-subtle, #e2e8f0)" } }),
+        ]
+        : [
+          el("div", "Skeleton Title", { style: { height: "18px", width: "45%", "border-radius": "4px", "background-color": "var(--bg-subtle, #e2e8f0)" } }),
+          el("div", "Skeleton Line 1", { style: { height: "14px", width: "92%", "border-radius": "4px", "background-color": "var(--bg-subtle, #e2e8f0)" } }),
+          el("div", "Skeleton Line 2", { style: { height: "14px", width: "74%", "border-radius": "4px", "background-color": "var(--bg-subtle, #e2e8f0)" } }),
+        ],
     }),
   }),
 
@@ -245,25 +256,32 @@ const RAW_COMPONENTS = [
   def("input-field", "Input Field", "forms", "Labeled text input with visible label, helper text, and accessible focus ring.", {
     variants: ["text", "email", "search"],
     accessibility: { labelAssociation: "explicit label for/id", targetHeight: "40px" },
-    build: ({ label = "Work email", placeholder = "name@company.com", helper = "We only use this for workspace alerts.", variant = "email" } = {}) => el("div", "Input Field", {
-      style: { display: "flex", "flex-direction": "column", gap: "6px", "font-family": "var(--font-body, Inter, system-ui, sans-serif)" },
-      children: [
-        el("label", "Field Label", { text: label, attributes: { for: "field-input" }, style: { "font-size": "13px", "font-weight": "600", color: "var(--text-primary, #0f172a)" } }),
-        el("input", "Text Input", { attributes: { id: "field-input", type: variant, placeholder, class: "ninerr-interactive" }, style: INPUT_STYLE, stylesheet: INTERACTIVE_STYLESHEET }),
-        el("span", "Helper Text", { text: helper, style: { "font-size": "12px", color: "var(--text-muted, #475569)" } }),
-      ],
-    }),
+    build: ({ label = "Work email", placeholder = "name@company.com", helper = "We only use this for workspace alerts.", variant = "email", idSuffix = "default" } = {}) => {
+      const inputType = ["text", "email", "search"].includes(variant) ? variant : "email";
+      const inputId = `field-input-${idSuffix}`;
+      return el("div", "Input Field", {
+        style: { display: "flex", "flex-direction": "column", gap: "6px", "font-family": "var(--font-body, Inter, system-ui, sans-serif)" },
+        children: [
+          el("label", "Field Label", { text: label, attributes: { for: inputId }, style: { "font-size": "13px", "font-weight": "600", color: "var(--text-primary, #0f172a)" } }),
+          el("input", "Text Input", { attributes: { id: inputId, type: inputType, placeholder, class: "ninerr-interactive" }, style: INPUT_STYLE, stylesheet: INTERACTIVE_STYLESHEET }),
+          el("span", "Helper Text", { text: helper, style: { "font-size": "12px", color: "var(--text-muted, #475569)" } }),
+        ],
+      });
+    },
   }),
   def("textarea-field", "Textarea Field", "forms", "Multi-line labeled text area for structured descriptions and notes.", {
     variants: ["default"],
     accessibility: { labelAssociation: "explicit label for/id" },
-    build: ({ label = "Project notes", placeholder = "Describe goals, audience, and constraints..." } = {}) => el("div", "Textarea Field", {
-      style: { display: "flex", "flex-direction": "column", gap: "6px" },
-      children: [
-        el("label", "Textarea Label", { text: label, attributes: { for: "field-textarea" }, style: { "font-size": "13px", "font-weight": "600", color: "var(--text-primary, #0f172a)" } }),
-        el("textarea", "Textarea", { attributes: { id: "field-textarea", rows: "4", placeholder, class: "ninerr-interactive" }, style: { ...INPUT_STYLE, height: "auto", padding: "10px 12px", "line-height": "1.5" }, stylesheet: INTERACTIVE_STYLESHEET }),
-      ],
-    }),
+    build: ({ label = "Project notes", placeholder = "Describe goals, audience, and constraints...", idSuffix = "default" } = {}) => {
+      const textareaId = `field-textarea-${idSuffix}`;
+      return el("div", "Textarea Field", {
+        style: { display: "flex", "flex-direction": "column", gap: "6px" },
+        children: [
+          el("label", "Textarea Label", { text: label, attributes: { for: textareaId }, style: { "font-size": "13px", "font-weight": "600", color: "var(--text-primary, #0f172a)" } }),
+          el("textarea", "Textarea", { attributes: { id: textareaId, rows: "4", placeholder, class: "ninerr-interactive" }, style: { ...INPUT_STYLE, height: "auto", padding: "10px 12px", "line-height": "1.5" }, stylesheet: INTERACTIVE_STYLESHEET }),
+        ],
+      });
+    },
   }),
   def("select-field", "Select Field", "forms", "Native accessible dropdown selector bound to form tokens.", {
     variants: ["default"],
@@ -331,14 +349,14 @@ const RAW_COMPONENTS = [
   def("radio-group", "Radio Group", "forms", "Semantic fieldset and legend radio choice group.", {
     variants: ["default"],
     accessibility: { landmark: "fieldset + legend", keyboard: "Arrow keys move selection" },
-    build: ({ legend = "Interface density" } = {}) => el("fieldset", "Radio Group", {
+    build: ({ legend = "Interface density", idSuffix = "default" } = {}) => el("fieldset", "Radio Group", {
       style: { display: "flex", "flex-direction": "column", gap: "8px", border: "1px solid var(--border-subtle, #e2e8f0)", "border-radius": "var(--radius-md, 10px)", padding: "16px" },
       children: [
         el("legend", "Radio Legend", { text: legend, style: { padding: "0 6px", "font-size": "13px", "font-weight": "600", color: "var(--text-primary, #0f172a)" } }),
         ...["Compact", "Balanced", "Spacious"].map((opt, idx) => el("label", `Radio ${opt}`, {
           style: { display: "inline-flex", "align-items": "center", gap: "8px", "min-height": "32px", "font-size": "14px", color: "var(--text-primary, #0f172a)" },
           children: [
-            el("input", `Radio Input ${opt}`, { attributes: { type: "radio", name: "density", value: opt.toLowerCase(), ...(idx === 1 ? { checked: "checked" } : {}) }, style: { width: "16px", height: "16px" } }),
+            el("input", `Radio Input ${opt}`, { attributes: { type: "radio", name: `density-${idSuffix}`, value: opt.toLowerCase(), ...(idx === 1 ? { checked: "checked" } : {}) }, style: { width: "16px", height: "16px" } }),
             el("span", `Radio Text ${opt}`, { text: opt }),
           ],
         })),
@@ -348,22 +366,25 @@ const RAW_COMPONENTS = [
   def("form-section", "Form Section", "forms", "Complete structured form card with fields and clear primary/secondary action footer.", {
     variants: ["default"],
     accessibility: { landmark: "section role=form", actionHierarchy: "Single primary submit button" },
-    build: ({ title = "Workspace Profile" } = {}) => el("section", "Form Section", {
-      attributes: { role: "form", "aria-label": title },
-      style: CARD_STYLE,
-      children: [
-        el("h3", "Form Heading", { text: title, style: { margin: "0", "font-size": "18px", "font-weight": "600" } }),
-        el("label", "Name Label", { text: "Workspace name", attributes: { for: "ws-name" }, style: { "font-size": "13px", "font-weight": "600" } }),
-        el("input", "Name Input", { attributes: { id: "ws-name", type: "text", value: "Acme Design System" }, style: INPUT_STYLE }),
-        el("div", "Form Actions", {
-          style: { display: "flex", "justify-content": "flex-end", gap: "12px", "margin-top": "8px" },
-          children: [
-            el("button", "Cancel", { text: "Cancel", attributes: { type: "button", class: "ninerr-interactive" }, style: SECONDARY_BTN_STYLE }),
-            el("button", "Save", { text: "Save changes", attributes: { type: "submit", class: "ninerr-interactive" }, style: PRIMARY_BTN_STYLE }),
-          ],
-        }),
-      ],
-    }),
+    build: ({ title = "Workspace Profile", idSuffix = "default" } = {}) => {
+      const wsInputId = `ws-name-${idSuffix}`;
+      return el("section", "Form Section", {
+        attributes: { role: "form", "aria-label": title },
+        style: CARD_STYLE,
+        children: [
+          el("h3", "Form Heading", { text: title, style: { margin: "0", "font-size": "18px", "font-weight": "600" } }),
+          el("label", "Name Label", { text: "Workspace name", attributes: { for: wsInputId }, style: { "font-size": "13px", "font-weight": "600" } }),
+          el("input", "Name Input", { attributes: { id: wsInputId, type: "text", value: "Acme Design System" }, style: INPUT_STYLE }),
+          el("div", "Form Actions", {
+            style: { display: "flex", "justify-content": "flex-end", gap: "12px", "margin-top": "8px" },
+            children: [
+              el("button", "Cancel", { text: "Cancel", attributes: { type: "button", class: "ninerr-interactive" }, style: SECONDARY_BTN_STYLE }),
+              el("button", "Save", { text: "Save changes", attributes: { type: "submit", class: "ninerr-interactive" }, style: PRIMARY_BTN_STYLE }),
+            ],
+          }),
+        ],
+      });
+    },
   }),
 
   // ---- 3. NAVIGATION (5) ----------------------------------------------------
@@ -426,21 +447,31 @@ const RAW_COMPONENTS = [
   def("tabs", "Tabs", "navigation", "Accessible ARIA tablist and tabpanel switcher.", {
     variants: ["underline", "segmented"],
     accessibility: { role: "tablist + tab + tabpanel", ariaSelected: true },
-    build: () => el("div", "Tabs", {
-      style: { display: "flex", "flex-direction": "column", gap: "16px" },
-      children: [
-        el("div", "Tablist", {
-          attributes: { role: "tablist", "aria-label": "View sections" },
-          style: { display: "flex", gap: "4px", "border-bottom": "1px solid var(--border-subtle, #e2e8f0)" },
-          children: [
-            el("button", "Tab Overview", { text: "Overview", attributes: { type: "button", role: "tab", "aria-selected": "true" }, style: { padding: "10px 14px", "background-color": "transparent", border: "0", "border-bottom": "2px solid var(--accent-primary, #0f766e)", color: "var(--text-primary, #0f172a)", "font-size": "14px", "font-weight": "600", cursor: "pointer" } }),
-            el("button", "Tab Tokens", { text: "Tokens", attributes: { type: "button", role: "tab", "aria-selected": "false" }, style: { padding: "10px 14px", "background-color": "transparent", border: "0", color: "var(--text-muted, #475569)", "font-size": "14px", cursor: "pointer" } }),
-            el("button", "Tab Audit", { text: "Audit", attributes: { type: "button", role: "tab", "aria-selected": "false" }, style: { padding: "10px 14px", "background-color": "transparent", border: "0", color: "var(--text-muted, #475569)", "font-size": "14px", cursor: "pointer" } }),
-          ],
-        }),
-        el("div", "Tab Panel", { attributes: { role: "tabpanel" }, text: "Overview metrics and current release status.", style: { "font-size": "14px", color: "var(--text-muted, #475569)" } }),
-      ],
-    }),
+    build: ({ variant = "underline" } = {}) => {
+      const segmented = variant === "segmented";
+      const listStyle = segmented
+        ? { display: "inline-flex", gap: "4px", padding: "4px", "border-radius": "var(--radius-sm, 8px)", "background-color": "var(--bg-subtle, #f1f5f9)", border: "1px solid var(--border-subtle, #e2e8f0)" }
+        : { display: "flex", gap: "4px", "border-bottom": "1px solid var(--border-subtle, #e2e8f0)" };
+      const activeStyle = segmented
+        ? { padding: "8px 14px", "background-color": "var(--bg-surface, #ffffff)", border: "1px solid var(--border-subtle, #e2e8f0)", "border-radius": "6px", color: "var(--text-primary, #0f172a)", "font-size": "14px", "font-weight": "600", cursor: "pointer" }
+        : { padding: "10px 14px", "background-color": "transparent", border: "0", "border-bottom": "2px solid var(--accent-primary, #0f766e)", color: "var(--text-primary, #0f172a)", "font-size": "14px", "font-weight": "600", cursor: "pointer" };
+      const idleStyle = { padding: segmented ? "8px 14px" : "10px 14px", "background-color": "transparent", border: "0", color: "var(--text-muted, #475569)", "font-size": "14px", cursor: "pointer" };
+      return el("div", "Tabs", {
+        style: { display: "flex", "flex-direction": "column", gap: "16px" },
+        children: [
+          el("div", "Tablist", {
+            attributes: { role: "tablist", "aria-label": "View sections" },
+            style: listStyle,
+            children: [
+              el("button", "Tab Overview", { text: "Overview", attributes: { type: "button", role: "tab", "aria-selected": "true" }, style: activeStyle }),
+              el("button", "Tab Tokens", { text: "Tokens", attributes: { type: "button", role: "tab", "aria-selected": "false" }, style: idleStyle }),
+              el("button", "Tab Audit", { text: "Audit", attributes: { type: "button", role: "tab", "aria-selected": "false" }, style: idleStyle }),
+            ],
+          }),
+          el("div", "Tab Panel", { attributes: { role: "tabpanel" }, text: "Overview metrics and current release status.", style: { "font-size": "14px", color: "var(--text-muted, #475569)" } }),
+        ],
+      });
+    },
   }),
   def("breadcrumbs", "Breadcrumbs", "navigation", "Accessible hierarchical breadcrumb trail.", {
     variants: ["default"],
@@ -572,26 +603,29 @@ const RAW_COMPONENTS = [
   // ---- 5. INTERACTIVE (5) ---------------------------------------------------
   def("dialog-modal", "Dialog Modal", "interactive", "Accessible modal dialog with aria-modal, clear title, and explicit confirm/cancel actions.", {
     variants: ["default", "destructive"],
-    accessibility: { role: "dialog", ariaModal: "true", ariaLabelledby: "dialog-title" },
-    build: ({ title = "Publish token updates", body = "Apply 12 semantic token changes across light and dark modes?", variant = "default" } = {}) => el("section", "Dialog Modal", {
-      attributes: { role: "dialog", "aria-modal": "true", "aria-labelledby": "dialog-title" },
-      style: { ...CARD_STYLE, "max-width": "460px", "box-shadow": "var(--shadow-md, 0 8px 24px rgba(15, 23, 42, 0.12))", "border-radius": "var(--radius-lg, 14px)" },
-      children: [
-        el("h2", "Dialog Title", { text: title, attributes: { id: "dialog-title" }, style: { margin: "0", "font-size": "18px", "font-weight": "600" } }),
-        el("p", "Dialog Body", { text: body, style: { margin: "0", "font-size": "14px", "line-height": "1.6", color: "var(--text-muted, #475569)" } }),
-        el("div", "Dialog Actions", {
-          style: { display: "flex", "justify-content": "flex-end", gap: "10px", "margin-top": "8px" },
-          children: [
-            el("button", "Dialog Cancel", { text: "Cancel", attributes: { type: "button" }, style: SECONDARY_BTN_STYLE }),
-            el("button", "Dialog Confirm", {
-              text: variant === "destructive" ? "Delete" : "Confirm",
-              attributes: { type: "button", class: "ninerr-interactive" },
-              style: variant === "destructive" ? { ...PRIMARY_BTN_STYLE, "background-color": "var(--status-danger, #b91c1c)", color: "#ffffff" } : PRIMARY_BTN_STYLE,
-            }),
-          ],
-        }),
-      ],
-    }),
+    accessibility: { role: "dialog", ariaModal: "true", ariaLabelledby: "dialog-title-<instance>" },
+    build: ({ title = "Publish token updates", body = "Apply 12 semantic token changes across light and dark modes?", variant = "default", idSuffix = "default" } = {}) => {
+      const titleId = `dialog-title-${idSuffix}`;
+      return el("section", "Dialog Modal", {
+        attributes: { role: "dialog", "aria-modal": "true", "aria-labelledby": titleId },
+        style: { ...CARD_STYLE, "max-width": "460px", "box-shadow": "var(--shadow-md, 0 8px 24px rgba(15, 23, 42, 0.12))", "border-radius": "var(--radius-lg, 14px)" },
+        children: [
+          el("h2", "Dialog Title", { text: title, attributes: { id: titleId }, style: { margin: "0", "font-size": "18px", "font-weight": "600" } }),
+          el("p", "Dialog Body", { text: body, style: { margin: "0", "font-size": "14px", "line-height": "1.6", color: "var(--text-muted, #475569)" } }),
+          el("div", "Dialog Actions", {
+            style: { display: "flex", "justify-content": "flex-end", gap: "10px", "margin-top": "8px" },
+            children: [
+              el("button", "Dialog Cancel", { text: "Cancel", attributes: { type: "button" }, style: SECONDARY_BTN_STYLE }),
+              el("button", "Dialog Confirm", {
+                text: variant === "destructive" ? "Delete" : "Confirm",
+                attributes: { type: "button", class: "ninerr-interactive" },
+                style: variant === "destructive" ? { ...PRIMARY_BTN_STYLE, "background-color": "var(--status-danger, #b91c1c)", color: "#ffffff" } : PRIMARY_BTN_STYLE,
+              }),
+            ],
+          }),
+        ],
+      });
+    },
   }),
   def("drawer-sheet", "Drawer Sheet", "interactive", "Slide-over inspection drawer with header, scrollable body, and close control.", {
     variants: ["right"],
@@ -627,20 +661,28 @@ const RAW_COMPONENTS = [
   def("toast-alert", "Toast Notification", "interactive", "Non-blocking status notification banner using polite live region semantics.", {
     variants: ["info", "success", "danger"],
     accessibility: { role: "status", ariaLive: "polite" },
-    build: ({ title = "Changes saved", message = "All 41 tokens compiled cleanly across light and dark modes." } = {}) => el("div", "Toast Alert", {
-      attributes: { role: "status", "aria-live": "polite" },
-      style: { ...CARD_STYLE, "flex-direction": "row", "align-items": "center", "justify-content": "space-between", padding: "12px 16px", "max-width": "420px", "box-shadow": "var(--shadow-md, 0 8px 24px rgba(15, 23, 42, 0.1))" },
-      children: [
-        el("div", "Toast Body", {
-          style: { display: "flex", "flex-direction": "column", gap: "2px" },
-          children: [
-            el("strong", "Toast Title", { text: title, style: { "font-size": "14px" } }),
-            el("span", "Toast Message", { text: message, style: { "font-size": "13px", color: "var(--text-muted, #475569)" } }),
-          ],
-        }),
-        el("button", "Toast Dismiss", { text: "Dismiss", attributes: { type: "button" }, style: SECONDARY_BTN_STYLE }),
-      ],
-    }),
+    build: ({ title = "Changes saved", message = "All 41 tokens compiled cleanly across light and dark modes.", variant = "info" } = {}) => {
+      const borderByVariant = {
+        info: "var(--accent-primary, #0f766e)",
+        success: "var(--status-success, #166534)",
+        danger: "var(--status-danger, #b91c1c)",
+      };
+      const accent = Object.hasOwn(borderByVariant, variant) ? borderByVariant[variant] : borderByVariant.info;
+      return el("div", "Toast Alert", {
+        attributes: { role: variant === "danger" ? "alert" : "status", "aria-live": variant === "danger" ? "assertive" : "polite" },
+        style: { ...CARD_STYLE, "flex-direction": "row", "align-items": "center", "justify-content": "space-between", padding: "12px 16px", "max-width": "420px", "border-left": `4px solid ${accent}`, "box-shadow": "var(--shadow-md, 0 8px 24px rgba(15, 23, 42, 0.1))" },
+        children: [
+          el("div", "Toast Body", {
+            style: { display: "flex", "flex-direction": "column", gap: "2px" },
+            children: [
+              el("strong", "Toast Title", { text: title, style: { "font-size": "14px" } }),
+              el("span", "Toast Message", { text: message, style: { "font-size": "13px", color: "var(--text-muted, #475569)" } }),
+            ],
+          }),
+          el("button", "Toast Dismiss", { text: "Dismiss", attributes: { type: "button" }, style: SECONDARY_BTN_STYLE }),
+        ],
+      });
+    },
   }),
   def("command-bar", "Command Palette", "interactive", "Keyboard-first command palette with instant zero-latency search and action list.", {
     variants: ["default"],
@@ -762,21 +804,34 @@ const RAW_COMPONENTS = [
   def("hero-section", "Hero Section", "marketing-compositions", "High-conviction product hero with crisp typography hierarchy, restrained subcopy, and clear CTA pair.", {
     variants: ["centered", "split"],
     accessibility: { heading: "Single h1 display headline", contrast: "WCAG AA+" },
-    build: ({ headline = "Design everything AI builds.", subcopy = "The local-first design intelligence layer that gives every coding agent real design systems, craft critique, and visual verification." } = {}) => el("section", "Hero Section", {
-      style: { display: "flex", "flex-direction": "column", "align-items": "flex-start", gap: "20px", padding: "64px 32px", "max-width": "960px", "background-color": "var(--bg-canvas, #f8fafc)", color: "var(--text-primary, #0f172a)" },
-      children: [
-        el("span", "Hero Eyebrow", { text: "LOCAL-FIRST DESIGN INTELLIGENCE", style: { "font-size": "12px", "font-weight": "700", "letter-spacing": "0.08em", color: "var(--accent-primary, #0f766e)" } }),
-        el("h1", "Hero Headline", { text: headline, style: { margin: "0", "font-size": "48px", "font-weight": "700", "line-height": "1.08", "letter-spacing": "-0.03em", "font-family": "var(--font-heading, Inter, system-ui, sans-serif)" } }),
-        el("p", "Hero Subcopy", { text: subcopy, style: { margin: "0", "max-width": "620px", "font-size": "18px", "line-height": "1.6", color: "var(--text-muted, #475569)" } }),
-        el("div", "Hero Actions", {
-          style: { display: "flex", gap: "12px", "margin-top": "8px" },
-          children: [
-            el("button", "Hero Primary CTA", { text: "Install Ninerr", attributes: { type: "button", class: "ninerr-interactive" }, style: PRIMARY_BTN_STYLE, stylesheet: INTERACTIVE_STYLESHEET }),
-            el("button", "Hero Secondary CTA", { text: "Read documentation", attributes: { type: "button", class: "ninerr-interactive" }, style: SECONDARY_BTN_STYLE, stylesheet: INTERACTIVE_STYLESHEET }),
-          ],
-        }),
-      ],
-    }),
+    build: ({ headline = "Design everything AI builds.", subcopy = "The local-first design intelligence layer that gives every coding agent real design systems, craft critique, and visual verification.", variant = "split" } = {}) => {
+      const centered = variant === "centered";
+      return el("section", "Hero Section", {
+        style: {
+          display: "flex",
+          "flex-direction": "column",
+          "align-items": centered ? "center" : "flex-start",
+          "text-align": centered ? "center" : "left",
+          gap: "20px",
+          padding: "64px 32px",
+          "max-width": "960px",
+          "background-color": "var(--bg-canvas, #f8fafc)",
+          color: "var(--text-primary, #0f172a)",
+        },
+        children: [
+          el("span", "Hero Eyebrow", { text: "LOCAL-FIRST DESIGN INTELLIGENCE", style: { "font-size": "12px", "font-weight": "700", "letter-spacing": "0.08em", color: "var(--accent-primary, #0f766e)" } }),
+          el("h1", "Hero Headline", { text: headline, style: { margin: "0", "font-size": "48px", "font-weight": "700", "line-height": "1.08", "letter-spacing": "-0.03em", "font-family": "var(--font-heading, Inter, system-ui, sans-serif)" } }),
+          el("p", "Hero Subcopy", { text: subcopy, style: { margin: "0", "max-width": "620px", "font-size": "18px", "line-height": "1.6", color: "var(--text-muted, #475569)" } }),
+          el("div", "Hero Actions", {
+            style: { display: "flex", gap: "12px", "margin-top": "8px", "justify-content": centered ? "center" : "flex-start" },
+            children: [
+              el("button", "Hero Primary CTA", { text: "Install Ninerr", attributes: { type: "button", class: "ninerr-interactive" }, style: PRIMARY_BTN_STYLE, stylesheet: INTERACTIVE_STYLESHEET }),
+              el("button", "Hero Secondary CTA", { text: "Read documentation", attributes: { type: "button", class: "ninerr-interactive" }, style: SECONDARY_BTN_STYLE, stylesheet: INTERACTIVE_STYLESHEET }),
+            ],
+          }),
+        ],
+      });
+    },
   }),
   def("feature-grid", "Asymmetric Feature Showcase", "marketing-compositions", "Editorial lead-plus-supporting feature composition avoiding monotonous identical card grids.", {
     variants: ["asymmetric"],
@@ -915,7 +970,7 @@ const RAW_COMPONENTS = [
   }),
   def("chart-card", "Chart Card", "advanced", "Accessible data visualization card pairing SVG bar graphic with readable legend and summary.", {
     variants: ["bar"],
-    accessibility: { svgRole: "img with aria-label", legend: "Textual metric summary alongside graphic" },
+    accessibility: { svgLabel: "aria-label on svg", legend: "Textual metric summary alongside graphic" },
     build: ({ title = "Weekly Throughput" } = {}) => el("article", "Chart Card", {
       style: CARD_STYLE,
       children: [
@@ -981,7 +1036,9 @@ export function buildComponentOperations(id, {
 } = {}) {
   const entry = typeof id === "string" ? COMPONENT_MAP.get(id.trim().toLowerCase()) : null;
   if (!entry) throw new Error(`unknown Ninerr component: ${String(id)}`);
-  const rootSpec = entry.build(options);
+  const safeOptions = options !== null && typeof options === "object" && !Array.isArray(options) ? options : {};
+  const idSuffix = typeof idPrefix === "string" ? idPrefix.replace(/[^A-Za-z0-9_-]/gu, "").slice(0, 48) || "default" : "default";
+  const rootSpec = entry.build({ ...safeOptions, idSuffix });
   const operations = [];
   let seq = 0;
   const nextId = () => {
