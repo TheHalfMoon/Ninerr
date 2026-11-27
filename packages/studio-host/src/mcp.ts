@@ -2788,7 +2788,7 @@ export class ConfirmationBroker {
       item = { ...entryInput, id: `confirm-${randomUUID()}`, requestedAt: at, expires: Date.now() + CONFIRMATION_TTL_MS, decision: "pending", waiters: [] };
       this.#items.set(item.id, item);
       this.#notify(this.pending());
-    } else if (singleWaiter === true || item.waiters.length >= 4) {
+    } else if ((singleWaiter === true && item.waiters.length >= 1) || item.waiters.length >= 4) {
       return Promise.resolve({ outcome: "busy" });
     }
     const target = item;

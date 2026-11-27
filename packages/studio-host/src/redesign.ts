@@ -68,6 +68,7 @@ const AST_META_KEYS = new Set([
 const CSS_CUSTOM_PROP_NAME = /^--[A-Za-z0-9_-]{1,127}$/u;
 const CLASS_TOKEN_KEY = /^[^\s\u0000-\u001f]{1,128}$/u;
 const CLASS_TOKEN_VALUE = /^[^\u0000-\u001f"'`\\<>]{0,512}$/u;
+const UNSAFE_STYLING_PATTERN = /(?:^|[^\w-])(?:url|src|image-set|-webkit-image-set|image|cross-fade|-webkit-cross-fade|element|-moz-element|-webkit-canvas|-moz-image-rect|paint|expression|attr|env)\s*\(|javascript:|vbscript:|behavior\s*:|-moz-binding/iu;
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 const compareCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -144,8 +145,9 @@ export function assertWorkspaceRoot(workspaceRoot: string, projectsRoot?: string
     } catch {
       // Projects folder may not exist yet on first CLI invocation; compare resolved paths.
     }
-    const cmpA = process.platform === "win32" ? projectsCmp.toLowerCase() : projectsCmp;
-    const cmpB = process.platform === "win32" ? rootReal.toLowerCase() : rootReal;
+    const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+    const cmpA = caseInsensitive ? projectsCmp.toLowerCase() : projectsCmp;
+    const cmpB = caseInsensitive ? rootReal.toLowerCase() : rootReal;
     if (insideFolder(cmpA, cmpB) || insideFolder(cmpB, cmpA)) {
       throw new StudioError(400, "workspace-overlaps-projects", "workspace folder must not overlap Ninerr's projects folder");
     }
@@ -182,10 +184,11 @@ export function resolveSafeWorkspaceFile(
     if (seg === "" || seg === "." || seg === "..") {
       throw new StudioError(400, "invalid-path", `path escapes workspace: ${relPath.slice(0, 80)}`);
     }
-    if (i < segments.length - 1 && SKIP_DIRS.has(seg)) {
+    const lower = seg.toLowerCase();
+    if (i < segments.length - 1 && SKIP_DIRS.has(lower)) {
       throw new StudioError(400, "forbidden-path", `refusing to access restricted directory ${seg} in ${relPath.slice(0, 80)}`);
     }
-    if (i === segments.length - 1 && (seg === ".git" || seg === "node_modules")) {
+    if (i === segments.length - 1 && (lower === ".git" || lower === "node_modules")) {
       throw new StudioError(400, "forbidden-path", `refusing to access restricted path ${relPath.slice(0, 80)}`);
     }
     cursor = join(cursor, seg);
@@ -220,7 +223,15 @@ export function resolveSafeWorkspaceFile(
   if (!leafReal.startsWith(rootReal.endsWith(sep) ? rootReal : `${rootReal}${sep}`)) {
     throw new StudioError(400, "invalid-path", `path escapes workspace: ${relPath.slice(0, 80)}`);
   }
-  return { rootReal, absPath: leafReal, relNorm: relative(rootReal, leafReal).split(sep).join("/") };
+  const relNorm = relative(rootReal, leafReal).split(sep).join("/");
+  const normParts = relNorm.split("/");
+  for (let i = 0; i < normParts.length; i += 1) {
+    const lower = normParts[i].toLowerCase();
+    if ((i < normParts.length - 1 && SKIP_DIRS.has(lower)) || (i === normParts.length - 1 && (lower === ".git" || lower === "node_modules"))) {
+      throw new StudioError(400, "forbidden-path", `refusing to access restricted path ${relNorm.slice(0, 80)}`);
+    }
+  }
+  return { rootReal, absPath: leafReal, relNorm };
 }
 
 /** Read a bounded UTF-8 regular file inside `workspaceRoot` without following symlinks or blocking on FIFOs. */
@@ -632,10 +643,77 @@ function extractFunctionalContract(ast: any, source: string) {
 }
 
 /**
+ * Collect unsafe styling string/template-quasi occurrences inside `className`, `class`, and `style`
+ * attributes so `verifyFunctionalInvariance` blocks newly introduced external CSS loads (`url(...)`,
+ * `image-set(...)`, `expression(...)`, `javascript:`, etc.) and invalid static style values.
+ */
+function collectUnsafeStylingOccurrences(ast: any): Map<string, number> {
+  const counts = new Map<string, number>();
+  const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
+
+  const inspectStylingValue = (node: any, isStyleAttr: boolean) => {
+    const stack: any[] = [node];
+    while (stack.length > 0) {
+      const cur = stack.pop();
+      if (!cur || typeof cur !== "object") continue;
+      if (cur.type === "StringLiteral" && typeof cur.value === "string") {
+        if (UNSAFE_STYLING_PATTERN.test(cur.value)) {
+          bump(`unsafe:${cur.value}`);
+        } else if (isStyleAttr && cssValueProblem(cur.value) !== null) {
+          bump(`invalid-style:${cur.value}`);
+        }
+        continue;
+      }
+      if (cur.type === "TemplateElement") {
+        const text = String(cur.value?.cooked ?? cur.value?.raw ?? "");
+        if (UNSAFE_STYLING_PATTERN.test(text)) {
+          bump(`unsafe-tpl:${text}`);
+        }
+        continue;
+      }
+      for (const key of Object.keys(cur)) {
+        if (AST_META_KEYS.has(key)) continue;
+        // Skip non-computed object property keys inside `style={{ backgroundImage: ... }}`
+        if (isStyleAttr && cur.type === "ObjectProperty" && key === "key" && !cur.computed) continue;
+        const child = cur[key];
+        if (Array.isArray(child)) {
+          for (const item of child) if (item && typeof item === "object" && typeof item.type === "string") stack.push(item);
+        } else if (child && typeof child === "object" && typeof child.type === "string") {
+          stack.push(child);
+        }
+      }
+    }
+  };
+
+  const walkStack: any[] = [ast.program];
+  while (walkStack.length > 0) {
+    const node = walkStack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (node.type === "JSXAttribute") {
+      const name = jsxAttrName(node);
+      if (name === "className" || name === "class" || name === "style") {
+        if (node.value) inspectStylingValue(node.value, name === "style");
+        continue;
+      }
+    }
+    for (const key of Object.keys(node)) {
+      if (AST_META_KEYS.has(key)) continue;
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const item of child) if (item && typeof item === "object" && typeof item.type === "string") walkStack.push(item);
+      } else if (child && typeof child === "object" && typeof child.type === "string") {
+        walkStack.push(child);
+      }
+    }
+  }
+  return counts;
+}
+
+/**
  * Whole-File @babel/parser Business-Logic & JSX Functional-Contract Invariance Gate.
  * Proves a visual redesign patch kept directive prologues, non-JSX business logic, hooks,
  * event handlers, spreads, form/test/aria/data attributes, non-container tags, TS generics,
- * and dynamic styling expressions 100% intact.
+ * dynamic styling expressions, and zero-egress styling safety 100% intact.
  */
 export function verifyFunctionalInvariance(beforeSource: string, afterSource: string, filePath = "Component.tsx") {
   const violations: string[] = [];
@@ -678,6 +756,16 @@ export function verifyFunctionalInvariance(beforeSource: string, afterSource: st
   const afterLogicHash = sha256(JSON.stringify(canonicalAstJson(afterAst.program, { stripJsxStyling: true })));
   if (beforeLogicHash !== afterLogicHash) {
     violations.push("non-styling business logic, dynamic styling conditions, or component structure changed");
+  }
+
+  const beforeUnsafe = collectUnsafeStylingOccurrences(beforeAst);
+  const afterUnsafe = collectUnsafeStylingOccurrences(afterAst);
+  for (const [key, afterCount] of afterUnsafe.entries()) {
+    const beforeCount = beforeUnsafe.get(key) ?? 0;
+    if (afterCount > beforeCount) {
+      violations.push("styling patch introduced unsafe CSS external resource loading, script scheme, or invalid CSS value");
+      break;
+    }
   }
 
   return {
@@ -870,7 +958,7 @@ function scanWorkspacePaths(rootReal: string): string[] {
       if (files.length >= REDESIGN_LIMITS.maxScanFiles || entriesSeen >= REDESIGN_LIMITS.maxScanEntries) break;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) walk(join(dir, entry.name), depth + 1);
+        if (!SKIP_DIRS.has(entry.name.toLowerCase())) walk(join(dir, entry.name), depth + 1);
       } else if (entry.isFile()) {
         const ext = extname(entry.name).toLowerCase();
         if (CODE_EXTS.has(ext) || CSS_EXTS.has(ext) || ext === ".html") {
@@ -989,6 +1077,37 @@ export function analyzeCodebase(workspaceRoot: string) {
 }
 
 /**
+ * Verify that a Tier 1 CSS/SCSS patch ONLY modifies custom-property values in place (exact same
+ * declaration count, names, and surrounding bytes) and every changed value satisfies `cssValueProblem`.
+ */
+export function verifyCssTokenPatchInvariance(beforeCss: string, afterCss: string, { scss = false }: { scss?: boolean } = {}) {
+  const beforeDecls = extractCssCustomProperties(beforeCss, { scss });
+  const afterDecls = extractCssCustomProperties(afterCss, { scss });
+  if (beforeDecls.length !== afterDecls.length) {
+    return { ok: false, reason: "CSS custom property count changed; Tier 1 patches may only update existing token values in place" };
+  }
+  let reconstructed = beforeCss;
+  for (let i = beforeDecls.length - 1; i >= 0; i -= 1) {
+    const b = beforeDecls[i];
+    const a = afterDecls[i];
+    if (b.name !== a.name) {
+      return { ok: false, reason: `CSS custom property ${b.name} was renamed or reordered` };
+    }
+    if (b.value !== a.value) {
+      const problem = cssValueProblem(a.value);
+      if (problem !== null) {
+        return { ok: false, reason: `invalid CSS value for ${a.name}: ${problem}` };
+      }
+      reconstructed = reconstructed.slice(0, b.start) + a.value + reconstructed.slice(b.end);
+    }
+  }
+  if (reconstructed !== afterCss) {
+    return { ok: false, reason: "Tier 1 CSS patch modified bytes outside CSS custom property values" };
+  }
+  return { ok: true as const };
+}
+
+/**
  * Tier 1: Patch CSS custom-property values in place without ever renaming or deleting variables.
  * Rejects unsafe CSS values (external loads, scripts, comments, unbalanced brackets/blocks) via `cssValueProblem`.
  */
@@ -1071,7 +1190,7 @@ export function patchJsxClassStrings(source: string, filePath: string, classRepl
     if (!CLASS_TOKEN_KEY.test(from)) {
       throw new StudioError(422, "invalid-class-token", `invalid source class token ${JSON.stringify(from.slice(0, 60))}`);
     }
-    if (typeof to !== "string" || !CLASS_TOKEN_VALUE.test(to)) {
+    if (typeof to !== "string" || !CLASS_TOKEN_VALUE.test(to) || UNSAFE_STYLING_PATTERN.test(to)) {
       throw new StudioError(422, "invalid-class-token", `invalid replacement class value for ${from}`);
     }
     map.set(from, to.trim());
@@ -1404,6 +1523,10 @@ export function applyRedesignPlan(plan: RedesignPlan, { journalDir, expectedPlan
     if (patch.tier === 1) {
       if (!CSS_EXTS.has(ext)) {
         throw new StudioError(422, "unsupported-tier1-file", `Tier 1 patches may only target .css/.scss files (got ${read.file})`);
+      }
+      const cssCheck = verifyCssTokenPatchInvariance(read.content, patch.afterContent, { scss: ext === ".scss" });
+      if (!cssCheck.ok) {
+        throw new StudioError(422, "invariance-violated", `${read.file} failed Tier 1 CSS invariance gate: ${cssCheck.reason}`);
       }
     } else if (patch.tier === 2 || patch.tier === 3) {
       if (!INVARIANCE_GATED_EXTS.has(ext)) {
