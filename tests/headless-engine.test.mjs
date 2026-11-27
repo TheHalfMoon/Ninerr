@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
-import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
+import { PROJECT_FILES, createProject } from "../packages/persistence/src/index.ts";
+import { createDocument } from "@ninerr/document-model";
 import { runHeadless } from "../packages/studio-host/src/index.ts";
 import { exportDtcgTokens, parseDtcgTokens } from "../packages/studio-host/src/tokens-dtcg.ts";
 
@@ -622,3 +623,144 @@ test("DTCG export resolves cross-collection aliases, ignores var() in quoted str
   assert.equal(re.types["font-note"], "fontFamily");
   assert.equal(re.descriptions["brand-action"], "Primary CTA");
 });
+
+
+test("an agent plans aesthetic directions, sets a product brief with seeded tokens, evaluates taste, applies reduced-motion presets, and reads skills via MCP", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize("DesignAgent");
+  await agent.call("create_project", { name: "intel" });
+
+  // 1. Read archetypes, plan 3 distinct directions, and read skills.
+  const archs = (await agent.call("design_intelligence", { action: "archetypes" })).structuredContent;
+  assert.equal(archs.archetypes.length, 9);
+
+  const plan = (await agent.call("design_intelligence", { action: "plan", productName: "PulseOps", domain: "developer-tools", density: "compact" })).structuredContent;
+  assert.equal(plan.directions.length, 3);
+  const chosenId = plan.recommendedDirectionId;
+
+  const skills = (await agent.call("design_intelligence", { action: "skills" })).structuredContent;
+  assert.equal(skills.skills.length, 19);
+  const motionSkill = (await agent.call("design_intelligence", { action: "skill", skillId: "motion" })).structuredContent;
+  assert.match(motionSkill.markdown, /^---\nname: ninerr-motion\n/u);
+
+  // 2. Store brief + seed direction tokens in one atomic undoable transaction; BiDi refused.
+  assert.equal((await agent.call("set_design_brief", { productName: "Bad\u202eName", domain: "fintech" })).isError, true, "BiDi brief rejected");
+  const seeded = await agent.call("set_design_brief", {
+    productName: "PulseOps",
+    domain: "developer-tools",
+    density: "compact",
+    themePreference: "dark",
+    applyDirectionId: chosenId,
+  });
+  assert.equal(seeded.isError, undefined, text(seeded));
+  assert.ok(seeded.structuredContent.seededTokens >= 30);
+
+  const briefRead = (await agent.call("design_intelligence", { action: "brief" })).structuredContent;
+  assert.equal(briefRead.brief.productName, "PulseOps");
+
+  // 3. Create a frame with a low-contrast child, run taste critique, and apply reduced-motion presets.
+  const built = (await agent.call("create_layers", {
+    nodes: [
+      { tempId: "root", type: "frame", tag: "main", name: "Console", style: { padding: "48px", background: "linear-gradient(90deg, #6366f1, #ec4899)" } },
+      { parentId: "root", type: "element", tag: "p", name: "Faint", text: "Low contrast", style: { color: "#aaaaaa", "background-color": "#bbbbbb" } },
+    ],
+  })).structuredContent;
+  const rootId = built.created[0].nodeId;
+
+  const taste = (await agent.call("design_intelligence", { action: "taste", nodeId: rootId })).structuredContent;
+  assert.ok(taste.summary.deterministicDefects >= 1);
+  assert.ok(taste.findings.some((f) => f.ruleId === "taste:color-low-contrast"));
+  assert.ok(taste.findings.some((f) => f.ruleId === "taste:anti-slop-gratuitous-gradient"));
+
+  const applied = await agent.call("apply_motion", { nodeId: rootId, presetIds: ["hover", "focus", "enter"] });
+  assert.equal(applied.isError, undefined, text(applied));
+  assert.equal(applied.structuredContent.nodeId, rootId);
+  assert.equal(applied.structuredContent.selector, ":scope", "default apply_motion selector is :scope so exports match");
+
+  // Consecutive apply_motion preserves prior motion presets and rejects invalid selectors or reducedMotion: "none".
+  assert.equal((await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], selector: 'bad[attr="unclosed' })).isError, true, "unbalanced selector refused");
+  assert.equal((await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], reducedMotion: "none" })).isError, true, "reducedMotion: none refused over MCP");
+  const appliedPress = await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], reducedMotion: "minimal" });
+  assert.equal(appliedPress.isError, undefined, text(appliedPress));
+  const motionAfter = (await agent.call("design_intelligence", { action: "brief" })).structuredContent.motion;
+  assert.ok(motionAfter.presets.some((p) => p.id === "enter") && motionAfter.presets.some((p) => p.id === "press"), "consecutive apply_motion merges presets non-destructively");
+  // Re-apply enter so exported HTML contains keyframes for the check below.
+  await agent.call("apply_motion", { nodeId: rootId, presetIds: ["hover", "focus", "enter"] });
+
+  // Verify motion stylesheet compiles cleanly into exported HTML with prefers-reduced-motion, while tokens CSS stays :root/mode only.
+  const htmlOut = (await agent.call("export_design", { nodeId: rootId, format: "html", name: "console" })).structuredContent;
+  const htmlText = readFileSync(htmlOut.path, "utf8");
+  assert.match(htmlText, /@keyframes ninerr-enter/u);
+  assert.match(htmlText, /prefers-reduced-motion: reduce/u);
+  assert.doesNotMatch(htmlText, /scroll-behavior/iu);
+
+  const tokCssOut = (await agent.call("export_design", { format: "tokens-css", name: "tokens" })).structuredContent;
+  const tokCssText = readFileSync(tokCssOut.path, "utf8");
+  assert.match(tokCssText, /--ease-out:/u);
+  assert.doesNotMatch(tokCssText, /@keyframes|@media/iu);
+
+  const lintClean = (await agent.call("design_intelligence", { action: "motion_lint", nodeId: rootId })).structuredContent;
+  assert.deepEqual(lintClean.findings, [], "applied Ninerr motion stylesheet has 0 lint findings");
+  assert.equal((await agent.call("design_intelligence", { action: "motion_frequency", trigger: "click", presetId: "unknown-preset" })).isError, true, "unknown motion_frequency preset returns ToolError");
+
+  await agent.call("close_project");
+
+  // 4. Token missing defaultMode & dark-as-default set_design_brief({ applyDirectionId }) preserves light and dark modes safely.
+  await agent.call("create_project", { name: "dark-default" });
+  const initTok = await agent.call("set_token", { name: "--bg-surface", type: "spacing", collection: "base", values: { default: "16px" } });
+  assert.equal(initTok.isError, undefined, text(initTok));
+  const addAlt = await agent.call("add_token_mode", { collection: "base", id: "alt", name: "Alt" });
+  assert.equal(addAlt.isError, undefined, text(addAlt));
+  const onlyAltSet = await agent.call("set_token", { name: "--only-alt", type: "color", collection: "base", values: { alt: "#123456" } });
+  assert.equal(onlyAltSet.isError, undefined, text(onlyAltSet));
+  const fintechPlan = (await agent.call("design_intelligence", { action: "plan", productName: "Vault", domain: "fintech" })).structuredContent;
+  const darkSeeded = await agent.call("set_design_brief", {
+    productName: "Vault",
+    domain: "fintech",
+    applyDirectionId: fintechPlan.recommendedDirectionId,
+  });
+  assert.equal(darkSeeded.isError, undefined, text(darkSeeded));
+  const tokensAfter = (await agent.call("design_tokens")).structuredContent.tokens;
+  const onlyAlt = tokensAfter.find((t) => t.name === "--only-alt");
+  assert.deepEqual(onlyAlt.values, { alt: "#123456" }, "token missing defaultMode is never backfilled with undefined");
+  const bgSurface = tokensAfter.find((t) => t.name === "--bg-surface");
+  assert.equal(bgSurface.type, "color", "existing token type reconciled to planned token type");
+  assert.notEqual(bgSurface.values.default, bgSurface.values.dark, "light and dark values stay distinct");
+  await agent.call("close_project");
+
+  // 5. True dark-as-default collection (defaultMode: "dark", only dark mode) creates a distinct light mode without dropping light values.
+  const darkDoc = createDocument({ id: "doc-dark-only", name: "Dark First" });
+  darkDoc.schemaVersion = 2;
+  darkDoc.rootIds.push("ds-dark");
+  darkDoc.nodes["ds-dark"] = {
+    id: "ds-dark",
+    type: "design-system",
+    parentId: null,
+    children: [],
+    metadata: {},
+    props: {
+      name: "Dark DS",
+      collections: [{ id: "base", name: "Base", modes: [{ id: "dark", name: "Dark" }], defaultMode: "dark" }],
+      tokens: [{ name: "--existing-dark", type: "color", collection: "base", values: { dark: "#090d16" } }],
+    },
+  };
+  const darkProjectDir = join(projects, "dark-only");
+  mkdirSync(darkProjectDir, { recursive: true });
+  createProject(darkProjectDir, { projectId: "dark-only", document: darkDoc, createdAt: "2026-11-27T00:00:00.000Z" });
+  const openDark = await agent.call("open_project", { name: "dark-only" });
+  assert.equal(openDark.isError, undefined, text(openDark));
+  const darkOnlySeed = await agent.call("set_design_brief", {
+    productName: "Nocturne",
+    domain: "developer-tools",
+    applyDirectionId: chosenId,
+  });
+  assert.equal(darkOnlySeed.isError, undefined, text(darkOnlySeed));
+  const darkOnlyTokens = (await agent.call("design_tokens")).structuredContent;
+  assert.ok(darkOnlyTokens.collections[0].modes.some((m) => m.id === "light"), "light mode created for dark-as-default collection");
+  const darkOnlyBg = darkOnlyTokens.tokens.find((t) => t.name === "--bg-surface");
+  assert.ok(typeof darkOnlyBg.values.light === "string" && typeof darkOnlyBg.values.dark === "string");
+  assert.notEqual(darkOnlyBg.values.light, darkOnlyBg.values.dark, "dark-as-default preserves distinct light and dark token values");
+
+  await agent.call("close_project");
+  await agent.stop();
+}));

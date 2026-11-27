@@ -273,6 +273,27 @@ export function addCollection(document, { id, name, modeId = "default", modeName
   return [{ type: "set-props", nodeId: system.id, set: { collections } }];
 }
 
+/** Set or update the design system's structured product design brief as one undoable edit. */
+export function setDesignBrief(document, brief) {
+  const system = requireSystem(document);
+  checked(system, { brief });
+  return [{ type: "set-props", nodeId: system.id, set: { brief } }];
+}
+
+/** Set or update the design system's responsive breakpoints as one undoable edit. */
+export function setBreakpoints(document, breakpoints) {
+  const system = requireSystem(document);
+  checked(system, { breakpoints });
+  return [{ type: "set-props", nodeId: system.id, set: { breakpoints } }];
+}
+
+/** Set or update the design system's motion configuration as one undoable edit. */
+export function setMotionSystem(document, motion) {
+  const system = requireSystem(document);
+  checked(system, { motion });
+  return [{ type: "set-props", nodeId: system.id, set: { motion } }];
+}
+
 /**
  * The CSS the tokens compile to: each token's default-mode value on :root, and each other mode's
  * values under [data-ninerr-mode~="collection:mode"], which a layer carries to take that mode.
