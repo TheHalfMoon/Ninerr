@@ -14,9 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createInterface } from "node:readline";
-import { prepareProjectsFolder, resolveProjectsFolder, runHeadless } from "../packages/studio-host/src/index.ts";
+import * as studioHost from "../packages/studio-host/src/index.ts";
+const { prepareProjectsFolder, resolveProjectsFolder, runHeadless } = studioHost;
 
-const USAGE = "usage: ninerr mcp [--projects <folder>] | ninerr doctor [--projects <folder>] | ninerr --version";
+const USAGE = "usage: ninerr mcp [--projects <folder>] | ninerr doctor [--projects <folder>] | ninerr design <plan|archetypes|archetype|skills> | ninerr motion <presets|compile|lint|react|frequency> | ninerr components <list|show> | ninerr tokens <audit|merge> | ninerr <preview|critique|audit|improve> <project-folder> | ninerr --version";
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 function fail(message) {
@@ -33,36 +34,40 @@ if (command === "help" || command === "--help" || command === "-h") {
   process.stdout.write(`${USAGE}\n`);
   process.exit(0);
 }
-if (command !== "mcp" && command !== "doctor") fail(command === undefined ? "name a command" : `unknown command ${JSON.stringify(command)}`);
-let projects;
-for (let index = 0; index < args.length; index += 1) {
-  if (args[index] === "--projects" && args[index + 1] !== undefined && !args[index + 1].startsWith("--")) projects = args[++index];
-  else fail(`unknown option ${JSON.stringify(args[index])}`);
-}
-const { path: projectsRoot, note: folderNote } = resolveProjectsFolder(projects);
-
-if (command === "doctor") {
-  process.exitCode = await doctor();
+if (Array.isArray(studioHost.EXTENDED_CLI_COMMANDS) && studioHost.EXTENDED_CLI_COMMANDS.includes(command) && typeof studioHost.runCliCommand === "function") {
+  process.exitCode = await studioHost.runCliCommand(command, args, { version: VERSION });
 } else {
-  try {
-    const { note } = prepareProjectsFolder(projectsRoot);
-    // stdout carries MCP only: notes go to stderr, which clients show in their logs.
-    for (const line of [folderNote, note]) if (line !== null) process.stderr.write(`ninerr: note: ${line}\n`);
-  } catch (error) {
-    fail(`cannot use the projects folder ${projectsRoot}: ${error instanceof Error ? error.message : String(error)}`);
+  if (command !== "mcp" && command !== "doctor") fail(command === undefined ? "name a command" : `unknown command ${JSON.stringify(command)}`);
+  let projects;
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--projects" && args[index + 1] !== undefined && !args[index + 1].startsWith("--")) projects = args[++index];
+    else fail(`unknown option ${JSON.stringify(args[index])}`);
   }
-  process.stderr.write(`ninerr: headless engine on stdio, projects folder ${projectsRoot}\n`);
-  // A client that goes away closes stdin, which ends the engine and closes the open project.
-  // A stopped client (a signal) or a closed stdout ends it the same way.
-  const stop = () => process.stdin.destroy();
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  process.stdout.on("error", stop);
-  await runHeadless({ projectsRoot, input: process.stdin, output: process.stdout });
+  const { path: projectsRoot, note: folderNote } = resolveProjectsFolder(projects);
+
+  if (command === "doctor") {
+    process.exitCode = await doctor(projectsRoot);
+  } else {
+    try {
+      const { note } = prepareProjectsFolder(projectsRoot);
+      // stdout carries MCP only: notes go to stderr, which clients show in their logs.
+      for (const line of [folderNote, note]) if (line !== null) process.stderr.write(`ninerr: note: ${line}\n`);
+    } catch (error) {
+      fail(`cannot use the projects folder ${projectsRoot}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    process.stderr.write(`ninerr: headless engine on stdio, projects folder ${projectsRoot}\n`);
+    // A client that goes away closes stdin, which ends the engine and closes the open project.
+    // A stopped client (a signal) or a closed stdout ends it the same way.
+    const stop = () => process.stdin.destroy();
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    process.stdout.on("error", stop);
+    await runHeadless({ projectsRoot, input: process.stdin, output: process.stdout });
+  }
 }
 
 /** Check the setup, each check with what to do when it fails; 0 when all pass. */
-async function doctor() {
+async function doctor(projectsRoot) {
   let failed = 0;
   const say = (ok, what, fix) => {
     process.stdout.write(`${ok ? "ok  " : "FAIL"} ${what}${ok || fix === undefined ? "" : `\n     ${fix}`}\n`);

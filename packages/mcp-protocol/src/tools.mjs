@@ -19,6 +19,7 @@ const CLASSES = Object.freeze({
   guide: "read",
   finish_task: "read",
   create_frame: "write",
+  create_layers: "write",
   set_text: "write",
   rename_layers: "write",
   set_styles: "write",
@@ -51,8 +52,21 @@ const CLASSES = Object.freeze({
   project_history: "read",
   undo_change: "write",
   redo_change: "write",
-  // Code and a preview written into the project's own exports folder; the document is unchanged.
+  // Code, markup and tokens imported into the project; code and previews exported to exports/.
+  import_source: "write",
   export_design: "write",
+  // Design intelligence: briefs, archetypes, multi-direction planning, taste critique, motion, and skills.
+  design_intelligence: "read",
+  set_design_brief: "write",
+  apply_motion: "write",
+  // Native editable Ninerr components and design-system operations (audit, theme migration, high-contrast, breakpoints).
+  instantiate_component: "write",
+  audit_design_system: "read",
+  migrate_theme: "write",
+  // Real-browser rendering, visual pixel diff, unified Ninerr Critic, and bounded in-memory improvement.
+  render_preview: "write",
+  critique_design: "read",
+  improve_design: "write",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

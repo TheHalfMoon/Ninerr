@@ -1,13 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
-import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
+import { PROJECT_FILES, createProject } from "../packages/persistence/src/index.ts";
+import { createDocument } from "@ninerr/document-model";
 import { runHeadless } from "../packages/studio-host/src/index.ts";
+import { exportDtcgTokens, parseDtcgTokens } from "../packages/studio-host/src/tokens-dtcg.ts";
 
 // The headless engine (docs/HEADLESS.md): the real `ninerr mcp` process on stdio, driven as an
 // agent's client drives it. No editor, browser or desktop app runs.
@@ -410,3 +412,580 @@ test("an idle project waiting on the person stays open until the question ends, 
     rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
+
+
+test("an agent authors a multi-section semantic page with create_layers, imports HTML/JSX/tokens, exports TSX and tokens, and recovers stale locks", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize("Builder");
+  await agent.call("create_project", { name: "authoring" });
+
+  // 1. Atomic nested tree creation with tempId references in one transaction.
+  const dry = await agent.call("create_layers", {
+    dryRun: true,
+    nodes: [
+      { tempId: "page", type: "frame", tag: "main", name: "Pricing", style: { display: "flex", "flex-direction": "column", gap: "24px", padding: "32px" } },
+      { tempId: "title", parentId: "page", type: "element", tag: "h1", name: "Heading", text: "Simple pricing", style: { "font-size": "36px", color: "#111827" } },
+      { parentId: "page", type: "element", tag: "button", name: "Primary CTA", text: "Start free", attributes: { type: "button", "aria-label": "Start free trial" }, style: { background: "#111827", color: "#ffffff", padding: "12px 20px" } },
+    ],
+  });
+  assert.equal(dry.isError, undefined, text(dry));
+  assert.equal(dry.structuredContent.dryRun, true);
+  assert.equal((await agent.call("project_info")).structuredContent.revision, 0, "dryRun commits nothing");
+
+  const built = await agent.call("create_layers", {
+    nodes: [
+      { tempId: "page", type: "frame", tag: "main", name: "Pricing", style: { display: "flex", "flex-direction": "column", gap: "24px", padding: "32px" } },
+      { tempId: "title", parentId: "page", type: "element", tag: "h1", name: "Heading", text: "Simple pricing", style: { "font-size": "36px", color: "#111827" } },
+      { parentId: "page", type: "element", tag: "button", name: "Primary CTA", text: "Start free", attributes: { type: "button", "aria-label": "Start free trial" }, style: { background: "#111827", color: "#ffffff", padding: "12px 20px" } },
+    ],
+  });
+  assert.equal(built.isError, undefined, text(built));
+  assert.equal(built.structuredContent.revision, 1, "entire nested tree is one atomic transaction");
+  assert.equal(built.structuredContent.created.length, 3);
+  const pageId = built.structuredContent.created[0].nodeId;
+  const tree = (await agent.call("layer_tree", { nodeId: pageId, depth: 3 })).structuredContent.tree;
+  assert.equal(tree[0].tag, "main");
+  assert.deepEqual(tree[0].children.map((c) => c.tag), ["h1", "button"]);
+
+  // Security & validation refusals on create_layers.
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "script", text: "alert(1)" }] })).isError, true, "script tag refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", style: { background: "url(https://evil.example/x.png)" } }] })).isError, true, "url() style refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", style: { color: "a".repeat(2001) } }] })).isError, true, "oversized style value refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", name: "bad\u202ename" }] })).isError, true, "bidi smuggling in nodes[].name refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "button", attributes: { onclick: "alert(1)" } }] })).isError, true, "event handler attribute refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "a", attributes: { href: "javascript:alert(1)" } }] })).isError, true, "javascript: href refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", attributes: { dir: "sideways" } }] })).isError, true, "invalid dir attribute refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", attributes: { ["__proto__"]: "pollute" } }] })).isError, true, "__proto__ attribute name refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ type: null, tag: "div" }] })).isError, true, "null type refused");
+
+  // 2. import_source: HTML (strips script, preserves semantics & linked CSS), JSX, CSS tokens, and W3C DTCG JSON.
+  const htmlImport = await agent.call("import_source", {
+    format: "html",
+    name: "Imported Hero",
+    source: '<html><head><link rel="stylesheet" href="hero.css"></head><body><section><script>alert(1)</script><h2>Hello HTML</h2><p>Clean copy</p></section></body></html>',
+    stylesheets: [{ name: "hero.css", css: "h2 { color: #0f172a; }" }],
+  });
+  assert.equal(htmlImport.isError, undefined, text(htmlImport));
+  assert.equal(htmlImport.structuredContent.format, "html");
+  assert.ok(htmlImport.structuredContent.layers >= 3);
+
+  const jsxImport = await agent.call("import_source", {
+    format: "jsx",
+    name: "MetricCard",
+    source: 'export function MetricCard() { return <article style={{ padding: "16px" }}><h3>Revenue</h3><p>$42k</p></article>; }',
+  });
+  assert.equal(jsxImport.isError, undefined, text(jsxImport));
+  assert.equal(jsxImport.structuredContent.componentName, "MetricCard");
+
+  const cssTokens = await agent.call("import_source", {
+    format: "tokens-css",
+    name: "theme.css",
+    source: ":root { --surface-bg: #ffffff; --brand-accent: #2563eb; } .dark { --surface-bg: #0b1020; }",
+  });
+  assert.equal(cssTokens.isError, undefined, text(cssTokens));
+  assert.equal(cssTokens.structuredContent.adds, 2);
+
+  const dtcgTokens = await agent.call("import_source", {
+    format: "tokens-json",
+    name: "tokens.json",
+    source: JSON.stringify({
+      color: {
+        $type: "color",
+        primary: { $value: "{brand.accent}", $description: "Primary brand action", $extensions: { modes: { dark: "#60a5fa" } } },
+        muted: { $value: "#64748b" },
+      },
+      layout: {
+        gutter: { $type: "dimension", $value: { value: 16, unit: "px" } },
+      },
+      elevation: {
+        sm: { $type: "shadow", $value: { offsetX: "0px", offsetY: "2px", blur: "8px", color: "rgba(15, 23, 42, 0.12)" } },
+      },
+    }),
+  });
+  assert.equal(dtcgTokens.isError, undefined, text(dtcgTokens));
+  assert.equal(dtcgTokens.structuredContent.adds, 4);
+
+  // Verify explicit DTCG $type and $description were preserved instead of guessed as "color".
+  const listed = (await agent.call("design_tokens")).structuredContent.tokens;
+  assert.equal(listed.find((t) => t.name === "--layout-gutter")?.type, "spacing");
+  assert.equal(listed.find((t) => t.name === "--elevation-sm")?.type, "shadow");
+  assert.equal(listed.find((t) => t.name === "--color-primary")?.description, "Primary brand action");
+
+  // Verify DTCG security edge cases: empty-slug alias {---} and nested shadow objects are skipped, not committed as var(--) or stack-overflowed.
+  const badDtcg = await agent.call("import_source", {
+    format: "tokens-json",
+    name: "bad.json",
+    source: JSON.stringify({
+      badAlias: { $type: "color", $value: "{---}" },
+      nestedShadow: { $type: "shadow", $value: { offsetX: { offsetX: "0px", offsetY: "0px", color: "#000" }, offsetY: "2px", color: "#000" } },
+      badDark: { $type: "color", $value: "#ffffff", $extensions: { modes: { dark: "url(https://evil.example/a)" } } },
+    }),
+  });
+  assert.equal(badDtcg.isError, undefined, text(badDtcg));
+  assert.equal(badDtcg.structuredContent.adds, 0);
+  assert.equal(badDtcg.structuredContent.skipped, 3);
+
+  // Verify #64 label sanitization: BiDi-smuggled DTCG $description is refused.
+  const smuggledDesc = await agent.call("import_source", {
+    format: "tokens-json",
+    name: "smuggled.json",
+    source: JSON.stringify({
+      brand: { $type: "color", $value: "#111111", $description: "Safe\u202egnp.exe" },
+    }),
+  });
+  assert.equal(smuggledDesc.isError, true, "BiDi-smuggled DTCG $description refused");
+
+  // 3. export_design: tsx, tokens-css, tokens-json (no nodeId required for tokens) + lossless round-trip + __proto__ safety.
+  const tsxOut = (await agent.call("export_design", { nodeId: pageId, format: "tsx", name: "PricingView" })).structuredContent;
+  assert.ok(tsxOut.path.endsWith("PricingView.tsx"));
+  const tsxSource = readFileSync(tsxOut.path, "utf8");
+  assert.match(tsxSource, /^import type React from "react";/u);
+  assert.match(tsxSource, /React\.JSX\.Element/u);
+
+  const cssOut = (await agent.call("export_design", { format: "tokens-css", name: "design-tokens" })).structuredContent;
+  assert.ok(cssOut.path.endsWith("design-tokens.css"));
+  assert.match(readFileSync(cssOut.path, "utf8"), /--brand-accent: #2563eb/u);
+
+  const jsonOut = (await agent.call("export_design", { format: "tokens-json", name: "design-tokens" })).structuredContent;
+  assert.ok(jsonOut.path.endsWith("design-tokens.json"));
+  const exportedDtcgText = readFileSync(jsonOut.path, "utf8");
+  const exportedDtcg = JSON.parse(exportedDtcgText);
+  assert.equal(exportedDtcg["brand-accent"].$value, "#2563eb");
+  assert.equal(exportedDtcg["color-primary"].$value, "{brand-accent}");
+  // Round-trip re-import of exported DTCG JSON adds 0 duplicate tokens.
+  const reimported = await agent.call("import_source", { format: "tokens-json", name: "roundtrip.json", source: exportedDtcgText });
+  assert.equal(reimported.isError, undefined, text(reimported));
+  assert.equal(reimported.structuredContent.adds, 0, "exported DTCG round-trips without duplicating prefixes");
+
+  // Token named --__proto__ exports safely without prototype mutation.
+  const protoTok = await agent.call("set_token", { name: "--__proto__", type: "color", collection: "base", values: { default: "#123456" } });
+  assert.equal(protoTok.isError, undefined, text(protoTok));
+  const protoExport = (await agent.call("export_design", { format: "tokens-json", name: "proto-tokens" })).structuredContent;
+  assert.match(readFileSync(protoExport.path, "utf8"), /"__proto__":\s*\{/u, "--__proto__ serializes as an own key");
+
+  // Multi-collection cross-collection alias resolves target collection accurately in DTCG export.
+  await agent.call("set_token", { name: "--sem-accent", type: "color", collection: "base", values: { default: "var(--brand-accent)" } });
+  const multiExport = (await agent.call("export_design", { format: "tokens-json", name: "alias-tokens" })).structuredContent;
+  assert.equal(JSON.parse(readFileSync(multiExport.path, "utf8"))["sem-accent"].$value, "{brand-accent}");
+
+  // 4. Live-lock refusal vs stale-lock recovery via open_project({ breakStaleLock: true }).
+  const rival = engine(projects);
+  await rival.initialize("Rival");
+  const liveRefused = await rival.call("open_project", { name: "authoring", breakStaleLock: true });
+  assert.equal(liveRefused.isError, true, "breakStaleLock refuses a lock held by a live process");
+  await rival.stop();
+
+  await agent.call("close_project");
+  await agent.stop();
+
+  const lockPath = join(projects, "authoring", PROJECT_FILES.directory, "lock");
+  writeFileSync(lockPath, JSON.stringify({ holderId: "crashed", pid: 999_999, acquiredAt: "2026-01-01T00:00:00.000Z" }));
+  const recover = engine(projects);
+  await recover.initialize("Recovery");
+  assert.equal((await recover.call("open_project", { name: "authoring" })).isError, true, "stale lock refused without breakStaleLock");
+  const recovered = await recover.call("open_project", { name: "authoring", breakStaleLock: true });
+  assert.equal(recovered.isError, undefined, text(recovered));
+  assert.equal(recovered.structuredContent.project, "authoring");
+  await recover.stop();
+}));
+
+
+test("DTCG export resolves cross-collection aliases, ignores var() in quoted strings, and round-trips cleanly", () => {
+  const doc = {
+    rootIds: ["ds-1"],
+    nodes: {
+      "ds-1": {
+        id: "ds-1",
+        type: "design-system",
+        props: {
+          name: "Multi",
+          collections: [
+            { id: "primitives", name: "Primitives", modes: [{ id: "default", name: "Default" }], defaultMode: "default" },
+            { id: "semantic", name: "Semantic", modes: [{ id: "light", name: "Light" }, { id: "dark", name: "Dark" }], defaultMode: "light" },
+          ],
+          tokens: [
+            { name: "--teal-500", type: "color", collection: "primitives", values: { default: "#0f766e" } },
+            { name: "--brand-action", type: "color", collection: "semantic", values: { light: "var(--teal-500)", dark: "#2dd4bf" }, description: "Primary CTA" },
+            { name: "--font-note", type: "fontFamily", collection: "primitives", values: { default: "'var(--teal-500)', sans-serif" } },
+          ],
+        },
+      },
+    },
+  };
+  const json = exportDtcgTokens(doc);
+  const parsedObj = JSON.parse(json);
+  assert.equal(parsedObj.semantic["brand-action"].$value, "{primitives.teal-500}", "cross-collection alias points at primitives");
+  assert.equal(parsedObj.primitives["font-note"].$value, "'var(--teal-500)', sans-serif", "var() inside CSS string stays untouched");
+  const re = parseDtcgTokens(json);
+  assert.equal(re.theme["teal-500"], "#0f766e");
+  assert.equal(re.light["brand-action"], "var(--teal-500)", "grouped DTCG re-import strips collection wrapper cleanly");
+  assert.equal(re.dark["brand-action"], "#2dd4bf");
+  assert.equal(re.types["font-note"], "fontFamily");
+  assert.equal(re.descriptions["brand-action"], "Primary CTA");
+});
+
+
+test("an agent plans aesthetic directions, sets a product brief with seeded tokens, evaluates taste, applies reduced-motion presets, and reads skills via MCP", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize("DesignAgent");
+  await agent.call("create_project", { name: "intel" });
+
+  // 1. Read archetypes, plan 3 distinct directions, and read skills.
+  const archs = (await agent.call("design_intelligence", { action: "archetypes" })).structuredContent;
+  assert.equal(archs.archetypes.length, 9);
+
+  const plan = (await agent.call("design_intelligence", { action: "plan", productName: "PulseOps", domain: "developer-tools", density: "compact" })).structuredContent;
+  assert.equal(plan.directions.length, 3);
+  const chosenId = plan.recommendedDirectionId;
+
+  const skills = (await agent.call("design_intelligence", { action: "skills" })).structuredContent;
+  assert.equal(skills.skills.length, 19);
+  const motionSkill = (await agent.call("design_intelligence", { action: "skill", skillId: "motion" })).structuredContent;
+  assert.match(motionSkill.markdown, /^---\nname: ninerr-motion\n/u);
+
+  // 2. Store brief + seed direction tokens in one atomic undoable transaction; BiDi refused.
+  assert.equal((await agent.call("set_design_brief", { productName: "Bad\u202eName", domain: "fintech" })).isError, true, "BiDi brief rejected");
+  const seeded = await agent.call("set_design_brief", {
+    productName: "PulseOps",
+    domain: "developer-tools",
+    density: "compact",
+    themePreference: "dark",
+    applyDirectionId: chosenId,
+  });
+  assert.equal(seeded.isError, undefined, text(seeded));
+  assert.ok(seeded.structuredContent.seededTokens >= 30);
+
+  const briefRead = (await agent.call("design_intelligence", { action: "brief" })).structuredContent;
+  assert.equal(briefRead.brief.productName, "PulseOps");
+
+  // 3. Create a frame with a low-contrast child, run taste critique, and apply reduced-motion presets.
+  const built = (await agent.call("create_layers", {
+    nodes: [
+      { tempId: "root", type: "frame", tag: "main", name: "Console", style: { padding: "48px", background: "linear-gradient(90deg, #6366f1, #ec4899)" } },
+      { parentId: "root", type: "element", tag: "p", name: "Faint", text: "Low contrast", style: { color: "#aaaaaa", "background-color": "#bbbbbb" } },
+    ],
+  })).structuredContent;
+  const rootId = built.created[0].nodeId;
+
+  const taste = (await agent.call("design_intelligence", { action: "taste", nodeId: rootId })).structuredContent;
+  assert.ok(taste.summary.deterministicDefects >= 1);
+  assert.ok(taste.findings.some((f) => f.ruleId === "taste:color-low-contrast"));
+  assert.ok(taste.findings.some((f) => f.ruleId === "taste:anti-slop-gratuitous-gradient"));
+
+  const applied = await agent.call("apply_motion", { nodeId: rootId, presetIds: ["hover", "focus", "enter"] });
+  assert.equal(applied.isError, undefined, text(applied));
+  assert.equal(applied.structuredContent.nodeId, rootId);
+  assert.equal(applied.structuredContent.selector, ":scope", "default apply_motion selector is :scope so exports match");
+
+  // Consecutive apply_motion preserves prior motion presets and rejects invalid selectors or reducedMotion: "none".
+  assert.equal((await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], selector: 'bad[attr="unclosed' })).isError, true, "unbalanced selector refused");
+  assert.equal((await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], reducedMotion: "none" })).isError, true, "reducedMotion: none refused over MCP");
+  const appliedPress = await agent.call("apply_motion", { nodeId: rootId, presetIds: ["press"], reducedMotion: "minimal" });
+  assert.equal(appliedPress.isError, undefined, text(appliedPress));
+  const motionAfter = (await agent.call("design_intelligence", { action: "brief" })).structuredContent.motion;
+  assert.ok(motionAfter.presets.some((p) => p.id === "enter") && motionAfter.presets.some((p) => p.id === "press"), "consecutive apply_motion merges presets non-destructively");
+  // Re-apply enter so exported HTML contains keyframes for the check below.
+  await agent.call("apply_motion", { nodeId: rootId, presetIds: ["hover", "focus", "enter"] });
+
+  // Verify motion stylesheet compiles cleanly into exported HTML with prefers-reduced-motion, while tokens CSS stays :root/mode only.
+  const htmlOut = (await agent.call("export_design", { nodeId: rootId, format: "html", name: "console" })).structuredContent;
+  const htmlText = readFileSync(htmlOut.path, "utf8");
+  assert.match(htmlText, /@keyframes ninerr-enter/u);
+  assert.match(htmlText, /prefers-reduced-motion: reduce/u);
+  assert.doesNotMatch(htmlText, /scroll-behavior/iu);
+
+  const tokCssOut = (await agent.call("export_design", { format: "tokens-css", name: "tokens" })).structuredContent;
+  const tokCssText = readFileSync(tokCssOut.path, "utf8");
+  assert.match(tokCssText, /--ease-out:/u);
+  assert.doesNotMatch(tokCssText, /@keyframes|@media/iu);
+
+  const lintClean = (await agent.call("design_intelligence", { action: "motion_lint", nodeId: rootId })).structuredContent;
+  assert.deepEqual(lintClean.findings, [], "applied Ninerr motion stylesheet has 0 lint findings");
+  assert.equal((await agent.call("design_intelligence", { action: "motion_frequency", trigger: "click", presetId: "unknown-preset" })).isError, true, "unknown motion_frequency preset returns ToolError");
+
+  await agent.call("close_project");
+
+  // 4. Token missing defaultMode & dark-as-default set_design_brief({ applyDirectionId }) preserves light and dark modes safely.
+  await agent.call("create_project", { name: "dark-default" });
+  const initTok = await agent.call("set_token", { name: "--bg-surface", type: "spacing", collection: "base", values: { default: "16px" } });
+  assert.equal(initTok.isError, undefined, text(initTok));
+  const addAlt = await agent.call("add_token_mode", { collection: "base", id: "alt", name: "Alt" });
+  assert.equal(addAlt.isError, undefined, text(addAlt));
+  const onlyAltSet = await agent.call("set_token", { name: "--only-alt", type: "color", collection: "base", values: { alt: "#123456" } });
+  assert.equal(onlyAltSet.isError, undefined, text(onlyAltSet));
+  const fintechPlan = (await agent.call("design_intelligence", { action: "plan", productName: "Vault", domain: "fintech" })).structuredContent;
+  const darkSeeded = await agent.call("set_design_brief", {
+    productName: "Vault",
+    domain: "fintech",
+    applyDirectionId: fintechPlan.recommendedDirectionId,
+  });
+  assert.equal(darkSeeded.isError, undefined, text(darkSeeded));
+  const tokensAfter = (await agent.call("design_tokens")).structuredContent.tokens;
+  const onlyAlt = tokensAfter.find((t) => t.name === "--only-alt");
+  assert.deepEqual(onlyAlt.values, { alt: "#123456" }, "token missing defaultMode is never backfilled with undefined");
+  const bgSurface = tokensAfter.find((t) => t.name === "--bg-surface");
+  assert.equal(bgSurface.type, "color", "existing token type reconciled to planned token type");
+  assert.notEqual(bgSurface.values.default, bgSurface.values.dark, "light and dark values stay distinct");
+  await agent.call("close_project");
+
+  // 5. True dark-as-default collection (defaultMode: "dark", only dark mode) creates a distinct light mode without dropping light values.
+  const darkDoc = createDocument({ id: "doc-dark-only", name: "Dark First" });
+  darkDoc.schemaVersion = 2;
+  darkDoc.rootIds.push("ds-dark");
+  darkDoc.nodes["ds-dark"] = {
+    id: "ds-dark",
+    type: "design-system",
+    parentId: null,
+    children: [],
+    metadata: {},
+    props: {
+      name: "Dark DS",
+      collections: [{ id: "base", name: "Base", modes: [{ id: "dark", name: "Dark" }], defaultMode: "dark" }],
+      tokens: [{ name: "--existing-dark", type: "color", collection: "base", values: { dark: "#090d16" } }],
+    },
+  };
+  const darkProjectDir = join(projects, "dark-only");
+  mkdirSync(darkProjectDir, { recursive: true });
+  createProject(darkProjectDir, { projectId: "dark-only", document: darkDoc, createdAt: "2026-11-27T00:00:00.000Z" });
+  const openDark = await agent.call("open_project", { name: "dark-only" });
+  assert.equal(openDark.isError, undefined, text(openDark));
+  const darkOnlySeed = await agent.call("set_design_brief", {
+    productName: "Nocturne",
+    domain: "developer-tools",
+    applyDirectionId: chosenId,
+  });
+  assert.equal(darkOnlySeed.isError, undefined, text(darkOnlySeed));
+  const darkOnlyTokens = (await agent.call("design_tokens")).structuredContent;
+  assert.ok(darkOnlyTokens.collections[0].modes.some((m) => m.id === "light"), "light mode created for dark-as-default collection");
+  const darkOnlyBg = darkOnlyTokens.tokens.find((t) => t.name === "--bg-surface");
+  assert.ok(typeof darkOnlyBg.values.light === "string" && typeof darkOnlyBg.values.dark === "string");
+  assert.notEqual(darkOnlyBg.values.light, darkOnlyBg.values.dark, "dark-as-default preserves distinct light and dark token values");
+
+  await agent.call("close_project");
+  await agent.stop();
+}));
+
+test("an agent searches and instantiates native Ninerr components, audits the design system, and migrates themes/high-contrast/breakpoints via MCP", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize("SystemAgent");
+  await agent.call("create_project", { name: "systems" });
+
+  // 1. Discover native Ninerr components through search_components & get_component.
+  const search = (await agent.call("search_components", { source: "ninerr", query: "pricing" })).structuredContent;
+  assert.ok(search.components.some((c) => c.id === "ninerr:pricing-tiers" && c.instantiable === true));
+  const detail = (await agent.call("get_component", { id: "ninerr:pricing-tiers" })).structuredContent;
+  assert.equal(detail.component.id, "ninerr:pricing-tiers");
+  assert.equal(detail.provenance.license.spdx, "Apache-2.0");
+  assert.equal((await agent.call("get_component", { id: "ninerr:does-not-exist" })).isError, true);
+
+  // 2. Create page frame and instantiate native components both detached and as definition+instance; BiDi refused.
+  const pageId = (await agent.call("create_frame", { name: "Landing", width: 1280, height: 900 })).structuredContent.nodeId;
+  assert.equal((await agent.call("instantiate_component", { componentId: "hero-section", parentId: pageId, headline: "Bad\u202eHeadline" })).isError, true, "BiDi option rejected");
+
+  const hero = await agent.call("instantiate_component", {
+    componentId: "ninerr:hero-section",
+    parentId: pageId,
+    headline: "Build reliable interfaces",
+  });
+  assert.equal(hero.isError, undefined, text(hero));
+  assert.equal(hero.structuredContent.definitionId, null);
+  assert.ok(hero.structuredContent.nodeCount >= 4);
+
+  const pricingDef = await agent.call("instantiate_component", {
+    componentId: "pricing-tiers",
+    parentId: pageId,
+    asDefinition: true,
+  });
+  assert.equal(pricingDef.isError, undefined, text(pricingDef));
+  assert.ok(typeof pricingDef.structuredContent.definitionId === "string");
+  assert.ok(typeof pricingDef.structuredContent.instanceId === "string");
+
+  // 3. Migrate theme with dryRun preview first, then commit, generate AAA high-contrast mode, and set breakpoints with scoped CSS.
+  const dryMigrate = await agent.call("migrate_theme", {
+    dryRun: true,
+    action: "migrate",
+    themeName: "Clinical Calm",
+    tokens: [
+      { name: "--bg-canvas", light: "#f8fafc", dark: "#0b1120" },
+      { name: "--bg-surface", light: "#ffffff", dark: "#111827" },
+      { name: "--text-primary", light: "#0f172a", dark: "#f8fafc" },
+      { name: "--text-muted", light: "#475569", dark: "#cbd5e1" },
+      { name: "--accent-primary", light: "#0f766e", dark: "#2dd4bf" },
+      { name: "--accent-contrast", light: "#ffffff", dark: "#042f2e" },
+    ],
+  });
+  assert.equal(dryMigrate.isError, undefined, text(dryMigrate));
+  assert.equal(dryMigrate.structuredContent.dryRun, true);
+  assert.equal((await agent.call("audit_design_system")).structuredContent.hasDesignSystem, false, "dryRun changed nothing");
+
+  const migrated = await agent.call("migrate_theme", {
+    action: "migrate",
+    themeName: "Clinical Calm",
+    tokens: [
+      { name: "--bg-canvas", light: "#f8fafc", dark: "#0b1120" },
+      { name: "--bg-surface", light: "#ffffff", dark: "#111827" },
+      { name: "--text-primary", light: "#0f172a", dark: "#f8fafc" },
+      { name: "--text-muted", light: "#475569", dark: "#cbd5e1" },
+      { name: "--accent-primary", light: "#0f766e", dark: "#2dd4bf" },
+      { name: "--accent-contrast", light: "#ffffff", dark: "#042f2e" },
+    ],
+  });
+  assert.equal(migrated.isError, undefined, text(migrated));
+  assert.equal(migrated.structuredContent.added.length, 6);
+
+  const hc = await agent.call("migrate_theme", { action: "generate_high_contrast" });
+  assert.equal(hc.isError, undefined, text(hc));
+  assert.equal(hc.structuredContent.modeId, "high-contrast");
+
+  // Breakpoints refuse brace escape, accept clean scoped @media CSS.
+  const badBp = await agent.call("migrate_theme", {
+    action: "set_breakpoints",
+    breakpoints: [{ id: "mobile", name: "Mobile", maxWidth: 639 }],
+    nodeId: pageId,
+    rulesByBreakpoint: { mobile: "} body { color: red; } @media (min-width: 1px) {" },
+  });
+  assert.equal(badBp.isError, true, "brace breakout refused in breakpoint CSS");
+
+  const bps = await agent.call("migrate_theme", {
+    action: "set_breakpoints",
+    breakpoints: [
+      { id: "mobile", name: "Mobile", minWidth: 0, maxWidth: 639 },
+      { id: "desktop", name: "Desktop", minWidth: 1024 },
+    ],
+    nodeId: pageId,
+    rulesByBreakpoint: { mobile: ":scope { padding: 16px; }", desktop: ":scope { padding: 48px; }" },
+  });
+  assert.equal(bps.isError, undefined, text(bps));
+  assert.match(bps.structuredContent.compiledCss, /@media \(min-width: 0px\) and \(max-width: 639px\)/u);
+
+  // Strict MCP validation: extra arguments, invalid variant, partial set_breakpoints, and no-op dryRun contract.
+  assert.equal((await agent.call("audit_design_system", { extra: 1 })).isError, true, "audit_design_system rejects extra args");
+  assert.equal((await agent.call("instantiate_component", { componentId: "badge", variant: "toString" })).isError, true, "invalid component variant rejected");
+  assert.equal((await agent.call("migrate_theme", { action: "set_breakpoints", breakpoints: [{ id: "m", name: "M", maxWidth: 600 }], nodeId: pageId })).isError, true, "nodeId without rulesByBreakpoint rejected");
+  const noopDry = await agent.call("migrate_theme", {
+    dryRun: true,
+    action: "migrate",
+    tokens: [{ name: "--bg-canvas", light: "#f8fafc", dark: "#0b1120" }],
+  });
+  assert.equal(noopDry.isError, undefined, text(noopDry));
+  assert.equal(noopDry.structuredContent.dryRun, true, "no-op dryRun returns dryRun: true");
+  assert.deepEqual(noopDry.structuredContent.wouldChange, []);
+  assert.equal(noopDry.structuredContent.operations, 0);
+
+  const audit = (await agent.call("audit_design_system")).structuredContent;
+  assert.equal(audit.hasDesignSystem, true);
+  assert.equal(audit.hasHighContrastMode, true);
+  assert.equal(audit.hasBreakpoints, true);
+  assert.equal(audit.summary.contrastFailures, 0);
+
+  // Export instantiated native component page as HTML & TSX.
+  const htmlOut = (await agent.call("export_design", { nodeId: pageId, format: "html", name: "landing" })).structuredContent;
+  const htmlText = readFileSync(htmlOut.path, "utf8");
+  assert.match(htmlText, /Build reliable interfaces/u);
+  assert.match(htmlText, /@media \(min-width: 0px\) and \(max-width: 639px\)/u);
+  const tsxOut = (await agent.call("export_design", { nodeId: pageId, format: "tsx", name: "LandingPage" })).structuredContent;
+  assert.match(readFileSync(tsxOut.path, "utf8"), /import type React from "react";/u);
+
+  await agent.call("close_project");
+  await agent.stop();
+}));
+
+test("an agent critiques, auto-improves atomically, and renders contained multi-viewport previews with PNG pixel diff via MCP and CLI", () => withProjects(async (projects) => {
+  const { discoverBrowser } = await import("@ninerr/vision");
+  const { runCliCommand } = await import("../packages/studio-host/src/cli.ts");
+  const agent = engine(projects);
+  await agent.initialize("VisionAgent");
+  await agent.call("create_project", { name: "visual" });
+
+  // 1. Author a page with intentional deterministic defects (low contrast, tiny button, off-grid spacing, unsafe transition).
+  const created = (await agent.call("create_layers", {
+    nodes: [
+      {
+        tempId: "page",
+        type: "frame",
+        tag: "main",
+        name: "AuditPage",
+        style: { "background-color": "#ffffff", padding: "13px", "box-shadow": "0 20px 60px rgba(0, 0, 0, 0.45)" },
+      },
+      {
+        parentId: "page",
+        type: "element",
+        tag: "p",
+        name: "FaintCopy",
+        text: "Low contrast paragraph",
+        style: { color: "#cccccc", "background-color": "#ffffff", "font-size": "15px" },
+      },
+      {
+        parentId: "page",
+        type: "element",
+        tag: "button",
+        name: "TinyBtn",
+        text: "Go",
+        style: { height: "16px", width: "40px" },
+      },
+    ],
+  })).structuredContent;
+  const pageId = created.created[0].nodeId;
+
+  // 2. Unified critique_design catches deterministic defects + heuristics; rejects extra args.
+  assert.equal((await agent.call("critique_design", { extra: 1 })).isError, true);
+  const beforeCritique = (await agent.call("critique_design", { nodeId: pageId })).structuredContent;
+  assert.ok(beforeCritique.summary.deterministicDefects >= 2, "catches contrast + tiny target defects");
+  assert.ok(beforeCritique.summary.defectScore > 0);
+
+  // 3. Dry-run preview checks paths & browser availability without writing files.
+  const dryPreview = (await agent.call("render_preview", { dryRun: true, nodeId: pageId, name: "before", viewports: ["mobile", "desktop"] })).structuredContent;
+  assert.equal(dryPreview.dryRun, true);
+  assert.equal(dryPreview.wouldWrite.length, 2);
+  assert.equal(existsSync(dryPreview.wouldWrite[0]), false, "dryRun writes no PNGs");
+
+  const hasBrowser = discoverBrowser() !== null;
+  if (hasBrowser) {
+    // 4. Live zero-egress multi-viewport render BEFORE improvement.
+    const beforeRender = await agent.call("render_preview", { nodeId: pageId, name: "before", viewports: ["mobile", "desktop"] });
+    assert.equal(beforeRender.isError, undefined, text(beforeRender));
+    assert.equal(beforeRender.structuredContent.captures.length, 2);
+    assert.ok(existsSync(beforeRender.structuredContent.captures[0].path), "mobile PNG written");
+    assert.ok(beforeRender.structuredContent.captures[0].telemetry.lowContrast.length >= 1, "real browser detected low contrast");
+    // Overwriting without replace: true is refused.
+    assert.equal((await agent.call("render_preview", { nodeId: pageId, name: "before", viewports: ["mobile"] })).isError, true);
+  }
+
+  // 5. improve_design dryRun previews cleanly, then real improve_design commits ONE atomic transaction!
+  const revBefore = (await agent.call("project_info")).structuredContent.revision;
+  const dryImp = (await agent.call("improve_design", { dryRun: true, nodeId: pageId, maxIterations: 3 })).structuredContent;
+  assert.equal(dryImp.dryRun, true);
+  assert.ok(dryImp.operations >= 2, "dryRun reports collapsed repair operations");
+  assert.equal((await agent.call("project_info")).structuredContent.revision, revBefore, "dryRun improve changed nothing");
+
+  const imp = (await agent.call("improve_design", { nodeId: pageId, maxIterations: 3 })).structuredContent;
+  assert.equal(imp.improved, true);
+  assert.ok(imp.final.defectScore < imp.baseline.defectScore, `score reduced ${imp.baseline.defectScore} -> ${imp.final.defectScore}`);
+  assert.equal(imp.revision, revBefore + 1, "all multi-pass repairs collapsed into 1 atomic revision");
+
+  if (hasBrowser) {
+    // 6. dryRun with compareTo includes diff PNG in wouldWrite; live afterRender diffs cleanly!
+    const dryCompare = (await agent.call("render_preview", { dryRun: true, nodeId: pageId, name: "after", viewports: ["mobile", "desktop"], compareTo: "before" })).structuredContent;
+    assert.equal(dryCompare.wouldWrite.length, 4, "dryRun with compareTo lists both preview and diff PNG paths");
+    const afterRender = await agent.call("render_preview", { nodeId: pageId, name: "after", viewports: ["mobile", "desktop"], compareTo: "before" });
+    assert.equal(afterRender.isError, undefined, text(afterRender));
+    const mobileAfter = afterRender.structuredContent.captures[0];
+    assert.ok(mobileAfter.diff && mobileAfter.diff.diffPixels > 0, "visual pixel diff confirms rendered change");
+    assert.ok(existsSync(mobileAfter.diff.diffPath), "diff PNG written via trusted binary writer");
+    assert.equal(mobileAfter.telemetry.lowContrast.length, 0, "real browser confirms 0 low-contrast text after improvement");
+  }
+
+  await agent.call("close_project");
+  await agent.stop();
+
+  // 7. Verify CLI critique/audit/improve on the persisted project folder.
+  const projDir = join(projects, "visual");
+  let critiqueOut = "";
+  const critiqueCode = await runCliCommand("critique", [projDir, "--json"], {
+    version: "0.1.0",
+    stdout: (s) => { critiqueOut += s; },
+    stderr: () => {},
+  });
+  assert.equal(critiqueCode, 0, "improved project exits 0 on CLI critique");
+  assert.equal(JSON.parse(critiqueOut).summary.errors, 0);
+}));

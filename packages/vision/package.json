@@ -1,0 +1,14 @@
+{
+  "name": "@ninerr/vision",
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "description": "Zero-dependency local browser rendering via native CDP, 3-layer zero-egress containment, multi-viewport screenshots, computed DOM visual telemetry, pure-JS PNG pixel diff, and unified Ninerr Critic.",
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "dependencies": {
+    "@ninerr/design-assurance": "0.0.0",
+    "@ninerr/document-model": "0.0.0",
+    "@ninerr/history": "0.0.0"
+  }
+}
