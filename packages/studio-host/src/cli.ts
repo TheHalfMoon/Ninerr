@@ -2,7 +2,7 @@
 // `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
 // Pure local execution, zero network.
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, parse as parsePath, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   NINERR_COMPONENT_CATEGORIES,
@@ -35,6 +35,7 @@ import {
   improveDesignInMemory,
   renderAndInspect,
 } from "@ninerr/vision";
+import { BENCHMARK_CATEGORIES, BENCHMARK_RUBRIC, runBenchmarkSuite } from "./benchmark.ts";
 import { exportAstro, exportHtml, exportJsx, exportSvelte, exportTailwind, exportVue } from "./code.ts";
 import { auditDesignSystem, planRegistryItemUpdate } from "./design-system-ops.ts";
 import { resolveProjectsFolder } from "./projects-folder.ts";
@@ -50,7 +51,7 @@ export interface CliRunOptions {
   stderr?: (text: string) => void;
 }
 
-export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens", "preview", "critique", "audit", "improve", "redesign", "init", "connect", "export", "research"]);
+export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens", "preview", "critique", "audit", "improve", "redesign", "init", "connect", "export", "research", "benchmark"]);
 const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient", "vision", "dry-run", "reduced-motion", "force", "allow-network", "replace"]);
 const MAX_CLI_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -1171,6 +1172,126 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       }
 
       err(`ninerr research: unknown subcommand ${JSON.stringify(sub)}\n`);
+      return 2;
+    }
+
+    if (command === "benchmark") {
+      const sub = positionals[0] ?? "run";
+      if (sub === "help" || flags.help === true) {
+        out([
+          "Ninerr Benchmark CLI (14 categories, 9-dimension weighted rubric, zero egress):",
+          "  ninerr benchmark list [--json]",
+          "  ninerr benchmark run [--category <id1,id2>] [--vision] [--out <file.json>] [--replace] [--json]",
+        ].join("\n") + "\n");
+        return 0;
+      }
+
+      if (sub === "list") {
+        if (positionals.length > 1) {
+          err(`ninerr benchmark list: unexpected positional argument ${JSON.stringify(positionals[1])}\n`);
+          return 2;
+        }
+        if (asJson) {
+          out(`${JSON.stringify({ categories: BENCHMARK_CATEGORIES, rubric: BENCHMARK_RUBRIC }, null, 2)}\n`);
+        } else {
+          out(`Categories (${BENCHMARK_CATEGORIES.length}):\n`);
+          for (const c of BENCHMARK_CATEGORIES) out(`  ${c.id.padEnd(24)} ${c.title} [${c.domain}]\n`);
+          out(`\nRubric (${BENCHMARK_RUBRIC.length} dimensions, 65% automated + 35% blinded human):\n`);
+          for (const r of BENCHMARK_RUBRIC) out(`  ${r.id.padEnd(24)} ${String(r.weight).padStart(2)}%  ${r.automated ? "automated" : "human-blinded"}\n`);
+        }
+        return 0;
+      }
+
+      if (sub === "run") {
+        if (positionals.length > 1) {
+          err(`ninerr benchmark run: unexpected positional argument ${JSON.stringify(positionals[1])} (use --category <id>)\n`);
+          return 2;
+        }
+        const catOpt = requireFlagValue("category");
+        let categories: string[] | undefined;
+        if (catOpt !== undefined) {
+          categories = catOpt.split(",").map((s) => s.trim()).filter(Boolean);
+          if (categories.length === 0) {
+            err("ninerr benchmark: --category must list at least one category id\n");
+            return 2;
+          }
+        }
+        const validateOutputTarget = (rawOpt: string): string => {
+          if (/[\u0000-\u001f\u007f]/u.test(rawOpt)) {
+            throw new Error(`--out ${JSON.stringify(rawOpt)} contains control characters`);
+          }
+          const resolvedOut = assertNoSymlinkPath(resolve(rawOpt), "--out path");
+          const parsed = parsePath(resolvedOut);
+          const tail = resolvedOut.slice(parsed.root.length);
+          const segments = tail.split(/[/\\]+/u).filter(Boolean);
+          if (segments.length === 0) {
+            throw new Error(`--out ${JSON.stringify(rawOpt)} must name a file`);
+          }
+          for (const seg of segments) {
+            if (/[<>:"|?*]/u.test(seg)) {
+              throw new Error(`--out ${JSON.stringify(rawOpt)} contains forbidden path characters`);
+            }
+            if (/[ .]$/u.test(seg)) {
+              throw new Error(`--out ${JSON.stringify(rawOpt)} must not have segments ending in a dot or space`);
+            }
+            if (/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:[\s.]|$)/iu.test(seg)) {
+              throw new Error(`--out ${JSON.stringify(rawOpt)} uses a reserved device name`);
+            }
+          }
+          return resolvedOut;
+        };
+        const assertLeafWritable = (filePath: string, rawOpt: string): string | null => {
+          let existing = null;
+          try { existing = lstatSync(filePath); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (existing !== null) {
+            if (existing.isSymbolicLink() || !existing.isFile()) {
+              throw new Error(`--out ${JSON.stringify(rawOpt)} must be a regular non-symlink file`);
+            }
+            if (flags.replace !== true) {
+              return `ninerr benchmark: ${filePath} already exists (pass --replace to overwrite)\n`;
+            }
+          }
+          return null;
+        };
+        const outOpt = requireFlagValue("out");
+        let targetOut: string | null = null;
+        if (outOpt !== undefined) {
+          targetOut = validateOutputTarget(outOpt);
+          const preConflict = assertLeafWritable(targetOut, outOpt);
+          if (preConflict !== null) {
+            err(preConflict);
+            return 2;
+          }
+        }
+        const report = await runBenchmarkSuite({ categories, includeVision: flags.vision === true });
+        if (targetOut !== null && outOpt !== undefined) {
+          const realParent = ensureRealDirectory(dirname(targetOut), "--out parent directory");
+          targetOut = join(realParent, basename(targetOut));
+          // Re-verify leaf symlink/file/overwrite guard right before writing to close TOCTOU window.
+          const postConflict = assertLeafWritable(targetOut, outOpt);
+          if (postConflict !== null) {
+            err(postConflict);
+            return 2;
+          }
+          writeTrustedFile(targetOut, `${JSON.stringify(report, null, 2)}\n`);
+        }
+        if (report.visionNote && !asJson) {
+          err(`ninerr benchmark: ${report.visionNote}\n`);
+        }
+        if (asJson) {
+          out(`${JSON.stringify({ ...report, ...(targetOut ? { reportPath: targetOut } : {}) }, null, 2)}\n`);
+        } else {
+          out(`Ninerr Benchmark (${report.categoryCount} categories, ${report.totalDurationMs}ms, networkAttempts=${report.networkAttempts}, vision=${report.visionUsed})\n`);
+          out(`Automated Mean: ${report.summary.automatedMeanPoints}/${report.summary.automatedMaxPoints} pts (${report.summary.automatedMeanPercent}%) | Human Rubric: ${report.summary.humanRubricStatus} (${report.summary.humanMaxPoints} pts)\n\n`);
+          for (const c of report.categories) {
+            out(`  ${c.id.padEnd(24)} ${String(c.automated.percent).padStart(5)}% (${c.automated.points}/${c.automated.maxPoints} pts)  ${c.durationMs}ms\n`);
+          }
+          if (targetOut) out(`\nReport written to ${targetOut}\n`);
+        }
+        return 0;
+      }
+
+      err(`ninerr benchmark: unknown subcommand ${JSON.stringify(sub)}\n`);
       return 2;
     }
 

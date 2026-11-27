@@ -12,6 +12,7 @@
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
     "sbom": "node scripts/sbom.mjs",
     "smoke": "node scripts/smoke.mjs --expect tests/fixtures/smoke/expected-report.json",
+    "benchmark": "node scripts/benchmark.mjs",
     "mcp": "node scripts/ninerr-mcp.mjs",
     "start": "node scripts/ninerr.mjs"
   },

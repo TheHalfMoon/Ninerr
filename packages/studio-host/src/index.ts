@@ -16,5 +16,6 @@ export { auditDesignSystem, compileBreakpointsStylesheet, generateHighContrastMo
 export { CodebaseLinks, MAX_SCAN_DEPTH, MAX_SCAN_ENTRIES, MAX_SCAN_FILES, MAX_SOURCE_BYTES, assertFolder, bringIn, planWriteBack, readSourceFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 export { REDESIGN_LIMITS, analyzeCodebase, applyRedesignPlan, assertNoSymlinkPath, assertWorkspaceRoot, extractCssCustomProperties, patchCssTokensSource, patchJsxClassStrings, planRedesign, readBoundedWorkspaceFile, readRedesignJournal, resolveSafeWorkspaceFile, rollbackRedesign, validateRollbackTargets, verifyCssTokenPatchInvariance, verifyFunctionalInvariance, type PlannedFilePatch, type RedesignPlan, type ValidatedJournalEntry } from "./redesign.ts";
 export { RESEARCH_LIMITS, captureUrlReferenceMetrics, createLocalReferencePack, ensureRealDirectory, extractPatternsFromSource, isPrivateOrNonGlobalIp, listLocalReferencePacks, validatePackFileName, writeLocalReferencePack, type LocalReferenceEntryInput } from "./research.ts";
+export { BENCHMARK_CATEGORIES, BENCHMARK_RUBRIC, runBenchmarkSuite, scoreAccessibilityFindings, type BenchmarkCategorySpec, type RubricDimension } from "./benchmark.ts";
 export * as sdk from "./sdk.ts";
 export { type CodeSource, type ImportJsxOptions } from "./code.ts";

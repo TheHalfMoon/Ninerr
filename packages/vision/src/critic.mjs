@@ -496,6 +496,8 @@ export async function improveDesignInMemory(document, {
     iterationsRun: history.length,
     baseline: baselineReport.summary,
     final: bestReport.summary,
+    baselineFindings: baselineReport.findings,
+    finalFindings: bestReport.findings,
     history,
     operations: [...finalOpsByNode.values()],
   };
