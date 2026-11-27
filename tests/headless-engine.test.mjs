@@ -410,3 +410,117 @@ test("an idle project waiting on the person stays open until the question ends, 
     rmSync(root, { recursive: true, force: true, maxRetries: 5 });
   }
 });
+
+
+test("an agent authors a multi-section semantic page with create_layers, imports HTML/JSX/tokens, exports TSX and tokens, and recovers stale locks", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize("Builder");
+  await agent.call("create_project", { name: "authoring" });
+
+  // 1. Atomic nested tree creation with tempId references in one transaction.
+  const dry = await agent.call("create_layers", {
+    dryRun: true,
+    nodes: [
+      { tempId: "page", type: "frame", tag: "main", name: "Pricing", style: { display: "flex", "flex-direction": "column", gap: "24px", padding: "32px" } },
+      { tempId: "title", parentId: "page", type: "element", tag: "h1", name: "Heading", text: "Simple pricing", style: { "font-size": "36px", color: "#111827" } },
+      { parentId: "page", type: "element", tag: "button", name: "Primary CTA", text: "Start free", attributes: { type: "button", "aria-label": "Start free trial" }, style: { background: "#111827", color: "#ffffff", padding: "12px 20px" } },
+    ],
+  });
+  assert.equal(dry.isError, undefined, text(dry));
+  assert.equal(dry.structuredContent.dryRun, true);
+  assert.equal((await agent.call("project_info")).structuredContent.revision, 0, "dryRun commits nothing");
+
+  const built = await agent.call("create_layers", {
+    nodes: [
+      { tempId: "page", type: "frame", tag: "main", name: "Pricing", style: { display: "flex", "flex-direction": "column", gap: "24px", padding: "32px" } },
+      { tempId: "title", parentId: "page", type: "element", tag: "h1", name: "Heading", text: "Simple pricing", style: { "font-size": "36px", color: "#111827" } },
+      { parentId: "page", type: "element", tag: "button", name: "Primary CTA", text: "Start free", attributes: { type: "button", "aria-label": "Start free trial" }, style: { background: "#111827", color: "#ffffff", padding: "12px 20px" } },
+    ],
+  });
+  assert.equal(built.isError, undefined, text(built));
+  assert.equal(built.structuredContent.revision, 1, "entire nested tree is one atomic transaction");
+  assert.equal(built.structuredContent.created.length, 3);
+  const pageId = built.structuredContent.created[0].nodeId;
+  const tree = (await agent.call("layer_tree", { nodeId: pageId, depth: 3 })).structuredContent.tree;
+  assert.equal(tree[0].tag, "main");
+  assert.deepEqual(tree[0].children.map((c) => c.tag), ["h1", "button"]);
+
+  // Security & validation refusals on create_layers.
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "script", text: "alert(1)" }] })).isError, true, "script tag refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", style: { background: "url(https://evil.example/x.png)" } }] })).isError, true, "url() style refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", name: "bad\u202ename" }] })).isError, true, "bidi smuggling in nodes[].name refused");
+
+  // 2. import_source: HTML (strips script, preserves semantics & CSS), JSX, CSS tokens, and W3C DTCG JSON.
+  const htmlImport = await agent.call("import_source", {
+    format: "html",
+    name: "Imported Hero",
+    source: "<section><script>alert(1)</script><h2>Hello HTML</h2><p>Clean copy</p></section>",
+    stylesheets: [{ name: "hero.css", css: "h2 { color: #0f172a; }" }],
+  });
+  assert.equal(htmlImport.isError, undefined, text(htmlImport));
+  assert.equal(htmlImport.structuredContent.format, "html");
+  assert.ok(htmlImport.structuredContent.layers >= 3);
+
+  const jsxImport = await agent.call("import_source", {
+    format: "jsx",
+    name: "MetricCard",
+    source: 'export function MetricCard() { return <article style={{ padding: "16px" }}><h3>Revenue</h3><p>$42k</p></article>; }',
+  });
+  assert.equal(jsxImport.isError, undefined, text(jsxImport));
+  assert.equal(jsxImport.structuredContent.componentName, "MetricCard");
+
+  const cssTokens = await agent.call("import_source", {
+    format: "tokens-css",
+    name: "theme.css",
+    source: ":root { --surface-bg: #ffffff; --brand-accent: #2563eb; } .dark { --surface-bg: #0b1020; }",
+  });
+  assert.equal(cssTokens.isError, undefined, text(cssTokens));
+  assert.equal(cssTokens.structuredContent.adds, 2);
+
+  const dtcgTokens = await agent.call("import_source", {
+    format: "tokens-json",
+    name: "tokens.json",
+    source: JSON.stringify({
+      color: {
+        $type: "color",
+        primary: { $value: "{brand.accent}", $extensions: { modes: { dark: "#60a5fa" } } },
+        muted: { $value: "#64748b" },
+      },
+      space: {
+        $type: "spacing",
+        md: { $value: { value: 16, unit: "px" } },
+      },
+    }),
+  });
+  assert.equal(dtcgTokens.isError, undefined, text(dtcgTokens));
+  assert.equal(dtcgTokens.structuredContent.adds, 3);
+
+  // 3. export_design: tsx, tokens-css, tokens-json (no nodeId required for tokens).
+  const tsxOut = (await agent.call("export_design", { nodeId: pageId, format: "tsx", name: "PricingView" })).structuredContent;
+  assert.ok(tsxOut.path.endsWith("PricingView.tsx"));
+  assert.match(readFileSync(tsxOut.path, "utf8"), /React\.JSX\.Element/u);
+
+  const cssOut = (await agent.call("export_design", { format: "tokens-css", name: "design-tokens" })).structuredContent;
+  assert.ok(cssOut.path.endsWith("design-tokens.css"));
+  assert.match(readFileSync(cssOut.path, "utf8"), /--brand-accent: #2563eb/u);
+
+  const jsonOut = (await agent.call("export_design", { format: "tokens-json", name: "design-tokens" })).structuredContent;
+  assert.ok(jsonOut.path.endsWith("design-tokens.json"));
+  const exportedDtcg = JSON.parse(readFileSync(jsonOut.path, "utf8"));
+  const collection = Object.values(exportedDtcg).find((v) => v && typeof v === "object" && "brand-accent" in v);
+  assert.equal(collection["brand-accent"].$value, "#2563eb");
+
+  await agent.call("close_project");
+  await agent.stop();
+
+  // 4. Stale lock recovery via open_project({ breakStaleLock: true }).
+  const lockPath = join(projects, "authoring", PROJECT_FILES.directory, "lock");
+  writeFileSync(lockPath, JSON.stringify({ holderId: "crashed", pid: 999_999, acquiredAt: "2026-01-01T00:00:00.000Z" }));
+  const recover = engine(projects);
+  await recover.initialize("Recovery");
+  assert.equal((await recover.call("open_project", { name: "authoring" })).isError, true, "stale lock refused without breakStaleLock");
+  const recovered = await recover.call("open_project", { name: "authoring", breakStaleLock: true });
+  assert.equal(recovered.isError, undefined, text(recovered));
+  assert.equal(recovered.structuredContent.project, "authoring");
+  await recover.stop();
+}));

@@ -50,7 +50,7 @@ const projectName = { type: "string", minLength: 1, maxLength: 128, description:
 const LIFECYCLE_TOOLS = [
   { name: "list_projects", title: "List projects", description: "The projects in Ninerr's projects folder, and which one is open.", inputSchema: object({}) },
   { name: "create_project", title: "Create a project", description: "Create a project in the projects folder and open it. Then design in it with the other tools.", inputSchema: object({ name: projectName, title: { type: "string", maxLength: 200 } }, ["name"]) },
-  { name: "open_project", title: "Open a project", description: "Open a project from the projects folder, closing the one open now. A project the Ninerr editor or another agent has open is refused.", inputSchema: object({ name: projectName }, ["name"]) },
+  { name: "open_project", title: "Open a project", description: "Open a project from the projects folder, closing the one open now. A project the Ninerr editor or another agent has open is refused; breakStaleLock recovers a lock whose owning process is gone.", inputSchema: object({ name: projectName, breakStaleLock: { type: "boolean", description: "Take over a stale lock when its owning process is no longer running." } }, ["name"]) },
   { name: "save_project", title: "Save the project", description: "Write a snapshot of the open project. Every change is already kept in its journal as it is made; a snapshot makes the next open faster.", inputSchema: object({}) },
   { name: "close_project", title: "Close the project", description: "Close the open project, releasing it for the editor or another agent.", inputSchema: object({}) },
 ];
@@ -172,8 +172,9 @@ export class HeadlessEngine {
       if (name === "create_project" || name === "open_project") {
         const project = assertProjectName(args.name);
         if (args.title !== undefined && typeof args.title !== "string") throw new StudioError(400, "invalid-arguments", "title must be text");
+        if (args.breakStaleLock !== undefined && typeof args.breakStaleLock !== "boolean") throw new StudioError(400, "invalid-arguments", "breakStaleLock is true or false");
         if (name === "open_project" && this.#session?.name === project) this.#closeSession();
-        const next = StudioSession.open({ projectsRoot: this.#projectsRoot, name: project, owner: OWNER, now: this.#now, ...(name === "create_project" ? { create: { title: args.title } } : {}) });
+        const next = StudioSession.open({ projectsRoot: this.#projectsRoot, name: project, owner: OWNER, now: this.#now, ...(name === "create_project" ? { create: { title: args.title } } : args.breakStaleLock === true ? { breakStaleLock: { actorId: this.#actor.actorId, reason: "Recovered stale lock whose previous holder is gone" } } : {}) });
         this.#closeSession();
         next.setAgentGrants([{ principalKind: "actor", principalId: this.#actor.actorId, capabilities: [...AGENT_CAPABILITIES] }]);
         this.#session = next;
