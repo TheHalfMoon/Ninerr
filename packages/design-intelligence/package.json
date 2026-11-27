@@ -1,0 +1,12 @@
+{
+  "name": "@ninerr/design-intelligence",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "Ninerr design intelligence: product briefs, domain archetypes, multi-direction aesthetic planning, context-aware taste engine, motion system, and official agent skills.",
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "dependencies": {
+    "@ninerr/design-assurance": "0.1.0",
+    "@ninerr/document-model": "0.1.0"
+  }
+}
