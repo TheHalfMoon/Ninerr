@@ -8,6 +8,7 @@ import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
 import { runHeadless } from "../packages/studio-host/src/index.ts";
+import { exportDtcgTokens, parseDtcgTokens } from "../packages/studio-host/src/tokens-dtcg.ts";
 
 // The headless engine (docs/HEADLESS.md): the real `ninerr mcp` process on stdio, driven as an
 // agent's client drives it. No editor, browser or desktop app runs.
@@ -448,13 +449,19 @@ test("an agent authors a multi-section semantic page with create_layers, imports
   // Security & validation refusals on create_layers.
   assert.equal((await agent.call("create_layers", { nodes: [{ tag: "script", text: "alert(1)" }] })).isError, true, "script tag refused");
   assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", style: { background: "url(https://evil.example/x.png)" } }] })).isError, true, "url() style refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", style: { color: "a".repeat(2001) } }] })).isError, true, "oversized style value refused");
   assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", name: "bad\u202ename" }] })).isError, true, "bidi smuggling in nodes[].name refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "button", attributes: { onclick: "alert(1)" } }] })).isError, true, "event handler attribute refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "a", attributes: { href: "javascript:alert(1)" } }] })).isError, true, "javascript: href refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", attributes: { dir: "sideways" } }] })).isError, true, "invalid dir attribute refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ tag: "div", attributes: { ["__proto__"]: "pollute" } }] })).isError, true, "__proto__ attribute name refused");
+  assert.equal((await agent.call("create_layers", { nodes: [{ type: null, tag: "div" }] })).isError, true, "null type refused");
 
-  // 2. import_source: HTML (strips script, preserves semantics & CSS), JSX, CSS tokens, and W3C DTCG JSON.
+  // 2. import_source: HTML (strips script, preserves semantics & linked CSS), JSX, CSS tokens, and W3C DTCG JSON.
   const htmlImport = await agent.call("import_source", {
     format: "html",
     name: "Imported Hero",
-    source: "<section><script>alert(1)</script><h2>Hello HTML</h2><p>Clean copy</p></section>",
+    source: '<html><head><link rel="stylesheet" href="hero.css"></head><body><section><script>alert(1)</script><h2>Hello HTML</h2><p>Clean copy</p></section></body></html>',
     stylesheets: [{ name: "hero.css", css: "h2 { color: #0f172a; }" }],
   });
   assert.equal(htmlImport.isError, undefined, text(htmlImport));
@@ -483,22 +490,46 @@ test("an agent authors a multi-section semantic page with create_layers, imports
     source: JSON.stringify({
       color: {
         $type: "color",
-        primary: { $value: "{brand.accent}", $extensions: { modes: { dark: "#60a5fa" } } },
+        primary: { $value: "{brand.accent}", $description: "Primary brand action", $extensions: { modes: { dark: "#60a5fa" } } },
         muted: { $value: "#64748b" },
       },
-      space: {
-        $type: "spacing",
-        md: { $value: { value: 16, unit: "px" } },
+      layout: {
+        gutter: { $type: "dimension", $value: { value: 16, unit: "px" } },
+      },
+      elevation: {
+        sm: { $type: "shadow", $value: { offsetX: "0px", offsetY: "2px", blur: "8px", color: "rgba(15, 23, 42, 0.12)" } },
       },
     }),
   });
   assert.equal(dtcgTokens.isError, undefined, text(dtcgTokens));
-  assert.equal(dtcgTokens.structuredContent.adds, 3);
+  assert.equal(dtcgTokens.structuredContent.adds, 4);
 
-  // 3. export_design: tsx, tokens-css, tokens-json (no nodeId required for tokens).
+  // Verify explicit DTCG $type and $description were preserved instead of guessed as "color".
+  const listed = (await agent.call("design_tokens")).structuredContent.tokens;
+  assert.equal(listed.find((t) => t.name === "--layout-gutter")?.type, "spacing");
+  assert.equal(listed.find((t) => t.name === "--elevation-sm")?.type, "shadow");
+  assert.equal(listed.find((t) => t.name === "--color-primary")?.description, "Primary brand action");
+
+  // Verify DTCG security edge cases: empty-slug alias {---} and nested shadow objects are skipped, not committed as var(--) or stack-overflowed.
+  const badDtcg = await agent.call("import_source", {
+    format: "tokens-json",
+    name: "bad.json",
+    source: JSON.stringify({
+      badAlias: { $type: "color", $value: "{---}" },
+      nestedShadow: { $type: "shadow", $value: { offsetX: { offsetX: "0px", offsetY: "0px", color: "#000" }, offsetY: "2px", color: "#000" } },
+      badDark: { $type: "color", $value: "#ffffff", $extensions: { modes: { dark: "url(https://evil.example/a)" } } },
+    }),
+  });
+  assert.equal(badDtcg.isError, undefined, text(badDtcg));
+  assert.equal(badDtcg.structuredContent.adds, 0);
+  assert.equal(badDtcg.structuredContent.skipped, 3);
+
+  // 3. export_design: tsx, tokens-css, tokens-json (no nodeId required for tokens) + lossless round-trip + __proto__ safety.
   const tsxOut = (await agent.call("export_design", { nodeId: pageId, format: "tsx", name: "PricingView" })).structuredContent;
   assert.ok(tsxOut.path.endsWith("PricingView.tsx"));
-  assert.match(readFileSync(tsxOut.path, "utf8"), /React\.JSX\.Element/u);
+  const tsxSource = readFileSync(tsxOut.path, "utf8");
+  assert.match(tsxSource, /^import type React from "react";/u);
+  assert.match(tsxSource, /React\.JSX\.Element/u);
 
   const cssOut = (await agent.call("export_design", { format: "tokens-css", name: "design-tokens" })).structuredContent;
   assert.ok(cssOut.path.endsWith("design-tokens.css"));
@@ -506,14 +537,36 @@ test("an agent authors a multi-section semantic page with create_layers, imports
 
   const jsonOut = (await agent.call("export_design", { format: "tokens-json", name: "design-tokens" })).structuredContent;
   assert.ok(jsonOut.path.endsWith("design-tokens.json"));
-  const exportedDtcg = JSON.parse(readFileSync(jsonOut.path, "utf8"));
-  const collection = Object.values(exportedDtcg).find((v) => v && typeof v === "object" && "brand-accent" in v);
-  assert.equal(collection["brand-accent"].$value, "#2563eb");
+  const exportedDtcgText = readFileSync(jsonOut.path, "utf8");
+  const exportedDtcg = JSON.parse(exportedDtcgText);
+  assert.equal(exportedDtcg["brand-accent"].$value, "#2563eb");
+  assert.equal(exportedDtcg["color-primary"].$value, "{brand-accent}");
+  // Round-trip re-import of exported DTCG JSON adds 0 duplicate tokens.
+  const reimported = await agent.call("import_source", { format: "tokens-json", name: "roundtrip.json", source: exportedDtcgText });
+  assert.equal(reimported.isError, undefined, text(reimported));
+  assert.equal(reimported.structuredContent.adds, 0, "exported DTCG round-trips without duplicating prefixes");
+
+  // Token named --__proto__ exports safely without prototype mutation.
+  const protoTok = await agent.call("set_token", { name: "--__proto__", type: "color", collection: "base", values: { default: "#123456" } });
+  assert.equal(protoTok.isError, undefined, text(protoTok));
+  const protoExport = (await agent.call("export_design", { format: "tokens-json", name: "proto-tokens" })).structuredContent;
+  assert.match(readFileSync(protoExport.path, "utf8"), /"__proto__":\s*\{/u, "--__proto__ serializes as an own key");
+
+  // Multi-collection cross-collection alias resolves target collection accurately in DTCG export.
+  await agent.call("set_token", { name: "--sem-accent", type: "color", collection: "base", values: { default: "var(--brand-accent)" } });
+  const multiExport = (await agent.call("export_design", { format: "tokens-json", name: "alias-tokens" })).structuredContent;
+  assert.equal(JSON.parse(readFileSync(multiExport.path, "utf8"))["sem-accent"].$value, "{brand-accent}");
+
+  // 4. Live-lock refusal vs stale-lock recovery via open_project({ breakStaleLock: true }).
+  const rival = engine(projects);
+  await rival.initialize("Rival");
+  const liveRefused = await rival.call("open_project", { name: "authoring", breakStaleLock: true });
+  assert.equal(liveRefused.isError, true, "breakStaleLock refuses a lock held by a live process");
+  await rival.stop();
 
   await agent.call("close_project");
   await agent.stop();
 
-  // 4. Stale lock recovery via open_project({ breakStaleLock: true }).
   const lockPath = join(projects, "authoring", PROJECT_FILES.directory, "lock");
   writeFileSync(lockPath, JSON.stringify({ holderId: "crashed", pid: 999_999, acquiredAt: "2026-01-01T00:00:00.000Z" }));
   const recover = engine(projects);
@@ -524,3 +577,38 @@ test("an agent authors a multi-section semantic page with create_layers, imports
   assert.equal(recovered.structuredContent.project, "authoring");
   await recover.stop();
 }));
+
+
+test("DTCG export resolves cross-collection aliases, ignores var() in quoted strings, and round-trips cleanly", () => {
+  const doc = {
+    rootIds: ["ds-1"],
+    nodes: {
+      "ds-1": {
+        id: "ds-1",
+        type: "design-system",
+        props: {
+          name: "Multi",
+          collections: [
+            { id: "primitives", name: "Primitives", modes: [{ id: "default", name: "Default" }], defaultMode: "default" },
+            { id: "semantic", name: "Semantic", modes: [{ id: "light", name: "Light" }, { id: "dark", name: "Dark" }], defaultMode: "light" },
+          ],
+          tokens: [
+            { name: "--teal-500", type: "color", collection: "primitives", values: { default: "#0f766e" } },
+            { name: "--brand-action", type: "color", collection: "semantic", values: { light: "var(--teal-500)", dark: "#2dd4bf" }, description: "Primary CTA" },
+            { name: "--font-note", type: "fontFamily", collection: "primitives", values: { default: "'var(--teal-500)', sans-serif" } },
+          ],
+        },
+      },
+    },
+  };
+  const json = exportDtcgTokens(doc);
+  const parsedObj = JSON.parse(json);
+  assert.equal(parsedObj.semantic["brand-action"].$value, "{primitives.teal-500}", "cross-collection alias points at primitives");
+  assert.equal(parsedObj.primitives["font-note"].$value, "'var(--teal-500)', sans-serif", "var() inside CSS string stays untouched");
+  const re = parseDtcgTokens(json);
+  assert.equal(re.theme["teal-500"], "#0f766e");
+  assert.equal(re.light["brand-action"], "var(--teal-500)", "grouped DTCG re-import strips collection wrapper cleanly");
+  assert.equal(re.dark["brand-action"], "#2dd4bf");
+  assert.equal(re.types["font-note"], "fontFamily");
+  assert.equal(re.descriptions["brand-action"], "Primary CTA");
+});

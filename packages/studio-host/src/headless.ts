@@ -174,7 +174,7 @@ export class HeadlessEngine {
         if (args.title !== undefined && typeof args.title !== "string") throw new StudioError(400, "invalid-arguments", "title must be text");
         if (args.breakStaleLock !== undefined && typeof args.breakStaleLock !== "boolean") throw new StudioError(400, "invalid-arguments", "breakStaleLock is true or false");
         if (name === "open_project" && this.#session?.name === project) this.#closeSession();
-        const next = StudioSession.open({ projectsRoot: this.#projectsRoot, name: project, owner: OWNER, now: this.#now, ...(name === "create_project" ? { create: { title: args.title } } : args.breakStaleLock === true ? { breakStaleLock: { actorId: this.#actor.actorId, reason: "Recovered stale lock whose previous holder is gone" } } : {}) });
+        const next = StudioSession.open({ projectsRoot: this.#projectsRoot, name: project, owner: OWNER, now: this.#now, ...(name === "create_project" ? { create: { title: args.title } } : args.breakStaleLock === true ? { breakStaleLock: { reason: `Recovered stale lock for ${this.#actor.actorId} (previous holder gone)` } } : {}) });
         this.#closeSession();
         next.setAgentGrants([{ principalKind: "actor", principalId: this.#actor.actorId, capabilities: [...AGENT_CAPABILITIES] }]);
         this.#session = next;

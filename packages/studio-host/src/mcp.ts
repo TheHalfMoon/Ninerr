@@ -65,7 +65,7 @@ interface ToolContext {
   now: () => string;
   selection: () => string[];
   references: ReferenceCatalog;
-  edit: (operations: unknown[], intent: string) => Json;
+  edit: (operations: unknown[], intent: string, provenance?: Record<string, unknown>) => Json;
   /** The call is a dry run: a tool that does not change the document through `edit` must not act. */
   dryRun: boolean;
 }
@@ -449,7 +449,7 @@ const TOOLS: Tool[] = [
       for (let i = 0; i < args.nodes.length; i += 1) {
         const entry = args.nodes[i];
         if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new ToolError(`nodes[${i}] must be an object`);
-        const type = entry.type ?? (entry.text !== undefined && entry.tag === undefined ? "text" : "element");
+        const type = entry.type === undefined ? (entry.text !== undefined && entry.tag === undefined ? "text" : "element") : entry.type;
         if (typeof type !== "string" || !LAYER_TYPES.includes(type as any)) throw new ToolError(`nodes[${i}].type must be one of ${LAYER_TYPES.join(", ")}`);
         let parentId: string | null = null;
         if (entry.parentId !== undefined && entry.parentId !== null) {
@@ -458,8 +458,8 @@ const TOOLS: Tool[] = [
             parentId = tempMap.get(entry.parentId)!;
           } else {
             const existing = nodeOf(session, entry.parentId);
-            if (existing.type === "component-instance" || existing.type === "design-system") {
-              throw new ToolError(`cannot insert layers inside ${existing.type} ${existing.id}`);
+            if (existing.type === "component-instance" || existing.type === "design-system" || isCodePart(existing)) {
+              throw new ToolError(`cannot insert layers inside ${isCodePart(existing) ? "code expression" : existing.type} ${existing.id}`);
             }
             parentId = existing.id;
           }
@@ -488,26 +488,46 @@ const TOOLS: Tool[] = [
         }
         if (entry.style !== undefined) {
           if (entry.style === null || typeof entry.style !== "object" || Array.isArray(entry.style)) throw new ToolError(`nodes[${i}].style must be an object`);
+          const styleEntries = Object.entries(entry.style);
+          if (styleEntries.length > 200) throw new ToolError(`nodes[${i}].style may have at most 200 properties`);
           const style: Record<string, string> = {};
-          for (const [property, value] of Object.entries(entry.style)) {
+          for (const [property, value] of styleEntries) {
+            if (typeof value !== "string" || value.length > 2_000) throw new ToolError(`nodes[${i}].style.${property.slice(0, 64)} must be a string of at most 2000 characters`);
             const problem = styleDeclarationProblem(property, value);
             if (problem !== null) throw new ToolError(`nodes[${i}].style: ${problem}`);
-            style[property] = value as string;
+            style[property] = value;
           }
           props.style = style;
         }
         if (entry.attributes !== undefined) {
           if (entry.attributes === null || typeof entry.attributes !== "object" || Array.isArray(entry.attributes)) throw new ToolError(`nodes[${i}].attributes must be an object`);
+          const attrEntries = Object.entries(entry.attributes);
+          if (attrEntries.length > 64) throw new ToolError(`nodes[${i}].attributes may have at most 64 properties`);
           const attributes: Record<string, string> = {};
-          for (const [attrName, attrValue] of Object.entries(entry.attributes)) {
-            if (typeof attrValue !== "string" || attrValue.length > 2_000) throw new ToolError(`nodes[${i}].attributes.${attrName} must be a string of at most 2000 characters`);
-            attributes[attrName] = attrValue;
+          const element = { id: "check", type, props: props.tag === undefined ? {} : { tag: props.tag } };
+          const baseline = planElement(element).dropped;
+          for (const [rawAttr, attrValue] of attrEntries) {
+            const lowerAttr = rawAttr.toLowerCase();
+            if (!/^[a-z][a-z0-9-]{0,63}$/u.test(lowerAttr)) {
+              throw new ToolError(`nodes[${i}].attributes: ${JSON.stringify(rawAttr).slice(0, 80)} is not an attribute name`);
+            }
+            if (typeof attrValue !== "string" || attrValue.length > 2_000) {
+              throw new ToolError(`nodes[${i}].attributes.${lowerAttr} must be a string of at most 2000 characters`);
+            }
+            const written = lowerAttr === "class" ? [...new Set(attrValue.split(/[\t\n\f\r ]+/u).filter((part) => part !== ""))].join(" ") : attrValue;
+            if (lowerAttr === "dir" && !["ltr", "rtl", "auto"].includes(written)) {
+              throw new ToolError(`nodes[${i}].attributes.dir must be "ltr", "rtl" or "auto"`);
+            }
+            const plan = planElement({ ...element, props: { ...element.props, attributes: { [rawAttr]: written } } });
+            if (plan.dropped > baseline) {
+              throw new ToolError(`nodes[${i}].attributes: ${lowerAttr} is not an attribute the canvas draws on this ${typeof props.tag === "string" ? `<${props.tag}>` : type}`);
+            }
+            const existingKey = Object.keys(attributes).find((key) => key.toLowerCase() === lowerAttr);
+            if (existingKey !== undefined) delete attributes[existingKey];
+            const drawn = Object.values(plan.attributes as Record<string, string>)[0] ?? written;
+            if (!(drawn === "" && lowerAttr === "class")) attributes[rawAttr] = drawn;
           }
-          const planned = planElement({ id: "check", type, props: { ...(props.tag ? { tag: props.tag } : {}), attributes } });
-          if (planned.droppedAttributes > 0) {
-            throw new ToolError(`nodes[${i}].attributes contains an attribute or value the canvas does not draw`);
-          }
-          props.attributes = attributes;
+          if (Object.keys(attributes).length > 0) props.attributes = attributes;
         }
         const id = `${type === "frame" ? "frame" : "layer"}-${randomUUID().slice(0, 12)}`;
         let tempId: string | null = null;
@@ -1102,7 +1122,7 @@ const TOOLS: Tool[] = [
           accessibilityFindings: summaryReport.accessibilityFindings,
           security: summaryReport.security,
           notes: summaryReport.notes,
-          ...(edit(change.operations, change.intent) as object),
+          ...(edit(change.operations, change.intent, change.provenance) as object),
         };
       }
       if (args.format === "jsx") {
@@ -1123,8 +1143,14 @@ const TOOLS: Tool[] = [
           ? planTokenCss(session.document, { css: args.source, fileName: args.name })
           : planDtcgTokens(session.document, args.source, typeof args.name === "string" ? args.name : undefined);
         if (planned.plan.problem !== null) throw new ToolError(`tokens refused: ${planned.plan.problem}`);
+        const refused = planned.plan.tokens
+          .filter((token: any) => token.status === "refused")
+          .map((token: any) => ({ name: token.name, reason: token.reason ?? "refused" }));
+        const conflicts = planned.plan.tokens
+          .filter((token: any) => token.status === "conflict")
+          .map((token: any) => ({ name: token.name, reason: token.reason ?? "conflict" }));
         if (planned.operations.length === 0) {
-          return { format: args.format, adds: 0, skipped: planned.plan.skipped, kept: planned.plan.kept, revision: session.revision };
+          return { format: args.format, adds: 0, skipped: planned.plan.skipped, kept: planned.plan.kept, refused, conflicts, revision: session.revision };
         }
         const from = planned.plan.fileName ?? (args.format === "tokens-css" ? "CSS" : "DTCG JSON");
         return {
@@ -1132,6 +1158,8 @@ const TOOLS: Tool[] = [
           adds: planned.plan.adds,
           skipped: planned.plan.skipped,
           kept: planned.plan.kept,
+          refused,
+          conflicts,
           ...(edit(planned.operations, `Import ${planned.plan.adds} token${planned.plan.adds === 1 ? "" : "s"} from ${from}`) as object),
         };
       }
@@ -1171,7 +1199,7 @@ const TOOLS: Tool[] = [
           const code = args.format === "tailwind" ? exportTailwind(session.document, args.nodeId) : exportJsx(session.document, args.nodeId);
           ({ componentName, layers } = code);
           const emitted = args.format === "tsx"
-            ? code.code.replace(/^(export function [A-Za-z0-9_]+\(\)) \{/mu, "$1: React.JSX.Element {")
+            ? `import type React from "react";\n\n${code.code.replace(/^(export function [A-Za-z0-9_]+\(\)) \{/mu, "$1: React.JSX.Element {")}`
             : code.code;
           // A component's stylesheet and tokens go with it, in the file, where an import would need them.
           const css = [code.tokens, code.stylesheet].filter((part): part is string => typeof part === "string" && part !== "").join("\n");
@@ -1496,14 +1524,14 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       dryRun: dryRun === true,
       selection: context.selection,
       references: context.references,
-      edit: (operations, intent) => {
+      edit: (operations, intent, provenance) => {
         if (operations.length === 0) throw new ToolError("nothing to change");
         if (dryRun === true) {
-          const preview = session.preview(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
+          const preview = session.preview(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName, ...(provenance ? { provenance } : {}) }, "mcp");
           // Nothing is made: the result says so, and what the change would touch.
           throw new DryRun({ dryRun: true, wouldChange: preview.affectedNodeIds, operations: preview.operations, revision: preview.revision, intent });
         }
-        const event = session.edit(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
+        const event = session.edit(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName, ...(provenance ? { provenance } : {}) }, "mcp");
         return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds };
       },
     }, args);
