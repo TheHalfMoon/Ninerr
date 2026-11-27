@@ -23,7 +23,7 @@ startup_timeout_sec = 20
 tool_timeout_sec = 150
 ```
 
-Deleting waits up to 120 seconds for your answer, so the tool timeout is longer than that. Check the entry with `codex mcp list`, or `/mcp` in Codex.
+Deleting waits up to 120 seconds for your answer, so the tool timeout is longer than that. Check the entry with `codex mcp list`, or `/mcp` in Codex. For isolated non-interactive qualification runs, use `codex exec --skip-git-repo-check --ignore-user-config --ephemeral --approve-for-me` with `-c mcp_servers.ninerr…` (see `docs/evidence/HEADLESS_CLIENTS_2026-11-27.md`).
 
 ## Claude Code
 
@@ -71,7 +71,7 @@ Do this with each client separately. A client that is only configured, or only s
 4. **Delete:** ask the agent to delete Banner. The client must ask you first, or Ninerr refuses (a client that cannot ask). Decline, and check the layer is still there.
 5. **Undo:** ask for a small change, then `undo_change`. The change is gone and history shows both.
 
-`docs/evidence/HEADLESS_CLIENTS_2026-11-14.md` records these checks as run so far. The tests in `tests/headless-engine.test.mjs` and `tests/engine-package.test.mjs` drive the real engine process, but they don't substitute for a client's own session.
+`docs/evidence/HEADLESS_CLIENTS_2026-11-14.md` and `docs/evidence/HEADLESS_CLIENTS_2026-11-27.md` record these checks as run so far (including live Codex CLI 0.163.0 and OpenCode 2.3.2 sessions). The tests in `tests/headless-engine.test.mjs` and `tests/engine-package.test.mjs` drive the real engine process, but they don't substitute for a client's own session.
 
 ## Security and limits
 

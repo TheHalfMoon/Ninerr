@@ -2,9 +2,9 @@ import { isV2Type, v2DocumentProblem, v2NodesProblem } from "./schema-v2.mjs";
 
 import { schemaVersionFor } from "./schema-v2.mjs";
 
-export { MAX_REWRITTEN_LAYERS, addCollection, addMode, addToken, compileTokens, createDesignSystem, deleteToken, designSystemOf, modeAttribute, newDesignSystemProps, renameToken, setToken, styleValuesOf, tokenUses } from "./tokens.mjs";
+export { MAX_REWRITTEN_LAYERS, addCollection, addMode, addToken, compileTokens, createDesignSystem, deleteToken, designSystemOf, modeAttribute, newDesignSystemProps, renameToken, setBreakpoints, setDesignBrief, setMotionSystem, setToken, styleValuesOf, tokenUses } from "./tokens.mjs";
 
-export { SCHEMA_V2_LIMITS, TOKEN_NAME, TOKEN_TYPES, V2_NODE_TYPES, PROPERTY_KINDS, PROPERTY_FIELDS, cssValueProblem, designSystemProblem, definitionProblem, instanceProblem, isV2Type, propertyRenameProblem, requiresSchemaV2, schemaVersionFor, tokenReferences } from "./schema-v2.mjs";
+export { BRIEF_DENSITIES, BRIEF_THEMES, MOTION_REDUCED_POLICIES, SCHEMA_V2_LIMITS, TOKEN_NAME, TOKEN_TYPES, V2_NODE_TYPES, PROPERTY_KINDS, PROPERTY_FIELDS, breakpointsProblem, briefProblem, cssValueProblem, designSystemProblem, definitionProblem, instanceProblem, isV2Type, motionProblem, propertyRenameProblem, requiresSchemaV2, schemaVersionFor, tokenReferences } from "./schema-v2.mjs";
 
 // The newest schema this build reads and writes. A document is schema 2 exactly when it holds a
 // schema v2 node (ADR-0003): until then it stays schema 1, which older builds open.
