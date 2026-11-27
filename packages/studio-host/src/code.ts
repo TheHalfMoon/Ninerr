@@ -74,7 +74,11 @@ function appliedStylesheet(document: any, nodeId: string): string | null {
   for (let id: string | null = nodeId, depth = 0; id !== null && depth <= MAX_EXPORT_DEPTH; depth += 1) {
     const node = document.nodes[id];
     if (node === undefined) return null;
-    if (typeof node.props?.stylesheet === "string") return node.props.stylesheet;
+    if (typeof node.props?.stylesheet === "string") {
+      // Validate through the renderer's own safeStylesheet check so exported components never
+      // carry external @import / url() / script CSS that the canvas refuses.
+      return planElement(node).stylesheet;
+    }
     id = node.parentId;
   }
   return null;
@@ -362,6 +366,122 @@ export function exportHtml(
   const css = [base, tokens, stylesheet === null ? null : `@scope ([data-ninerr-page]) {\n${stylesheet}\n}`].filter((part) => part !== null).join("\n").replace(/<\/style/giu, "<\\/style");
   const html = `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<meta http-equiv="Content-Security-Policy" content="${HTML_EXPORT_CSP}">\n<title>${escape(title)}</title>\n${css === "" ? "" : `<style>\n${css}\n</style>\n`}</head>\n<body>\n${stylesheet !== null && !owner ? `<div data-ninerr-page>${markup}</div>` : markup}\n</body>\n</html>\n`;
   return { componentName, html, layers, codeParts };
+}
+
+const FRAMEWORK_VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+const FRAMEWORK_REFUSED_TAGS = new Set(["script", "style", "noscript", "template", "iframe", "object", "embed"]);
+const FRAMEWORK_HTML_NAMES: Record<string, string> = { className: "class", htmlFor: "for" };
+
+const escapeFrameworkText = (value: string) =>
+  value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/\{/gu, "&#123;")
+    .replace(/\}/gu, "&#125;");
+
+const escapeFrameworkAttr = (value: string) =>
+  value
+    .replace(/&/gu, "&amp;")
+    .replace(/"/gu, "&quot;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/\{/gu, "&#123;")
+    .replace(/\}/gu, "&#125;");
+
+function emitFrameworkNode(node: DesignDocNode): string {
+  if (node.tag === "#text") return escapeFrameworkText(node.text ?? "");
+  if (node.tag === "#expression") {
+    const safeComment = (node.code ?? "")
+      .replace(/-(?=-)/gu, "- ")
+      .replace(/-$/u, "- ")
+      .replace(/(<\/)(template|style|script)/giu, "$1 $2");
+    return `<!-- code: ${safeComment} -->`;
+  }
+  const tag = node.tag.toLowerCase();
+  if (FRAMEWORK_REFUSED_TAGS.has(tag)) {
+    throw new StudioError(422, "export-refused", `a <${tag}> element is not exported`);
+  }
+  let attributes = "";
+  for (const [key, value] of Object.entries(node.props ?? {})) {
+    if (value === false) continue;
+    const name = FRAMEWORK_HTML_NAMES[key] ?? key;
+    if (/^(?:on|v-|@|:)/iu.test(name) || !/^[a-z][a-z0-9-]*$/iu.test(name)) {
+      throw new StudioError(422, "export-refused", `attribute ${name} is not exported in static framework components`);
+    }
+    attributes += value === true ? ` ${name}` : ` ${name}="${escapeFrameworkAttr(String(value))}"`;
+  }
+  if (node.style !== undefined && Object.keys(node.style).length > 0) {
+    const styleText = Object.entries(node.style).map(([name, value]) => `${name}: ${value}`).join("; ");
+    attributes += ` style="${escapeFrameworkAttr(styleText)}"`;
+  }
+  if (FRAMEWORK_VOID_TAGS.has(tag)) return `<${node.tag}${attributes}>`;
+  const text = node.text === undefined ? "" : escapeFrameworkText(node.text);
+  return `<${node.tag}${attributes}>${text}${(node.children ?? []).map(emitFrameworkNode).join("")}</${node.tag}>`;
+}
+
+function frameworkExportBundle(document: any, nodeId: unknown) {
+  const { design, componentName, layers, codeParts, stylesheet, tokens } = exportDesign(document, nodeId);
+  const owner = typeof nodeId === "string" && typeof document.nodes[nodeId]?.props?.stylesheet === "string";
+  const root = design.root;
+  if (stylesheet !== null && owner) root.props = { ...root.props, "data-ninerr-page": "" };
+  if (root.props["data-ninerr-mode"] === undefined && typeof nodeId === "string") {
+    for (let id = document.nodes[nodeId]?.parentId ?? null, depth = 0; id !== null && depth <= MAX_EXPORT_DEPTH; depth += 1) {
+      const modes = modeAttribute(document.nodes[id]?.props ?? {});
+      if (modes !== null) {
+        root.props = { ...root.props, "data-ninerr-mode": modes };
+        break;
+      }
+      id = document.nodes[id]?.parentId ?? null;
+    }
+  }
+  let markup: string;
+  try {
+    // Validate the document subset through designToMarkup first, then emit with full framework-safe escaping.
+    designToMarkup(design);
+    markup = emitFrameworkNode(root);
+  } catch (error) {
+    throw error instanceof StudioError ? error : refused(error);
+  }
+  if (stylesheet !== null && !owner) {
+    markup = `<div data-ninerr-page="">${markup}</div>`;
+  }
+  const safeCss = (css: string) => css.replace(/<\/style/giu, "<\\/style");
+  return { componentName, markup, layers, codeParts, stylesheet: stylesheet ? safeCss(stylesheet) : null, tokens: tokens ? safeCss(tokens) : null };
+}
+
+/** Export a layer as a static Vue 3 Single-File Component (`.vue`), sanitized identically to the canvas. */
+export function exportVue(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number } {
+  const { componentName, markup, layers, codeParts, stylesheet, tokens } = frameworkExportBundle(document, nodeId);
+  const blocks = [`<template>\n${markup}\n</template>`];
+  if (tokens !== null) blocks.push(`<style>\n${tokens.trimEnd()}\n</style>`);
+  if (stylesheet !== null) blocks.push(`<style scoped>\n${stylesheet.trimEnd()}\n</style>`);
+  return { componentName, code: `${blocks.join("\n\n")}\n`, layers, codeParts };
+}
+
+/** Export a layer as a static Svelte 5 component (`.svelte`), sanitized identically to the canvas. */
+export function exportSvelte(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number } {
+  const { componentName, markup, layers, codeParts, stylesheet, tokens } = frameworkExportBundle(document, nodeId);
+  const blocks = [markup];
+  const cssParts: string[] = [];
+  if (tokens !== null) {
+    const globalTokens = tokens
+      .replace(/(^|\n)\s*(:root|\[data-ninerr-mode[^\n{]*\])\s*\{/gu, "$1:global($2) {")
+      .trimEnd();
+    cssParts.push(globalTokens);
+  }
+  if (stylesheet !== null) cssParts.push(stylesheet.trimEnd());
+  if (cssParts.length > 0) blocks.push(`<style>\n${cssParts.join("\n\n")}\n</style>`);
+  return { componentName, code: `${blocks.join("\n\n")}\n`, layers, codeParts };
+}
+
+/** Export a layer as a static Astro component (`.astro`), sanitized identically to the canvas. */
+export function exportAstro(document: any, nodeId: unknown): { componentName: string; code: string; layers: number; codeParts: number } {
+  const { componentName, markup, layers, codeParts, stylesheet, tokens } = frameworkExportBundle(document, nodeId);
+  const blocks = [`---\n// Exported by Ninerr (${componentName})\n---`, markup];
+  if (tokens !== null) blocks.push(`<style is:global>\n${tokens.trimEnd()}\n</style>`);
+  if (stylesheet !== null) blocks.push(`<style>\n${stylesheet.trimEnd()}\n</style>`);
+  return { componentName, code: `${blocks.join("\n\n")}\n`, layers, codeParts };
 }
 
 /** Layers for JSX source, inside a new page frame, as one operation. */

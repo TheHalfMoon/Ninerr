@@ -72,6 +72,8 @@ const CLASSES = Object.freeze({
   import_from_codebase: "write",
   plan_redesign: "read",
   apply_redesign: "consequential",
+  // Local rights-aware design reference packs and offline pattern extraction.
+  manage_references: "write",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

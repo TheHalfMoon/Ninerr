@@ -8,11 +8,13 @@ export { ImportDesk, MAX_IMPORT_HTML_BYTES, MAX_IMPORT_NODES, styleProperties, t
 export { AGENT_CAPABILITIES, AgentRegistry, type AgentSummary } from "./agents.ts";
 export { CONFIRMATION_WAIT_MS, ConfirmationBroker, MCP_PROTOCOL_VERSIONS, handleMcpMessage, mcpToolDefinitions, type PendingConfirmation } from "./mcp.ts";
 export { assertLoopbackUrl, discoverMcpUrl, runRelay, type RelayOptions } from "./relay.ts";
-export { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
+export { exportAstro, exportHtml, exportJsx, exportSvelte, exportTailwind, exportVue, importJsx } from "./code.ts";
 export { prepareProjectsFolder, resolveProjectsFolder } from "./projects-folder.ts";
 export { HeadlessEngine, localAgentActor, runHeadless, type HeadlessOptions } from "./headless.ts";
 export { EXTENDED_CLI_COMMANDS, runCliCommand, type CliRunOptions } from "./cli.ts";
 export { auditDesignSystem, compileBreakpointsStylesheet, generateHighContrastMode, planRegistryItemUpdate, planThemeMigration, type DesignSystemAuditFinding, type ThemeTokenInput } from "./design-system-ops.ts";
 export { CodebaseLinks, MAX_SCAN_DEPTH, MAX_SCAN_ENTRIES, MAX_SCAN_FILES, MAX_SOURCE_BYTES, assertFolder, bringIn, planWriteBack, readSourceFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
 export { REDESIGN_LIMITS, analyzeCodebase, applyRedesignPlan, assertNoSymlinkPath, assertWorkspaceRoot, extractCssCustomProperties, patchCssTokensSource, patchJsxClassStrings, planRedesign, readBoundedWorkspaceFile, readRedesignJournal, resolveSafeWorkspaceFile, rollbackRedesign, validateRollbackTargets, verifyCssTokenPatchInvariance, verifyFunctionalInvariance, type PlannedFilePatch, type RedesignPlan, type ValidatedJournalEntry } from "./redesign.ts";
+export { RESEARCH_LIMITS, captureUrlReferenceMetrics, createLocalReferencePack, ensureRealDirectory, extractPatternsFromSource, isPrivateOrNonGlobalIp, listLocalReferencePacks, validatePackFileName, writeLocalReferencePack, type LocalReferenceEntryInput } from "./research.ts";
+export * as sdk from "./sdk.ts";
 export { type CodeSource, type ImportJsxOptions } from "./code.ts";

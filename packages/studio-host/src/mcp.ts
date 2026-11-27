@@ -8,7 +8,7 @@ import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInsta
 import { NINERR_COMPONENT_CATEGORIES, RECORD_SOURCES, UI_COMPONENT_SOURCES, buildComponentOperations, getNinerrComponent, loadComponentRecords, searchComponents, searchNinerrComponents } from "@ninerr/component-sources";
 import { ARCHETYPE_IDS, DOMAIN_ARCHETYPES, MOTION_PRESETS, MOTION_PRESET_IDS, MOTION_TOKENS, compileMotionReact, compileMotionStylesheet, evaluateMotionFrequency, evaluateTaste, getDomainArchetype, getSkill, lintMotionCss, listSkills, planDesignDirections, renderSkillMarkdown } from "@ninerr/design-intelligence";
 import { STANDARD_VIEWPORTS, buildCritiqueReport, diffPngBuffers, discoverBrowser, improveDesignInMemory, renderAndInspect } from "@ninerr/vision";
-import { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
+import { exportAstro, exportHtml, exportJsx, exportSvelte, exportTailwind, exportVue, importJsx } from "./code.ts";
 import { auditDesignSystem, compileBreakpointsStylesheet, generateHighContrastMode, planThemeMigration } from "./design-system-ops.ts";
 import { StudioError } from "./errors.ts";
 import { ImportDesk } from "./imports.ts";
@@ -16,6 +16,7 @@ import { planTokenCss } from "./token-import.ts";
 import { exportDtcgTokens, planDtcgTokens } from "./tokens-dtcg.ts";
 import { UntrustedFileError, readTrustedFile, writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
 import { REDESIGN_LIMITS, analyzeCodebase, applyRedesignPlan, planRedesign, readBoundedWorkspaceFile, rollbackRedesign, validateRollbackTargets } from "./redesign.ts";
+import { RESEARCH_LIMITS, createLocalReferencePack, extractPatternsFromSource, listLocalReferencePacks, validatePackFileName, writeLocalReferencePack } from "./research.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
@@ -76,6 +77,8 @@ interface ToolContext {
   workspaceRoot: string | null;
   /** Owner-only directory where redesign rollback journals are written. */
   redesignJournalDir: string | null;
+  /** Whether this session is still the open project session. */
+  isOpen: () => boolean;
 }
 
 /** Tool arguments are the schema's and nothing else: no directory, URL, tenant or token gets through. */
@@ -117,6 +120,7 @@ const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   migrate_theme: ["tokens[].name", "tokens[].description", "breakpoints[].name"],
   render_preview: ["name"],
   import_from_codebase: ["name"],
+  manage_references: ["title", "entries[].title"],
 });
 const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
 
@@ -214,7 +218,7 @@ const strings = (value: unknown, label: string): string[] => {
 };
 
 // What export_design writes: a file per format, in the project's own exports folder.
-const EXPORT_FORMATS = Object.freeze({ html: "html", jsx: "jsx", tsx: "tsx", tailwind: "jsx", "tokens-css": "css", "tokens-json": "json" });
+const EXPORT_FORMATS = Object.freeze({ html: "html", jsx: "jsx", tsx: "tsx", tailwind: "jsx", vue: "vue", svelte: "svelte", astro: "astro", "tokens-css": "css", "tokens-json": "json" });
 const LAYER_TYPES = Object.freeze(["frame", "group", "element", "text", "vector", "image"]);
 const MAX_CREATE_LAYERS = 500;
 const EXPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
@@ -388,11 +392,11 @@ const TOOLS: Tool[] = [
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
         "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
         "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
-        "project_history lists the latest changes and who made them; undo_change and redo_change undo and redo your own latest change. import_source brings sanitized HTML, JSX, CSS custom properties or W3C design token JSON into the project in one change. export_design writes a layer or the design tokens into the project's exports folder as html (a complete, script-free preview page), jsx, tsx, tailwind, tokens-css or tokens-json, and returns the file's path for the person.",
+        "project_history lists the latest changes and who made them; undo_change and redo_change undo and redo your own latest change. import_source brings sanitized HTML, JSX, CSS custom properties or W3C design token JSON into the project in one change. export_design writes a layer or the design tokens into the project's exports folder as html (a complete, script-free preview page), jsx, tsx, tailwind, vue, svelte, astro, tokens-css or tokens-json, and returns the file's path for the person.",
         "Every tool that changes the document takes dryRun: true, which checks the change and says what it would touch (wouldChange) without making it or asking the person anything (a created layer's id there is not the one a real call makes), and baseRevision, the revision you read (project_info gives it): a change to a document that has moved on since is refused, so read it again.",
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
-        "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
+        "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused. manage_references extracts offline design patterns from local HTML or CSS and creates, lists, or loads observed-inspiration-only reference packs stored strictly inside the project's references folder (zero network egress).",
         "Library components: search_components finds native editable Ninerr components (source: \"ninerr\", 41 components across 8 categories) as well as pinned component source records (Meta Astryx) by name or purpose; get_component gives one's exact props, variants, accessibility criteria, limitations, import path and provenance. instantiate_component places any native Ninerr component into the project in one atomic undoable change (as editable layers or as a reusable component definition and instance).",
         "Design systems: audit_design_system inspects token coverage, duplicates, unused tokens, hardcoded literal matches, and cross-mode WCAG contrast; migrate_theme atomically migrates light and dark semantic tokens, generates a WCAG AAA high-contrast mode, or configures responsive breakpoints and scoped responsive rules.",
         "Design intelligence: design_intelligence reads domain archetypes, plans multi-direction aesthetic tokens, runs brief-aware taste critique, inspects motion presets, checks motion frequency or CSS linting, and lists or renders official Ninerr skills. set_design_brief stores the structured product brief on the design system (optionally seeding a planned direction's tokens), and apply_motion attaches reduced-motion-safe keyframes and transitions to a layer stylesheet along with motion tokens.",
@@ -1214,7 +1218,7 @@ const TOOLS: Tool[] = [
   {
     name: "export_design",
     title: "Export a design",
-    description: "Write a layer or design tokens into the project's exports folder, and return the file's path: html is a complete, script-free preview page; jsx and tsx are React components; tailwind is a React component styled with Tailwind classes; tokens-css and tokens-json export the design system tokens (nodeId optional). The design itself does not change.",
+    description: "Write a layer or design tokens into the project's exports folder, and return the file's path: html is a complete, script-free preview page; jsx and tsx are React components; tailwind is a React component styled with Tailwind classes; vue, svelte and astro are static single-file framework components; tokens-css and tokens-json export the design system tokens (nodeId optional). The design itself does not change.",
     inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: Object.keys(EXPORT_FORMATS) }, name: { type: "string", maxLength: 64, description: "The file's name without extension: letters, digits, - and _. Defaults to the layer's component name or tokens." }, replace: { type: "boolean", description: "Replace a file of that name already in exports (it may have been edited since). Without it, an existing file is refused." } }, ["format"]),
     run: ({ session, dryRun }, args) => {
       if (args.replace !== undefined && typeof args.replace !== "boolean") throw new ToolError("replace is true or false");
@@ -1240,6 +1244,14 @@ const TOOLS: Tool[] = [
           const page = exportHtml(session.document, args.nodeId);
           ({ componentName, layers } = page);
           text = page.html;
+        } else if (args.format === "vue" || args.format === "svelte" || args.format === "astro") {
+          const fw = args.format === "vue"
+            ? exportVue(session.document, args.nodeId)
+            : args.format === "svelte"
+              ? exportSvelte(session.document, args.nodeId)
+              : exportAstro(session.document, args.nodeId);
+          ({ componentName, layers } = fw);
+          text = fw.code;
         } else {
           const code = args.format === "tailwind" ? exportTailwind(session.document, args.nodeId) : exportJsx(session.document, args.nodeId);
           ({ componentName, layers } = code);
@@ -2623,6 +2635,177 @@ const TOOLS: Tool[] = [
       throw new ToolError("action must be \"apply\" or \"rollback\"");
     },
   },
+  {
+    name: "manage_references",
+    title: "Manage local design reference packs",
+    description: "Extract offline design patterns from local HTML/CSS, and create, list, or load observed-inspiration-only reference packs stored strictly inside the open project's references folder (zero network egress).",
+    inputSchema: object({
+      action: { type: "string", enum: ["extract_patterns", "list_packs", "create_pack", "load_pack"] },
+      fileName: { type: "string", minLength: 6, maxLength: 69, description: "Pack filename inside the project's references folder (lowercase letters, digits, ., _, - ending in .json)." },
+      packId: { type: "string", minLength: 1, maxLength: 128 },
+      title: { type: "string", minLength: 1, maxLength: 200 },
+      html: { type: "string", maxLength: RESEARCH_LIMITS.maxInputBytes },
+      css: { type: "string", maxLength: RESEARCH_LIMITS.maxInputBytes },
+      tags: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 32 } },
+      entries: {
+        type: "array",
+        maxItems: RESEARCH_LIMITS.maxEntries,
+        items: object({
+          id: { type: "string", minLength: 1, maxLength: 128 },
+          kind: { type: "string", enum: ["screen", "flow", "pattern", "asset", "token", "component"] },
+          title: { type: "string", minLength: 1, maxLength: 200 },
+          tags: { type: "array", maxItems: 20, items: { type: "string", minLength: 1, maxLength: 32 } },
+          confidence: { type: "string", enum: ["observed", "documented", "inferred", "unknown"] },
+        }, ["title"]),
+      },
+      replace: { type: "boolean" },
+    }, ["action"]),
+    run: async ({ session, references, dryRun, now, isOpen }, args) => {
+      onlyArguments(args, ["action", "fileName", "packId", "title", "html", "css", "tags", "entries", "replace"]);
+      const projectRefsDir = () => {
+        const rootReal = realpathSync.native(session.root);
+        const dir = join(rootReal, "references");
+        try {
+          const stat = lstatSync(dir);
+          if (stat.isSymbolicLink() || !stat.isDirectory() || realpathSync.native(dir) !== dir) {
+            throw new ToolError("the project's references folder is a symlink or not a directory; refusing access");
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+            if (error instanceof ToolError) throw error;
+            throw new ToolError("could not verify the project's references folder");
+          }
+        }
+        return dir;
+      };
+
+      if (args.action === "extract_patterns") {
+        const html = args.html ?? "";
+        const css = args.css ?? "";
+        if (typeof html !== "string" || typeof css !== "string") throw new ToolError("html and css must be strings");
+        if (html.trim() === "" && css.trim() === "") throw new ToolError("provide html and/or css text to extract patterns");
+        return extractPatternsFromSource({ html, css }) as unknown as Json;
+      }
+
+      if (args.action === "list_packs") {
+        const dir = projectRefsDir();
+        return { project: session.name, packs: listLocalReferencePacks(dir) } as unknown as Json;
+      }
+
+      if (args.action === "load_pack") {
+        const validName = validatePackFileName(args.fileName);
+        const dir = projectRefsDir();
+        const target = join(dir, validName);
+        let stat = null;
+        try {
+          stat = lstatSync(target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT" && (error as NodeJS.ErrnoException)?.code !== "ENOTDIR") {
+            throw new ToolError(`could not inspect reference pack ${validName}`);
+          }
+        }
+        if (stat === null) {
+          throw new ToolError(`reference pack ${validName} was not found in this project's references folder`);
+        }
+        if (stat.isSymbolicLink() || !stat.isFile()) {
+          throw new ToolError(`reference pack ${validName} is not a regular non-symlink file`);
+        }
+        // Require exact filename match on case-insensitive filesystems.
+        if (!readdirSync(dir).includes(validName)) {
+          throw new ToolError(`reference pack ${validName} was not found in this project's references folder`);
+        }
+        if (dryRun) {
+          return { dryRun: true, action: "load_pack", project: session.name, fileName: validName } as unknown as Json;
+        }
+        return await references.load(session, isOpen, dir, validName) as unknown as Json;
+      }
+
+      if (args.action === "create_pack") {
+        if (args.replace !== undefined && typeof args.replace !== "boolean") throw new ToolError("replace is true or false");
+        const validName = validatePackFileName(args.fileName);
+        const packId = typeof args.packId === "string" && args.packId.trim() !== ""
+          ? args.packId.trim()
+          : validName.replace(/\.json$/u, "");
+        const extracted = (typeof args.html === "string" && args.html.trim() !== "") || (typeof args.css === "string" && args.css.trim() !== "")
+          ? extractPatternsFromSource({ html: typeof args.html === "string" ? args.html : "", css: typeof args.css === "string" ? args.css : "" })
+          : null;
+
+        // Agent-created packs are ALWAYS marked restricted / observed-inspiration-only (never self-certified redistributable).
+        const forcedRights = { status: "restricted" as const, license: null, redistributable: false };
+        let normalizedEntries: any[];
+        if (Array.isArray(args.entries) && args.entries.length > 0) {
+          normalizedEntries = args.entries.map((entry: any, idx: number) => {
+            if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new ToolError(`entries[${idx}] must be an object`);
+            onlyArguments(entry, ["id", "kind", "title", "tags", "confidence"]);
+            return {
+              ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+              ...(typeof entry.kind === "string" ? { kind: entry.kind } : {}),
+              title: entry.title,
+              ...(Array.isArray(entry.tags) ? { tags: entry.tags } : {}),
+              ...(typeof entry.confidence === "string" ? { confidence: entry.confidence } : {}),
+              ...(extracted && idx === 0 ? { patterns: extracted } : {}),
+              rights: forcedRights,
+            };
+          });
+        } else if (typeof args.title === "string" && args.title.trim() !== "") {
+          normalizedEntries = [{
+            kind: "pattern",
+            title: args.title.trim(),
+            tags: Array.isArray(args.tags) ? args.tags : ["local", "observed"],
+            confidence: "observed",
+            ...(extracted ? { patterns: extracted } : {}),
+            rights: forcedRights,
+          }];
+        } else {
+          throw new ToolError("create_pack requires entries (non-empty list) or title");
+        }
+
+        const { pack, digest } = createLocalReferencePack({ packId, entries: normalizedEntries, now });
+        const dir = projectRefsDir();
+        const target = join(dir, validName);
+        let existingStat = null;
+        try {
+          existingStat = lstatSync(target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== "ENOENT" && (error as NodeJS.ErrnoException)?.code !== "ENOTDIR") {
+            throw new ToolError(`could not inspect reference pack ${validName}`);
+          }
+        }
+        if (existingStat !== null && (existingStat.isSymbolicLink() || !existingStat.isFile())) {
+          throw new ToolError(`refusing to overwrite symlink or non-regular file ${validName}`);
+        }
+        const caseCollision = existsSync(dir) && readdirSync(dir).some((entry) => entry.toLowerCase() === validName.toLowerCase());
+        if ((existingStat !== null || caseCollision) && args.replace !== true) {
+          throw new ToolError(`reference pack ${validName} already exists (pass replace: true to overwrite)`);
+        }
+        if (dryRun) {
+          return {
+            dryRun: true,
+            action: "create_pack",
+            fileName: validName,
+            packId: pack.packId,
+            packDigest: digest,
+            objects: pack.objects.length,
+            rightsPolicy: "observed-inspiration-only",
+            ...(extracted ? { patterns: extracted } : {}),
+          } as unknown as Json;
+        }
+        const written = writeLocalReferencePack({ directory: dir, fileName: validName, pack, replace: args.replace === true });
+        const loaded = await references.load(session, isOpen, dir, validName);
+        return {
+          action: "create_pack",
+          fileName: written.fileName,
+          packId: loaded.packId,
+          packDigest: loaded.packDigest,
+          objects: loaded.objects,
+          rightsPolicy: "observed-inspiration-only",
+          ...(extracted ? { patterns: extracted } : {}),
+        } as unknown as Json;
+      }
+
+      throw new ToolError("action must be extract_patterns, list_packs, create_pack or load_pack");
+    },
+  },
 ];
 
 function requireBoundWorkspace(workspaceRoot: string | null): string {
@@ -2990,6 +3173,7 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       references: context.references,
       workspaceRoot: context.workspaceRoot?.() ?? null,
       redesignJournalDir: context.redesignJournalDir?.() ?? null,
+      isOpen: () => context.session() === session,
       edit: (operations, intent, provenance) => {
         if (operations.length === 0) throw new ToolError("nothing to change");
         if (dryRun === true) {

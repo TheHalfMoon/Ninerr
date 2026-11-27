@@ -1,8 +1,8 @@
 // Extended Ninerr CLI subcommands dispatched from bin/ninerr.mjs (`ninerr design ...`,
 // `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
 // Pure local execution, zero network.
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   NINERR_COMPONENT_CATEGORIES,
@@ -26,7 +26,8 @@ import {
   planDesignDirections,
   renderSkillMarkdown,
 } from "@ninerr/design-intelligence";
-import { openProject } from "@ninerr/persistence";
+import { compileTokens, createDocument } from "@ninerr/document-model";
+import { createProject, openProject } from "@ninerr/persistence";
 import {
   STANDARD_VIEWPORTS,
   buildCritiqueReport,
@@ -34,20 +35,23 @@ import {
   improveDesignInMemory,
   renderAndInspect,
 } from "@ninerr/vision";
-import { exportHtml } from "./code.ts";
+import { exportAstro, exportHtml, exportJsx, exportSvelte, exportTailwind, exportVue } from "./code.ts";
 import { auditDesignSystem, planRegistryItemUpdate } from "./design-system-ops.ts";
 import { resolveProjectsFolder } from "./projects-folder.ts";
 import { analyzeCodebase, applyRedesignPlan, assertNoSymlinkPath, assertWorkspaceRoot, planRedesign, rollbackRedesign } from "./redesign.ts";
+import { captureUrlReferenceMetrics, createLocalReferencePack, ensureRealDirectory, extractPatternsFromSource, listLocalReferencePacks, validatePackFileName, writeLocalReferencePack } from "./research.ts";
+import { exportDtcgTokens } from "./tokens-dtcg.ts";
 import { writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
 
 export interface CliRunOptions {
   version: string;
+  binPath?: string;
   stdout?: (text: string) => void;
   stderr?: (text: string) => void;
 }
 
-export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens", "preview", "critique", "audit", "improve", "redesign"]);
-const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient", "vision", "dry-run", "reduced-motion", "force"]);
+export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens", "preview", "critique", "audit", "improve", "redesign", "init", "connect", "export", "research"]);
+const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient", "vision", "dry-run", "reduced-motion", "force", "allow-network", "replace"]);
 const MAX_CLI_FILE_BYTES = 2 * 1024 * 1024;
 
 function readBoundedTextFile(filePath: string, commandLabel: string): string {
@@ -817,6 +821,356 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       }
 
       err(`ninerr redesign: unknown subcommand ${JSON.stringify(sub)}\n`);
+      return 2;
+    }
+
+    const requireFlagValue = (name: string): string | undefined => {
+      if (!Object.hasOwn(flags, name)) return undefined;
+      const val = flags[name];
+      if (typeof val !== "string" || val.trim() === "") {
+        throw new Error(`--${name} requires a non-empty value`);
+      }
+      return val.trim();
+    };
+
+    if (command === "init") {
+      if (flags.help === true || positionals[0] === "help") {
+        out([
+          "Ninerr Project Initialization CLI:",
+          "  ninerr init [<project-folder>] [--name <title>] [--json]",
+        ].join("\n") + "\n");
+        return 0;
+      }
+      const targetArg = positionals[0] ?? ".";
+      const resolvedTarget = resolve(targetArg);
+      if (dirname(resolvedTarget) === resolvedTarget) {
+        err("ninerr init: choose a project subfolder, not the filesystem root\n");
+        return 2;
+      }
+      const targetDir = ensureRealDirectory(resolvedTarget, "project directory");
+      const rawTitle = requireFlagValue("name") ?? (basename(targetDir) || "Ninerr Project");
+      const title = rawTitle.slice(0, 200);
+      const projectId = `proj-${randomUUID().slice(0, 12)}`;
+      const documentId = `doc-${randomUUID().slice(0, 12)}`;
+      const now = new Date().toISOString();
+      const doc = createDocument({
+        id: documentId,
+        name: title,
+        nodes: [{ id: "frame-root", type: "frame", props: { name: title, tag: "main", style: { width: "1280px", "min-height": "720px", background: "#ffffff" } } }],
+      });
+      createProject(targetDir, { projectId, document: doc, createdAt: now });
+      if (asJson) {
+        out(`${JSON.stringify({ projectDir: targetDir, projectId, documentId, title, createdAt: now }, null, 2)}\n`);
+      } else {
+        out(`Initialized Ninerr project "${title}" in ${targetDir}\n`);
+      }
+      return 0;
+    }
+
+    if (command === "connect") {
+      const target = positionals[0];
+      const CLIENTS = ["codex", "claude", "opencode", "cursor", "gemini", "all"] as const;
+      if (!target || target === "help" || flags.help === true) {
+        out([
+          "Ninerr Connect CLI (MCP client config & official skill pack installer):",
+          "  ninerr connect <codex|claude|opencode|cursor|gemini|all> [--projects <folder>] [--workspace <folder>] [--install-skills <dir>] [--json]",
+        ].join("\n") + "\n");
+        return 0;
+      }
+      if (!CLIENTS.includes(target as any)) {
+        err(`ninerr connect: unknown client ${JSON.stringify(target)} (choose ${CLIENTS.join(", ")})\n`);
+        return 2;
+      }
+      const projectsOpt = requireFlagValue("projects");
+      const { path: projectsRoot } = resolveProjectsFolder(projectsOpt);
+      const workspaceOpt = requireFlagValue("workspace");
+      const workspaceRoot = workspaceOpt !== undefined ? assertWorkspaceRoot(workspaceOpt, projectsRoot) : undefined;
+      const nodeBin = process.execPath;
+      const ninerrBin = options.binPath ? resolve(options.binPath) : realpathSync(process.argv[1]);
+      const mcpArgs = [ninerrBin, "mcp", "--projects", projectsRoot, ...(workspaceRoot ? ["--workspace", workspaceRoot] : [])];
+
+      const tomlQuote = (s: string) => JSON.stringify(s);
+      const configs: Record<string, { fileHint: string; format: "toml" | "json"; snippet: string }> = {
+        codex: {
+          fileHint: "~/.codex/config.toml",
+          format: "toml",
+          snippet: `[mcp_servers.ninerr]\ncommand = ${tomlQuote(nodeBin)}\nargs = [${mcpArgs.map(tomlQuote).join(", ")}]\n`,
+        },
+        claude: {
+          fileHint: ".mcp.json (or claude mcp add-json ninerr ...)",
+          format: "json",
+          snippet: `${JSON.stringify({ mcpServers: { ninerr: { command: nodeBin, args: mcpArgs } } }, null, 2)}\n`,
+        },
+        opencode: {
+          fileHint: "opencode.json",
+          format: "json",
+          snippet: `${JSON.stringify({ mcp: { ninerr: { type: "local", command: [nodeBin, ...mcpArgs] } } }, null, 2)}\n`,
+        },
+        cursor: {
+          fileHint: ".cursor/mcp.json",
+          format: "json",
+          snippet: `${JSON.stringify({ mcpServers: { ninerr: { command: nodeBin, args: mcpArgs } } }, null, 2)}\n`,
+        },
+        gemini: {
+          fileHint: "~/.gemini/settings.json",
+          format: "json",
+          snippet: `${JSON.stringify({ mcpServers: { ninerr: { command: nodeBin, args: mcpArgs } } }, null, 2)}\n`,
+        },
+      };
+
+      const selected = target === "all" ? Object.keys(configs) : [target];
+      const installedSkills: string[] = [];
+      const installSkillsDir = requireFlagValue("install-skills");
+      if (installSkillsDir !== undefined) {
+        const skillsRoot = ensureRealDirectory(resolve(installSkillsDir), "--install-skills directory");
+        for (const skill of listSkills()) {
+          if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(skill.id)) continue;
+          const skillDir = ensureRealDirectory(join(skillsRoot, skill.id), `skill directory ${skill.id}`);
+          const skillPath = assertNoSymlinkPath(join(skillDir, "SKILL.md"), `skill file ${skill.id}`);
+          let skillStat = null;
+          try { skillStat = lstatSync(skillPath); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (skillStat !== null && (skillStat.isSymbolicLink() || !skillStat.isFile())) {
+            throw new Error(`refusing to overwrite symlink or non-regular file ${skillPath}`);
+          }
+          writeTrustedFile(skillPath, renderSkillMarkdown(skill.id));
+          installedSkills.push(skillPath);
+        }
+      }
+
+      if (asJson) {
+        out(`${JSON.stringify({
+          projectsRoot,
+          ...(workspaceRoot ? { workspaceRoot } : {}),
+          command: nodeBin,
+          args: mcpArgs,
+          clients: Object.fromEntries(selected.map((name) => [name, configs[name]])),
+          ...(installSkillsDir !== undefined ? { installedSkillsCount: installedSkills.length, installedSkills } : {}),
+        }, null, 2)}\n`);
+      } else {
+        for (const name of selected) {
+          out(`=== ${name} (${configs[name].fileHint}) ===\n${configs[name].snippet}\n`);
+        }
+        if (installSkillsDir !== undefined) {
+          out(`Installed ${installedSkills.length} official Ninerr skills into ${resolve(installSkillsDir)}\n`);
+        }
+      }
+      return 0;
+    }
+
+    if (command === "export") {
+      if (flags.help === true || !positionals[0] || positionals[0] === "help") {
+        out([
+          "Ninerr Export CLI:",
+          "  ninerr export <project-folder> --format <html|jsx|tsx|tailwind|vue|svelte|astro|tokens-css|tokens-json> [--node <id>] [--out <file>] [--replace] [--json]",
+        ].join("\n") + "\n");
+        return 0;
+      }
+      const format = requireFlagValue("format") ?? "html";
+      const VALID_EXPORT_FORMATS = ["html", "jsx", "tsx", "tailwind", "vue", "svelte", "astro", "tokens-css", "tokens-json"];
+      if (!VALID_EXPORT_FORMATS.includes(format)) {
+        err(`ninerr export: unsupported --format ${JSON.stringify(format)} (use ${VALID_EXPORT_FORMATS.join(", ")})\n`);
+        return 2;
+      }
+      const projectDir = resolve(positionals[0]);
+      const opened = openProject(projectDir, { owner: "ninerr-cli", at: new Date().toISOString() });
+      try {
+        const doc = opened.document as any;
+        let text: string;
+        let componentName: string;
+        let layers: number;
+        if (format === "tokens-css" || format === "tokens-json") {
+          text = format === "tokens-css" ? `${compileTokens(doc).trimEnd()}\n` : exportDtcgTokens(doc);
+          if (text.trim() === "") {
+            err("ninerr export: project has no design tokens to export\n");
+            return 2;
+          }
+          componentName = "tokens";
+          layers = Object.values(doc.nodes).filter((n: any) => n?.type === "design-system").length;
+        } else {
+          const explicitNode = requireFlagValue("node");
+          const targetId = explicitNode ?? (doc.rootIds ?? []).find((id: string) => doc.nodes[id]?.type !== "design-system");
+          if (!targetId || !Object.hasOwn(doc.nodes, targetId)) {
+            err("ninerr export: no exportable root layer found in project\n");
+            return 2;
+          }
+          if (format === "html") {
+            const res = exportHtml(doc, targetId);
+            ({ componentName, layers } = res);
+            text = res.html;
+          } else if (format === "vue" || format === "svelte" || format === "astro") {
+            const res = format === "vue" ? exportVue(doc, targetId) : format === "svelte" ? exportSvelte(doc, targetId) : exportAstro(doc, targetId);
+            ({ componentName, layers } = res);
+            text = res.code;
+          } else {
+            const res = format === "tailwind" ? exportTailwind(doc, targetId) : exportJsx(doc, targetId);
+            ({ componentName, layers } = res);
+            const emitted = format === "tsx"
+              ? `import type React from "react";\n\n${res.code.replace(/^(export function [A-Za-z0-9_]+\(\)) \{/mu, "$1: React.JSX.Element {")}`
+              : res.code;
+            const css = [res.tokens, res.stylesheet].filter((p): p is string => typeof p === "string" && p !== "").join("\n");
+            text = css === "" ? emitted : `${emitted}\n\n/* Its stylesheet:\n${css.replace(/\*\//gu, "* /")}\n*/\n`;
+          }
+        }
+
+        const outOpt = requireFlagValue("out");
+        if (outOpt !== undefined) {
+          const target = assertNoSymlinkPath(resolve(outOpt), "--out path");
+          let existing = null;
+          try { existing = lstatSync(target); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (existing !== null) {
+            if (existing.isSymbolicLink() || !existing.isFile()) {
+              throw new Error(`--out ${JSON.stringify(outOpt)} must be a regular non-symlink file`);
+            }
+            if (flags.replace !== true) {
+              err(`ninerr export: ${target} already exists (pass --replace to overwrite)\n`);
+              return 2;
+            }
+          }
+          ensureRealDirectory(dirname(target), "--out parent directory");
+          writeTrustedFile(target, text);
+          if (asJson) {
+            out(`${JSON.stringify({ path: target, format, componentName, layers, bytes: Buffer.byteLength(text, "utf8") }, null, 2)}\n`);
+          } else {
+            out(`Exported ${format} (${Buffer.byteLength(text, "utf8")} bytes) to ${target}\n`);
+          }
+          return 0;
+        }
+        if (asJson) {
+          out(`${JSON.stringify({ format, componentName, layers, bytes: Buffer.byteLength(text, "utf8"), code: text }, null, 2)}\n`);
+        } else {
+          out(text);
+        }
+        return 0;
+      } finally {
+        opened.close();
+      }
+    }
+
+    if (command === "research") {
+      const sub = positionals[0];
+      if (!sub || sub === "help" || flags.help === true) {
+        out([
+          "Ninerr Research CLI (offline-first rights-aware reference packs):",
+          "  ninerr research list <dir> [--json]",
+          "  ninerr research extract [--html <file>] [--css <file>] [--json]",
+          "  ninerr research create <dir> --name <pack.json> --title <title> [--html <file>] [--css <file>] [--tags <a,b>] [--replace] [--json]",
+          "  ninerr research capture <https-url> --allow-network --out-dir <dir> --name <pack.json> [--title <title>] [--tags <a,b>] [--replace] [--json]",
+        ].join("\n") + "\n");
+        return 0;
+      }
+
+      if (sub === "list") {
+        const dirArg = positionals[1];
+        if (!dirArg) {
+          err("ninerr research list: directory path is required\n");
+          return 2;
+        }
+        const packs = listLocalReferencePacks(resolve(dirArg));
+        if (asJson) out(`${JSON.stringify({ directory: resolve(dirArg), packs }, null, 2)}\n`);
+        else {
+          if (packs.length === 0) out("No local reference packs found.\n");
+          for (const p of packs) out(`${p}\n`);
+        }
+        return 0;
+      }
+
+      if (sub === "extract") {
+        const htmlPath = requireFlagValue("html");
+        const cssPath = requireFlagValue("css");
+        if (htmlPath === undefined && cssPath === undefined) {
+          err("ninerr research extract: provide --html <file> and/or --css <file>\n");
+          return 2;
+        }
+        const html = htmlPath !== undefined ? readBoundedTextFile(resolve(htmlPath), "ninerr research extract --html") : "";
+        const css = cssPath !== undefined ? readBoundedTextFile(resolve(cssPath), "ninerr research extract --css") : "";
+        const patterns = extractPatternsFromSource({ html, css });
+        if (asJson) {
+          out(`${JSON.stringify(patterns, null, 2)}\n`);
+        } else {
+          out(`Policy: ${patterns.rightsPolicy}\n`);
+          out(`Colors: ${patterns.colors.slice(0, 8).map((c) => c.value).join(", ") || "none"}\n`);
+          out(`Custom properties: ${patterns.customProperties.count}\n`);
+          out(`Layout: grid=${patterns.layout.usesGrid}, flex=${patterns.layout.usesFlex}, media=${patterns.layout.mediaQueries}\n`);
+        }
+        return 0;
+      }
+
+      if (sub === "create") {
+        const dirArg = positionals[1];
+        const fileName = requireFlagValue("name");
+        const title = requireFlagValue("title");
+        if (!dirArg || fileName === undefined || title === undefined) {
+          err("ninerr research create: <dir>, --name <pack.json>, and --title <title> are required\n");
+          return 2;
+        }
+        const htmlPath = requireFlagValue("html");
+        const cssPath = requireFlagValue("css");
+        const html = htmlPath !== undefined ? readBoundedTextFile(resolve(htmlPath), "ninerr research create --html") : "";
+        const css = cssPath !== undefined ? readBoundedTextFile(resolve(cssPath), "ninerr research create --css") : "";
+        const patterns = html !== "" || css !== "" ? extractPatternsFromSource({ html, css }) : undefined;
+        const tagsOpt = requireFlagValue("tags");
+        const tags = tagsOpt !== undefined ? tagsOpt.split(",").map((t) => t.trim()).filter(Boolean) : ["local", "observed"];
+        const { pack } = createLocalReferencePack({
+          packId: fileName.replace(/\.json$/u, ""),
+          entries: [{ kind: "pattern", title, tags, confidence: "observed", ...(patterns ? { patterns } : {}) }],
+        });
+        const written = writeLocalReferencePack({ directory: resolve(dirArg), fileName, pack, replace: flags.replace === true });
+        if (asJson) {
+          out(`${JSON.stringify({ ...written, rightsPolicy: "observed-inspiration-only", ...(patterns ? { patterns } : {}) }, null, 2)}\n`);
+        } else {
+          out(`Created observed-inspiration-only reference pack ${written.path} (${written.objects} entry, digest ${written.packDigest.slice(0, 12)})\n`);
+        }
+        return 0;
+      }
+
+      if (sub === "capture") {
+        const urlArg = positionals[1];
+        const outDir = requireFlagValue("out-dir");
+        const fileName = requireFlagValue("name");
+        if (!urlArg || outDir === undefined || fileName === undefined) {
+          err("ninerr research capture: <https-url>, --out-dir <dir>, and --name <pack.json> are required\n");
+          return 2;
+        }
+        // Validate pack filename, directory symlink safety, and overwrite policy BEFORE making any network call.
+        const validName = validatePackFileName(fileName);
+        const safeOutDir = assertNoSymlinkPath(resolve(outDir), "--out-dir directory");
+        let dirStat = null;
+        try { dirStat = lstatSync(safeOutDir); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+        if (dirStat !== null) {
+          if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+            throw new Error("--out-dir must be a regular non-symlink directory");
+          }
+          const target = join(safeOutDir, validName);
+          let fileStat = null;
+          try { fileStat = lstatSync(target); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (fileStat !== null && (fileStat.isSymbolicLink() || !fileStat.isFile())) {
+            throw new Error(`refusing to overwrite symlink or non-regular file ${validName}`);
+          }
+          const collision = readdirSync(safeOutDir).some((entry) => entry.toLowerCase() === validName.toLowerCase());
+          if ((fileStat !== null || collision) && flags.replace !== true) {
+            err(`ninerr research capture: ${validName} already exists in ${safeOutDir} (pass --replace to overwrite)\n`);
+            return 2;
+          }
+        }
+        const title = requireFlagValue("title");
+        const tagsOpt = requireFlagValue("tags");
+        const tags = tagsOpt !== undefined ? tagsOpt.split(",").map((t) => t.trim()).filter(Boolean) : ["captured", "web"];
+        const captured = await captureUrlReferenceMetrics({
+          url: urlArg,
+          allowNetwork: flags["allow-network"] === true,
+          ...(title ? { title } : {}),
+          tags,
+        });
+        const written = writeLocalReferencePack({ directory: safeOutDir, fileName: validName, pack: captured.pack, replace: flags.replace === true });
+        if (asJson) {
+          out(`${JSON.stringify({ ...written, sourceUri: captured.sourceUri, rightsPolicy: "observed-inspiration-only", patterns: captured.patterns }, null, 2)}\n`);
+        } else {
+          out(`Captured public design metrics from ${captured.sourceUri} -> ${written.path} (observed-inspiration-only)\n`);
+        }
+        return 0;
+      }
+
+      err(`ninerr research: unknown subcommand ${JSON.stringify(sub)}\n`);
       return 2;
     }
 
