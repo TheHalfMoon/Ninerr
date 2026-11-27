@@ -8,9 +8,21 @@ export const V2_NODE_TYPES = Object.freeze(["design-system", "component-definiti
 const V2_TYPE_SET = new Set(V2_NODE_TYPES);
 
 export const TOKEN_TYPES = Object.freeze([
-  "color", "spacing", "radius", "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "opacity", "shadow", "breakpoint",
+  "color", "spacing", "radius", "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "opacity", "shadow", "breakpoint", "duration", "easing",
 ]);
 const TOKEN_TYPE_SET = new Set(TOKEN_TYPES);
+export const BRIEF_DENSITIES = Object.freeze(["compact", "balanced", "spacious"]);
+const BRIEF_DENSITY_SET = new Set(BRIEF_DENSITIES);
+export const BRIEF_THEMES = Object.freeze(["light", "dark", "system"]);
+const BRIEF_THEME_SET = new Set(BRIEF_THEMES);
+export const MOTION_REDUCED_POLICIES = Object.freeze(["respect", "minimal", "none"]);
+const MOTION_REDUCED_SET = new Set(MOTION_REDUCED_POLICIES);
+const BRIEF_KEYS = new Set(["productName", "domain", "audience", "brandTone", "density", "themePreference", "aestheticDirection", "constraints", "allowExpressiveMotion", "allowEditorialGradients", "notes"]);
+const BREAKPOINT_KEYS = new Set(["id", "name", "minWidth", "maxWidth"]);
+const MOTION_KEYS = new Set(["reducedMotion", "defaultDuration", "defaultEasing", "allowAmbient", "presets"]);
+const MOTION_PRESET_KEYS = new Set(["id", "trigger", "duration", "easing", "properties", "maxFrequency"]);
+const DOMAIN_ID = /^[a-z][a-z0-9-]{0,63}$/u;
+const CSS_PROP_NAME = /^[a-z-]{1,48}$/u;
 export const PROPERTY_KINDS = Object.freeze(["boolean", "text", "variant", "instance-swap", "slot"]);
 const PROPERTY_KIND_SET = new Set(PROPERTY_KINDS);
 export const PROPERTY_FIELDS = Object.freeze(["visible", "text", "attributes.class", "style", "children"]);
@@ -240,6 +252,114 @@ export function designSystemProblem(props) {
     if (state.get(name) === undefined) {
       const problem = visit(name, []);
       if (problem) return problem;
+    }
+  }
+  if (props.brief !== undefined) {
+    const problem = briefProblem(props.brief);
+    if (problem) return problem;
+  }
+  if (props.breakpoints !== undefined) {
+    const problem = breakpointsProblem(props.breakpoints);
+    if (problem) return problem;
+  }
+  if (props.motion !== undefined) {
+    const problem = motionProblem(props.motion);
+    if (problem) return problem;
+  }
+  return null;
+}
+
+const trimmedText = (value, max = SCHEMA_V2_LIMITS.textLength) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
+
+/** Why a design-system brief is invalid, or null. */
+export function briefProblem(brief) {
+  if (!isRecord(brief)) return "brief must be an object";
+  for (const key of Object.keys(brief)) {
+    if (!BRIEF_KEYS.has(key)) return `brief has unsupported field ${shown(key)}`;
+  }
+  if (!trimmedText(brief.productName, 160)) return "brief.productName must be a non-empty string up to 160 characters";
+  if (typeof brief.domain !== "string" || !DOMAIN_ID.test(brief.domain)) return "brief.domain must be lowercase kebab-case";
+  if (brief.audience !== undefined && !trimmedText(brief.audience, 400)) return "brief.audience must be a non-empty string up to 400 characters";
+  if (brief.brandTone !== undefined) {
+    if (!Array.isArray(brief.brandTone) || brief.brandTone.length > 12 || brief.brandTone.some((item) => !trimmedText(item, 48))) {
+      return "brief.brandTone must be an array of up to 12 non-empty strings";
+    }
+  }
+  if (brief.density !== undefined && !BRIEF_DENSITY_SET.has(brief.density)) return "brief.density must be compact, balanced, or spacious";
+  if (brief.themePreference !== undefined && !BRIEF_THEME_SET.has(brief.themePreference)) return "brief.themePreference must be light, dark, or system";
+  if (brief.aestheticDirection !== undefined && !trimmedText(brief.aestheticDirection, 120)) return "brief.aestheticDirection must be a non-empty string up to 120 characters";
+  if (brief.constraints !== undefined) {
+    if (!Array.isArray(brief.constraints) || brief.constraints.length > 24 || brief.constraints.some((item) => !trimmedText(item, 240))) {
+      return "brief.constraints must be an array of up to 24 non-empty strings";
+    }
+  }
+  if (brief.allowExpressiveMotion !== undefined && typeof brief.allowExpressiveMotion !== "boolean") return "brief.allowExpressiveMotion must be a boolean";
+  if (brief.allowEditorialGradients !== undefined && typeof brief.allowEditorialGradients !== "boolean") return "brief.allowEditorialGradients must be a boolean";
+  if (brief.notes !== undefined && (typeof brief.notes !== "string" || brief.notes.length > 1_000)) return "brief.notes must be a string up to 1000 characters";
+  return null;
+}
+
+/** Why a design-system breakpoints array is invalid, or null. */
+export function breakpointsProblem(breakpoints) {
+  if (!Array.isArray(breakpoints) || breakpoints.length === 0 || breakpoints.length > 12) return "breakpoints must have 1 to 12 entries";
+  const ids = new Set();
+  for (const entry of breakpoints) {
+    if (!isRecord(entry)) return "each breakpoint must be an object";
+    for (const key of Object.keys(entry)) {
+      if (!BREAKPOINT_KEYS.has(key)) return `breakpoint has unsupported field ${shown(key)}`;
+    }
+    if (typeof entry.id !== "string" || !MODE_ID.test(entry.id)) return "each breakpoint needs an id of letters, digits and . _ -";
+    if (entry.id in Object.prototype) return `${shown(entry.id)} is a name a breakpoint cannot have`;
+    if (ids.has(entry.id)) return `breakpoint ${shown(entry.id)} is listed twice`;
+    if (!trimmedText(entry.name, 80)) return `breakpoint ${shown(entry.id)} needs a name`;
+    const hasMin = entry.minWidth !== undefined;
+    const hasMax = entry.maxWidth !== undefined;
+    if (!hasMin && !hasMax) return `breakpoint ${shown(entry.id)} needs minWidth or maxWidth`;
+    if (hasMin && (!Number.isInteger(entry.minWidth) || entry.minWidth < 0 || entry.minWidth > 10_000)) return `breakpoint ${shown(entry.id)} minWidth must be an integer 0..10000`;
+    if (hasMax && (!Number.isInteger(entry.maxWidth) || entry.maxWidth < 0 || entry.maxWidth > 10_000)) return `breakpoint ${shown(entry.id)} maxWidth must be an integer 0..10000`;
+    if (hasMin && hasMax && entry.minWidth > entry.maxWidth) return `breakpoint ${shown(entry.id)} minWidth exceeds maxWidth`;
+    ids.add(entry.id);
+  }
+  return null;
+}
+
+/** Why a design-system motion configuration is invalid, or null. */
+export function motionProblem(motion) {
+  if (!isRecord(motion)) return "motion must be an object";
+  for (const key of Object.keys(motion)) {
+    if (!MOTION_KEYS.has(key)) return `motion has unsupported field ${shown(key)}`;
+  }
+  if (!MOTION_REDUCED_SET.has(motion.reducedMotion)) return "motion.reducedMotion must be respect, minimal, or none";
+  if (motion.defaultDuration !== undefined) {
+    const problem = cssValueProblem(motion.defaultDuration);
+    if (problem) return `motion.defaultDuration is invalid: ${problem}`;
+  }
+  if (motion.defaultEasing !== undefined) {
+    const problem = cssValueProblem(motion.defaultEasing);
+    if (problem) return `motion.defaultEasing is invalid: ${problem}`;
+  }
+  if (motion.allowAmbient !== undefined && typeof motion.allowAmbient !== "boolean") return "motion.allowAmbient must be a boolean";
+  if (motion.presets !== undefined) {
+    if (!Array.isArray(motion.presets) || motion.presets.length > 64) return "motion.presets may hold at most 64 presets";
+    const ids = new Set();
+    for (const preset of motion.presets) {
+      if (!isRecord(preset)) return "each motion preset must be an object";
+      for (const key of Object.keys(preset)) {
+        if (!MOTION_PRESET_KEYS.has(key)) return `motion preset has unsupported field ${shown(key)}`;
+      }
+      if (typeof preset.id !== "string" || !MODE_ID.test(preset.id)) return "each motion preset needs an id of letters, digits and . _ -";
+      if (preset.id in Object.prototype) return `${shown(preset.id)} is a name a motion preset cannot have`;
+      if (ids.has(preset.id)) return `motion preset ${shown(preset.id)} is listed twice`;
+      if (!trimmedText(preset.trigger, 64)) return `motion preset ${shown(preset.id)} needs a trigger`;
+      const durProblem = cssValueProblem(preset.duration);
+      if (durProblem) return `motion preset ${shown(preset.id)} duration is invalid: ${durProblem}`;
+      const easeProblem = cssValueProblem(preset.easing);
+      if (easeProblem) return `motion preset ${shown(preset.id)} easing is invalid: ${easeProblem}`;
+      if (!Array.isArray(preset.properties) || preset.properties.length === 0 || preset.properties.length > 16 || preset.properties.some((prop) => typeof prop !== "string" || !CSS_PROP_NAME.test(prop))) {
+        return `motion preset ${shown(preset.id)} needs 1 to 16 CSS property names`;
+      }
+      if (preset.maxFrequency !== undefined && !trimmedText(preset.maxFrequency, 48)) return `motion preset ${shown(preset.id)} maxFrequency must be a bounded string`;
+      ids.add(preset.id);
     }
   }
   return null;

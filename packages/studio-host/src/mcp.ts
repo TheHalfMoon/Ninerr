@@ -2,12 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
-import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
+import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, briefProblem, compileTokens, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
 import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride, setLayout } from "@ninerr/canvas";
 import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
-import { exportHtml, exportJsx, exportTailwind } from "./code.ts";
+import { ARCHETYPE_IDS, DOMAIN_ARCHETYPES, MOTION_PRESETS, MOTION_PRESET_IDS, MOTION_TOKENS, compileMotionReact, compileMotionStylesheet, evaluateMotionFrequency, evaluateTaste, getDomainArchetype, getSkill, lintMotionCss, listSkills, planDesignDirections, renderSkillMarkdown } from "@ninerr/design-intelligence";
+import { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
+import { ImportDesk } from "./imports.ts";
+import { planTokenCss } from "./token-import.ts";
+import { exportDtcgTokens, planDtcgTokens } from "./tokens-dtcg.ts";
 import { writeTrustedFile } from "./trusted-file.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
@@ -59,9 +63,10 @@ interface ToolContext {
   session: StudioSession;
   actor: StudioActor;
   toolName: string;
+  now: () => string;
   selection: () => string[];
   references: ReferenceCatalog;
-  edit: (operations: unknown[], intent: string) => Json;
+  edit: (operations: unknown[], intent: string, provenance?: Record<string, unknown>) => Json;
   /** The call is a dry run: a tool that does not change the document through `edit` must not act. */
   dryRun: boolean;
 }
@@ -90,6 +95,7 @@ const SELECTOR_SMUGGLING = /(?<![\p{Extended_Pictographic}0-9#*])[\u{fe0e}\u{fe0
 // (checked when the module loads), so a new tool cannot take a label unchecked.
 const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   create_frame: ["name"],
+  create_layers: ["nodes[].name"],
   rename_layers: ["renames[].name"],
   create_component: ["name"],
   add_component_property: ["name", "options[]", "default"],
@@ -98,6 +104,7 @@ const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   rename_token: ["to"],
   delete_token: ["name", "replacement.token"],
   set_layer_modes: ["collection"],
+  import_source: ["name", "stylesheets[].name"],
   export_design: ["name"],
 });
 const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
@@ -196,7 +203,9 @@ const strings = (value: unknown, label: string): string[] => {
 };
 
 // What export_design writes: a file per format, in the project's own exports folder.
-const EXPORT_FORMATS = Object.freeze({ html: "html", jsx: "jsx", tailwind: "jsx" });
+const EXPORT_FORMATS = Object.freeze({ html: "html", jsx: "jsx", tsx: "tsx", tailwind: "jsx", "tokens-css": "css", "tokens-json": "json" });
+const LAYER_TYPES = Object.freeze(["frame", "group", "element", "text", "vector", "image"]);
+const MAX_CREATE_LAYERS = 500;
 const EXPORT_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u;
 const MAX_HISTORY = 200;
 
@@ -364,16 +373,17 @@ const TOOLS: Tool[] = [
         "A Ninerr document is a tree of layers. Each layer has an id, a type (frame, element, text, ...) and props: tag (an HTML element), text, name (the layer name), attributes and style (CSS properties).",
         "Every edit you make is one history transaction attributed to you; the person sees it live on the canvas and can undo it.",
         "Read with project_info, layer_tree, layer_children, layer_details, find_layers and selection; layer_code gives a layer as JSX.",
-        "Edit with create_frame, set_text, rename_layers, set_styles, set_attributes (classes, dir for right-to-left text, aria-*), set_layout (children in a row or column), move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
+        "Edit with create_frame, create_layers (add one or a nested tree of HTML or SVG layers in one change), set_text, rename_layers, set_styles, set_attributes (classes, dir for right-to-left text, aria-*), set_layout (children in a row or column), move_layers and duplicate_layers. delete_layers needs the person to approve it in Ninerr.",
         "Design tokens: read them with design_tokens; set_token, add_token_mode, rename_token and set_layer_modes change them, and a layer uses one as var(--name) in set_styles. delete_token needs the person's approval, and a token in use needs its replacement.",
         "Components: list_components lists them; create_component makes a layer a component, add_component_property gives it properties, insert_instance places instances, set_instance_values and set_instance_override change one instance (instance_layers gives the paths), and reset_instance takes its overrides off. detach_instance writes an instance, overrides and all, as real layers that no longer follow the component. An instance's layers are its component's: change the component itself to change every instance.",
         "The person takes back an agent's changes latest first: each new change goes on top of the ones before.",
-        "project_history lists the latest changes and who made them; undo_change and redo_change undo and redo your own latest change. export_design writes a layer into the project's exports folder as html (a complete, script-free preview page), jsx or tailwind, and returns the file's path for the person.",
+        "project_history lists the latest changes and who made them; undo_change and redo_change undo and redo your own latest change. import_source brings sanitized HTML, JSX, CSS custom properties or W3C design token JSON into the project in one change. export_design writes a layer or the design tokens into the project's exports folder as html (a complete, script-free preview page), jsx, tsx, tailwind, tokens-css or tokens-json, and returns the file's path for the person.",
         "Every tool that changes the document takes dryRun: true, which checks the change and says what it would touch (wouldChange) without making it or asking the person anything (a created layer's id there is not the one a real call makes), and baseRevision, the revision you read (project_info gives it): a change to a document that has moved on since is refused, so read it again.",
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
         "Library components: search_components finds components of the component sources Ninerr has records of (Meta Astryx, pinned) by name or purpose; get_component gives one's exact props, variants, accessibility criteria, limitations, import path and provenance. Use only props a record lists. They change nothing and fetch nothing.",
+        "Design intelligence: design_intelligence reads domain archetypes, plans multi-direction aesthetic tokens, runs brief-aware taste critique, inspects motion presets, checks motion frequency or CSS linting, and lists or renders official Ninerr skills. set_design_brief stores the structured product brief on the design system (optionally seeding a planned direction's tokens), and apply_motion attaches reduced-motion-safe keyframes and transitions to a layer stylesheet along with motion tokens.",
       ].join("\n"),
     }),
   },
@@ -399,6 +409,151 @@ const TOOLS: Tool[] = [
       const props: Record<string, unknown> = { tag: "main", style: { position: "relative", width: size(args.width, "width"), height: size(args.height, "height"), background: "#ffffff" } };
       if (typeof args.name === "string" && args.name.trim() !== "") props.name = args.name.trim().slice(0, 200);
       return { nodeId: id, ...(edit([{ type: "insert-node", node: { id, type: "frame", props }, parentId: null, index: document.rootIds.length }], "Create frame") as object) };
+    },
+  },
+  {
+    name: "create_layers",
+    title: "Create layers",
+    description: "Create one or up to 500 HTML or SVG layers in one atomic change. Set parentId to an existing layer id, null for a top-level layer, or an earlier entry's tempId in the same list to build a nested tree in one call.",
+    inputSchema: object({
+      nodes: {
+        type: "array",
+        minItems: 1,
+        maxItems: MAX_CREATE_LAYERS,
+        items: object({
+          tempId: { type: "string", minLength: 1, maxLength: 64 },
+          parentId: { type: ["string", "null"], maxLength: 128 },
+          index: { type: "integer", minimum: 0 },
+          type: { type: "string", enum: [...LAYER_TYPES] },
+          tag: { type: "string", maxLength: 40 },
+          name: { type: "string", maxLength: 200 },
+          text: { type: "string", maxLength: 100000 },
+          attributes: { type: "object", additionalProperties: { type: "string", maxLength: 2000 }, maxProperties: 64 },
+          style: { type: "object", additionalProperties: { type: "string", maxLength: 2000 }, maxProperties: 200 },
+        }),
+      },
+    }, ["nodes"]),
+    run: ({ session, edit }, args) => {
+      if (!Array.isArray(args.nodes) || args.nodes.length === 0 || args.nodes.length > MAX_CREATE_LAYERS) {
+        throw new ToolError(`nodes must be a list of 1-${MAX_CREATE_LAYERS} layer definitions`);
+      }
+      const document = session.document as any;
+      const tempMap = new Map<string, string>();
+      const childCounts = new Map<string | null, number>();
+      const countFor = (parentId: string | null) => {
+        if (childCounts.has(parentId)) return childCounts.get(parentId)!;
+        const base = parentId === null ? document.rootIds.length : (document.nodes[parentId]?.children?.length ?? 0);
+        childCounts.set(parentId, base);
+        return base;
+      };
+      const operations: unknown[] = [];
+      const created: Array<{ tempId: string | null; nodeId: string }> = [];
+      for (let i = 0; i < args.nodes.length; i += 1) {
+        const entry = args.nodes[i];
+        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new ToolError(`nodes[${i}] must be an object`);
+        const type = entry.type === undefined ? (entry.text !== undefined && entry.tag === undefined ? "text" : "element") : entry.type;
+        if (typeof type !== "string" || !LAYER_TYPES.includes(type as any)) throw new ToolError(`nodes[${i}].type must be one of ${LAYER_TYPES.join(", ")}`);
+        let parentId: string | null = null;
+        if (entry.parentId !== undefined && entry.parentId !== null) {
+          if (typeof entry.parentId !== "string") throw new ToolError(`nodes[${i}].parentId must be a node id, a tempId, or null`);
+          if (tempMap.has(entry.parentId)) {
+            parentId = tempMap.get(entry.parentId)!;
+          } else {
+            const existing = nodeOf(session, entry.parentId);
+            if (existing.type === "component-instance" || existing.type === "design-system" || isCodePart(existing)) {
+              throw new ToolError(`cannot insert layers inside ${isCodePart(existing) ? "code expression" : existing.type} ${existing.id}`);
+            }
+            parentId = existing.id;
+          }
+        }
+        const props: Record<string, unknown> = {};
+        if (entry.name !== undefined) {
+          if (typeof entry.name !== "string") throw new ToolError(`nodes[${i}].name must be a string`);
+          const trimmed = entry.name.trim().slice(0, 200);
+          if (trimmed !== "") props.name = trimmed;
+        }
+        if (entry.tag !== undefined) {
+          if (typeof entry.tag !== "string" || !/^[a-z][a-z0-9-]{0,39}$/iu.test(entry.tag)) {
+            throw new ToolError(`nodes[${i}].tag ${JSON.stringify(String(entry.tag)).slice(0, 40)} is not a valid HTML or SVG tag`);
+          }
+          const lowered = entry.tag.toLowerCase();
+          // Confirm the renderer allowlists this exact tag rather than silently falling back.
+          const planned = planElement({ id: "check", type, props: { tag: lowered } });
+          if (planned.tag.toLowerCase() !== lowered) {
+            throw new ToolError(`nodes[${i}].tag ${JSON.stringify(entry.tag)} is not an allowlisted HTML or SVG tag`);
+          }
+          props.tag = lowered;
+        }
+        if (entry.text !== undefined) {
+          if (typeof entry.text !== "string" || entry.text.length > 100_000) throw new ToolError(`nodes[${i}].text must be a string of at most 100000 characters`);
+          props.text = entry.text;
+        }
+        if (entry.style !== undefined) {
+          if (entry.style === null || typeof entry.style !== "object" || Array.isArray(entry.style)) throw new ToolError(`nodes[${i}].style must be an object`);
+          const styleEntries = Object.entries(entry.style);
+          if (styleEntries.length > 200) throw new ToolError(`nodes[${i}].style may have at most 200 properties`);
+          const style: Record<string, string> = {};
+          for (const [property, value] of styleEntries) {
+            if (typeof value !== "string" || value.length > 2_000) throw new ToolError(`nodes[${i}].style.${property.slice(0, 64)} must be a string of at most 2000 characters`);
+            const problem = styleDeclarationProblem(property, value);
+            if (problem !== null) throw new ToolError(`nodes[${i}].style: ${problem}`);
+            style[property] = value;
+          }
+          props.style = style;
+        }
+        if (entry.attributes !== undefined) {
+          if (entry.attributes === null || typeof entry.attributes !== "object" || Array.isArray(entry.attributes)) throw new ToolError(`nodes[${i}].attributes must be an object`);
+          const attrEntries = Object.entries(entry.attributes);
+          if (attrEntries.length > 64) throw new ToolError(`nodes[${i}].attributes may have at most 64 properties`);
+          const attributes: Record<string, string> = {};
+          const element = { id: "check", type, props: props.tag === undefined ? {} : { tag: props.tag } };
+          const baseline = planElement(element).dropped;
+          for (const [rawAttr, attrValue] of attrEntries) {
+            const lowerAttr = rawAttr.toLowerCase();
+            if (!/^[a-z][a-z0-9-]{0,63}$/u.test(lowerAttr)) {
+              throw new ToolError(`nodes[${i}].attributes: ${JSON.stringify(rawAttr).slice(0, 80)} is not an attribute name`);
+            }
+            if (typeof attrValue !== "string" || attrValue.length > 2_000) {
+              throw new ToolError(`nodes[${i}].attributes.${lowerAttr} must be a string of at most 2000 characters`);
+            }
+            const written = lowerAttr === "class" ? [...new Set(attrValue.split(/[\t\n\f\r ]+/u).filter((part) => part !== ""))].join(" ") : attrValue;
+            if (lowerAttr === "dir" && !["ltr", "rtl", "auto"].includes(written)) {
+              throw new ToolError(`nodes[${i}].attributes.dir must be "ltr", "rtl" or "auto"`);
+            }
+            const plan = planElement({ ...element, props: { ...element.props, attributes: { [rawAttr]: written } } });
+            if (plan.dropped > baseline) {
+              throw new ToolError(`nodes[${i}].attributes: ${lowerAttr} is not an attribute the canvas draws on this ${typeof props.tag === "string" ? `<${props.tag}>` : type}`);
+            }
+            const existingKey = Object.keys(attributes).find((key) => key.toLowerCase() === lowerAttr);
+            if (existingKey !== undefined) delete attributes[existingKey];
+            const drawn = Object.values(plan.attributes as Record<string, string>)[0] ?? written;
+            if (!(drawn === "" && lowerAttr === "class")) attributes[rawAttr] = drawn;
+          }
+          if (Object.keys(attributes).length > 0) props.attributes = attributes;
+        }
+        const id = `${type === "frame" ? "frame" : "layer"}-${randomUUID().slice(0, 12)}`;
+        let tempId: string | null = null;
+        if (entry.tempId !== undefined) {
+          if (typeof entry.tempId !== "string" || entry.tempId.trim() === "" || entry.tempId.length > 64) throw new ToolError(`nodes[${i}].tempId must be 1-64 characters`);
+          if (tempMap.has(entry.tempId)) throw new ToolError(`duplicate tempId ${JSON.stringify(entry.tempId)}`);
+          tempId = entry.tempId;
+          tempMap.set(tempId, id);
+        }
+        const currentCount = countFor(parentId);
+        const index = entry.index === undefined ? currentCount : entry.index;
+        if (!Number.isInteger(index) || index < 0 || index > currentCount) {
+          throw new ToolError(`nodes[${i}].index must be between 0 and ${currentCount}`);
+        }
+        childCounts.set(parentId, currentCount + 1);
+        childCounts.set(id, 0);
+        operations.push({ type: "insert-node", node: { id, type, props }, parentId, index });
+        created.push({ tempId, nodeId: id });
+      }
+      return {
+        created,
+        nodeIds: created.map((item) => item.nodeId),
+        ...(edit(operations, created.length === 1 ? "Create layer" : `Create ${created.length} layers`) as object),
+      };
     },
   },
   {
@@ -940,28 +1095,118 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "import_source",
+    title: "Import markup, code or tokens",
+    description: "Import sanitized HTML (with optional CSS stylesheets), JSX/TSX, CSS custom-property tokens or W3C DTCG token JSON into the open project in one undoable change. Nothing is fetched from the network.",
+    inputSchema: object({
+      format: { type: "string", enum: ["html", "jsx", "tokens-css", "tokens-json"] },
+      source: { type: "string", minLength: 1, maxLength: 2_000_000 },
+      name: { type: "string", maxLength: 120 },
+      component: { type: "string", maxLength: 128 },
+      stylesheets: {
+        type: "array",
+        maxItems: 64,
+        items: object({ name: { type: "string", minLength: 1, maxLength: 255 }, css: { type: "string", maxLength: 2_000_000 } }, ["name", "css"]),
+      },
+    }, ["format", "source"]),
+    run: ({ session, actor, now, edit }, args) => {
+      if (args.format === "html") {
+        const desk = new ImportDesk();
+        const summaryReport = desk.prepare({ html: args.source, name: args.name ?? "Imported page", stylesheets: args.stylesheets }, actor.actorId, now());
+        if (!summaryReport.commitReady) {
+          throw new ToolError(`HTML import refused: ${summaryReport.blockingReasons.join("; ")}`);
+        }
+        const change = desk.change(summaryReport.proposalId, session.document);
+        return {
+          format: "html",
+          frameId: change.frameId,
+          layers: summaryReport.counts.nodes,
+          accessibilityFindings: summaryReport.accessibilityFindings,
+          security: summaryReport.security,
+          notes: summaryReport.notes,
+          ...(edit(change.operations, change.intent, change.provenance) as object),
+        };
+      }
+      if (args.format === "jsx") {
+        const imported = importJsx(args.source, { ...(typeof args.component === "string" && args.component !== "" ? { component: args.component } : {}) });
+        const intent = typeof args.name === "string" && args.name.trim() !== "" ? `Import ${args.name.trim().slice(0, 120)}` : `Import ${imported.componentName}`;
+        return {
+          format: "jsx",
+          frameId: imported.frameId,
+          componentName: imported.componentName,
+          layers: imported.layers,
+          layersWithStyleLeftOut: imported.layersWithStyleLeftOut,
+          layersWithStyleOutOfOrder: imported.layersWithStyleOutOfOrder,
+          ...(edit(imported.operations, intent) as object),
+        };
+      }
+      if (args.format === "tokens-css" || args.format === "tokens-json") {
+        const planned = args.format === "tokens-css"
+          ? planTokenCss(session.document, { css: args.source, fileName: args.name })
+          : planDtcgTokens(session.document, args.source, typeof args.name === "string" ? args.name : undefined);
+        if (planned.plan.problem !== null) throw new ToolError(`tokens refused: ${planned.plan.problem}`);
+        const refused = planned.plan.tokens
+          .filter((token: any) => token.status === "refused")
+          .map((token: any) => ({ name: token.name, reason: token.reason ?? "refused" }));
+        const conflicts = planned.plan.tokens
+          .filter((token: any) => token.status === "conflict")
+          .map((token: any) => ({ name: token.name, reason: token.reason ?? "conflict" }));
+        if (planned.operations.length === 0) {
+          return { format: args.format, adds: 0, skipped: planned.plan.skipped, kept: planned.plan.kept, refused, conflicts, revision: session.revision };
+        }
+        const from = planned.plan.fileName ?? (args.format === "tokens-css" ? "CSS" : "DTCG JSON");
+        return {
+          format: args.format,
+          adds: planned.plan.adds,
+          skipped: planned.plan.skipped,
+          kept: planned.plan.kept,
+          refused,
+          conflicts,
+          ...(edit(planned.operations, `Import ${planned.plan.adds} token${planned.plan.adds === 1 ? "" : "s"} from ${from}`) as object),
+        };
+      }
+      throw new ToolError("format must be html, jsx, tokens-css or tokens-json");
+    },
+  },
+  {
     name: "export_design",
     title: "Export a design",
-    description: "Write a layer as code or a preview into the project's exports folder, and return the file's path: html is a complete, script-free page to open in any browser (a preview); jsx is a React component; tailwind is a React component styled with Tailwind classes. The design itself does not change.",
-    inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: Object.keys(EXPORT_FORMATS) }, name: { type: "string", maxLength: 64, description: "The file's name without extension: letters, digits, - and _. Defaults to the layer's component name." }, replace: { type: "boolean", description: "Replace a file of that name already in exports (it may have been edited since). Without it, an existing file is refused." } }, ["nodeId", "format"]),
+    description: "Write a layer or design tokens into the project's exports folder, and return the file's path: html is a complete, script-free preview page; jsx and tsx are React components; tailwind is a React component styled with Tailwind classes; tokens-css and tokens-json export the design system tokens (nodeId optional). The design itself does not change.",
+    inputSchema: object({ nodeId: { type: "string" }, format: { type: "string", enum: Object.keys(EXPORT_FORMATS) }, name: { type: "string", maxLength: 64, description: "The file's name without extension: letters, digits, - and _. Defaults to the layer's component name or tokens." }, replace: { type: "boolean", description: "Replace a file of that name already in exports (it may have been edited since). Without it, an existing file is refused." } }, ["format"]),
     run: ({ session, dryRun }, args) => {
       if (args.replace !== undefined && typeof args.replace !== "boolean") throw new ToolError("replace is true or false");
       if (!Object.hasOwn(EXPORT_FORMATS, args.format)) throw new ToolError(`format is one of ${Object.keys(EXPORT_FORMATS).join(", ")}`);
-      nodeOf(session, args.nodeId);
       if (args.name !== undefined && (typeof args.name !== "string" || !EXPORT_NAME.test(args.name))) throw new ToolError("name is 1-64 letters, digits, - or _, starting with a letter or digit");
       let text: string;
       let componentName: string;
       let layers: number;
-      if (args.format === "html") {
-        const page = exportHtml(session.document, args.nodeId);
-        ({ componentName, layers } = page);
-        text = page.html;
+      if (args.format === "tokens-css" || args.format === "tokens-json") {
+        if (args.format === "tokens-css") {
+          const css = compileTokens(session.document);
+          if (css.trim() === "") throw new ToolError("this project has no design tokens to export");
+          text = `${css.trimEnd()}\n`;
+        } else {
+          text = exportDtcgTokens(session.document);
+        }
+        componentName = "tokens";
+        layers = designSystemOf(session.document)?.props.tokens.length ?? 0;
       } else {
-        const code = args.format === "jsx" ? exportJsx(session.document, args.nodeId) : exportTailwind(session.document, args.nodeId);
-        ({ componentName, layers } = code);
-        // A component's stylesheet and tokens go with it, in the file, where an import would need them.
-        const css = [code.tokens, code.stylesheet].filter((part): part is string => typeof part === "string" && part !== "").join("\n");
-        text = css === "" ? code.code : `${code.code}\n\n/* Its stylesheet:\n${css.replace(/\*\//gu, "* /")}\n*/\n`;
+        if (typeof args.nodeId !== "string" || args.nodeId === "") throw new ToolError(`nodeId is required for ${args.format} export`);
+        nodeOf(session, args.nodeId);
+        if (args.format === "html") {
+          const page = exportHtml(session.document, args.nodeId);
+          ({ componentName, layers } = page);
+          text = page.html;
+        } else {
+          const code = args.format === "tailwind" ? exportTailwind(session.document, args.nodeId) : exportJsx(session.document, args.nodeId);
+          ({ componentName, layers } = code);
+          const emitted = args.format === "tsx"
+            ? `import type React from "react";\n\n${code.code.replace(/^(export function [A-Za-z0-9_]+\(\)) \{/mu, "$1: React.JSX.Element {")}`
+            : code.code;
+          // A component's stylesheet and tokens go with it, in the file, where an import would need them.
+          const css = [code.tokens, code.stylesheet].filter((part): part is string => typeof part === "string" && part !== "").join("\n");
+          text = css === "" ? emitted : `${emitted}\n\n/* Its stylesheet:\n${css.replace(/\*\//gu, "* /")}\n*/\n`;
+        }
       }
       const base = args.name ?? (EXPORT_NAME.test(componentName) ? componentName : "design");
       const folder = join(session.root, "exports");
@@ -979,6 +1224,355 @@ const TOOLS: Tool[] = [
       }
       writeTrustedFile(path, text);
       return { path, format: args.format, componentName, layers, bytes: Buffer.byteLength(text), replaced: taken } as Json;
+    },
+  },
+  {
+    name: "design_intelligence",
+    title: "Design intelligence, taste, motion, and skills",
+    description: "Read-only local design intelligence: list domain archetypes, plan 3 distinct token-ready aesthetic directions, run context-aware taste critique on the open document, inspect the stored design brief, list motion presets, evaluate motion frequency or lint motion CSS, and list or read Ninerr's 19 official design skills.",
+    inputSchema: object({
+      action: { type: "string", enum: ["archetypes", "plan", "taste", "brief", "motion_presets", "motion_frequency", "motion_lint", "skills", "skill"] },
+      domain: { type: "string", maxLength: 64 },
+      productName: { type: "string", maxLength: 160 },
+      audience: { type: "string", maxLength: 400 },
+      density: { type: "string", enum: ["compact", "balanced", "spacious"] },
+      themePreference: { type: "string", enum: ["light", "dark", "system"] },
+      nodeId: { type: "string", maxLength: 128 },
+      presetId: { type: "string", maxLength: 64 },
+      trigger: { type: "string", maxLength: 64 },
+      dailyUses: { type: "integer", minimum: 0, maximum: 100000 },
+      css: { type: "string", maxLength: 200000 },
+      allowAmbient: { type: "boolean" },
+      query: { type: "string", maxLength: 120 },
+      skillId: { type: "string", maxLength: 64 },
+    }, ["action"]),
+    run: ({ session }, args) => {
+      const action = args.action;
+      if (action === "archetypes") {
+        if (typeof args.domain === "string" && args.domain !== "") {
+          return { archetype: getDomainArchetype(args.domain) as unknown as Json };
+        }
+        return {
+          archetypes: ARCHETYPE_IDS.map((id) => ({
+            id,
+            title: DOMAIN_ARCHETYPES[id].title,
+            summary: DOMAIN_ARCHETYPES[id].summary,
+            defaultDensity: DOMAIN_ARCHETYPES[id].defaultDensity,
+            defaultTheme: DOMAIN_ARCHETYPES[id].defaultTheme,
+          })),
+        } as Json;
+      }
+      if (action === "brief") {
+        const system = designSystemOf(session.document as any);
+        return {
+          brief: (system?.props?.brief ?? null) as Json,
+          breakpoints: (system?.props?.breakpoints ?? null) as Json,
+          motion: (system?.props?.motion ?? null) as Json,
+        };
+      }
+      if (action === "plan") {
+        const system = designSystemOf(session.document as any);
+        const stored = system?.props?.brief;
+        const input: Record<string, unknown> = {
+          productName: typeof args.productName === "string" && args.productName.trim() !== "" ? args.productName.trim() : (stored?.productName ?? (session.document as any).name ?? "Untitled Product"),
+          domain: typeof args.domain === "string" && args.domain.trim() !== "" ? args.domain.trim() : (stored?.domain ?? "enterprise-saas"),
+        };
+        if (typeof args.audience === "string" && args.audience.trim() !== "") input.audience = args.audience.trim();
+        else if (stored?.audience) input.audience = stored.audience;
+        if (args.density !== undefined) input.density = args.density;
+        else if (stored?.density) input.density = stored.density;
+        if (args.themePreference !== undefined) input.themePreference = args.themePreference;
+        else if (stored?.themePreference) input.themePreference = stored.themePreference;
+        try {
+          return planDesignDirections(input) as unknown as Json;
+        } catch (error) {
+          throw new ToolError(error instanceof Error ? error.message : String(error));
+        }
+      }
+      if (action === "taste") {
+        const rootId = args.nodeId === undefined ? null : nodeOf(session, args.nodeId).id;
+        return evaluateTaste(session.document as any, { rootId }) as unknown as Json;
+      }
+      if (action === "motion_presets") {
+        if (typeof args.presetId === "string" && args.presetId !== "") {
+          if (!Object.hasOwn(MOTION_PRESETS, args.presetId)) throw new ToolError(`unknown motion preset ${JSON.stringify(shownPlainly(args.presetId.slice(0, 64)))}`);
+          const preset = MOTION_PRESETS[args.presetId as keyof typeof MOTION_PRESETS];
+          return {
+            preset: { id: preset.id, trigger: preset.trigger, duration: preset.duration, easing: preset.easing, properties: preset.properties, maxFrequency: preset.maxFrequency, summary: preset.summary },
+            react: compileMotionReact(preset.id),
+          } as unknown as Json;
+        }
+        return {
+          tokens: MOTION_TOKENS,
+          presets: MOTION_PRESET_IDS.map((id) => {
+            const p = MOTION_PRESETS[id as keyof typeof MOTION_PRESETS];
+            return { id: p.id, trigger: p.trigger, duration: p.duration, easing: p.easing, properties: p.properties, maxFrequency: p.maxFrequency, summary: p.summary };
+          }),
+        } as unknown as Json;
+      }
+      if (action === "motion_frequency") {
+        if (typeof args.trigger !== "string" || typeof args.presetId !== "string") {
+          throw new ToolError("motion_frequency requires trigger and presetId");
+        }
+        try {
+          return evaluateMotionFrequency({
+            trigger: args.trigger,
+            presetId: args.presetId,
+            dailyUses: typeof args.dailyUses === "number" ? args.dailyUses : null,
+          }) as unknown as Json;
+        } catch (error) {
+          throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+        }
+      }
+      if (action === "motion_lint") {
+        if (typeof args.css === "string" && args.css.length > 200_000) {
+          throw new ToolError("css input exceeds 200000 characters");
+        }
+        let css = typeof args.css === "string" ? args.css : "";
+        let nodeId: string | null = null;
+        if (args.nodeId !== undefined) {
+          const node = nodeOf(session, args.nodeId);
+          nodeId = node.id;
+          css = typeof node.props?.stylesheet === "string" ? node.props.stylesheet : "";
+        }
+        return { nodeId, findings: lintMotionCss(css, { nodeId, allowAmbient: args.allowAmbient === true }) } as unknown as Json;
+      }
+      if (action === "skills") {
+        return { skills: listSkills(typeof args.query === "string" ? args.query : "") } as unknown as Json;
+      }
+      if (action === "skill") {
+        if (typeof args.skillId !== "string" || args.skillId.trim() === "") throw new ToolError("skill action requires skillId");
+        const skill = getSkill(args.skillId);
+        if (!skill) throw new ToolError(`unknown Ninerr skill ${JSON.stringify(shownPlainly(args.skillId.slice(0, 64)))}`);
+        return { skill, markdown: renderSkillMarkdown(skill) } as unknown as Json;
+      }
+      throw new ToolError(`unsupported design_intelligence action ${JSON.stringify(shownPlainly(String(action).slice(0, 64)))}`);
+    },
+  },
+  {
+    name: "set_design_brief",
+    title: "Set product design brief",
+    description: "Store a structured product design brief on the project's design-system node (creating it if needed) in one undoable change. Optionally pass applyDirectionId from design_intelligence(action: \"plan\") to seed that direction's full light and dark token palette atomically.",
+    inputSchema: object({
+      productName: { type: "string", minLength: 1, maxLength: 160 },
+      domain: { type: "string", minLength: 1, maxLength: 64 },
+      audience: { type: "string", maxLength: 400 },
+      brandTone: { type: "array", maxItems: 12, items: { type: "string", minLength: 1, maxLength: 48 } },
+      density: { type: "string", enum: ["compact", "balanced", "spacious"] },
+      themePreference: { type: "string", enum: ["light", "dark", "system"] },
+      aestheticDirection: { type: "string", maxLength: 120 },
+      constraints: { type: "array", maxItems: 24, items: { type: "string", minLength: 1, maxLength: 240 } },
+      allowExpressiveMotion: { type: "boolean" },
+      allowEditorialGradients: { type: "boolean" },
+      notes: { type: "string", maxLength: 1000 },
+      applyDirectionId: { type: "string", maxLength: 128 },
+    }, ["productName", "domain"]),
+    run: ({ session, edit }, args) => {
+      const checkBriefText = (field: string, value: unknown, multiline = false) => {
+        if (typeof value !== "string") return;
+        const body = multiline ? value.replace(JOINERS, "").replace(LINE_BREAKS, "") : value.replace(JOINERS, "");
+        if (!value.isWellFormed() || HIDDEN_TEXT.test(body) || SELECTOR_SMUGGLING.test(value)) {
+          throw new ToolError(`${field} holds hidden or reordering characters, so nothing was changed`);
+        }
+      };
+      checkBriefText("productName", args.productName);
+      checkBriefText("domain", args.domain);
+      checkBriefText("audience", args.audience);
+      checkBriefText("aestheticDirection", args.aestheticDirection);
+      checkBriefText("notes", args.notes, true);
+      if (Array.isArray(args.brandTone)) args.brandTone.forEach((v, i) => checkBriefText(`brandTone[${i}]`, v));
+      if (Array.isArray(args.constraints)) args.constraints.forEach((v, i) => checkBriefText(`constraints[${i}]`, v));
+
+      const brief: Record<string, unknown> = { productName: args.productName, domain: args.domain };
+      for (const key of ["audience", "brandTone", "density", "themePreference", "aestheticDirection", "constraints", "allowExpressiveMotion", "allowEditorialGradients", "notes"] as const) {
+        if (args[key] !== undefined) brief[key] = args[key];
+      }
+      const prob = briefProblem(brief);
+      if (prob !== null) throw new ToolError(`invalid design brief: ${prob}`);
+
+      const document = session.document as any;
+      const system = designSystemOf(document);
+      const props = system === null ? newDesignSystemProps(`${args.productName} Design System`) : structuredClone(system.props);
+      props.brief = brief;
+
+      let seededTokens = 0;
+      if (typeof args.applyDirectionId === "string" && args.applyDirectionId !== "") {
+        const planned = planDesignDirections(brief);
+        const dir = planned.directions.find((d) => d.id === args.applyDirectionId);
+        if (!dir) {
+          throw new ToolError(`unknown applyDirectionId ${JSON.stringify(shownPlainly(args.applyDirectionId.slice(0, 64)))}; valid ids: ${planned.directions.map((d) => d.id).join(", ")}`);
+        }
+        props.brief = { ...brief, aestheticDirection: brief.aestheticDirection ?? dir.name };
+        const primaryCollection = props.collections[0];
+        const ensureLightAndDarkModes = (col: any) => {
+          let lightMode = col.modes.find((m: any) => m.id === "light" || m.name.toLowerCase() === "light");
+          let darkMode = col.modes.find((m: any) => m.id !== lightMode?.id && (m.id === "dark" || m.name.toLowerCase() === "dark"));
+          const defaultModeObj = col.modes.find((m: any) => m.id === col.defaultMode) ?? col.modes[0];
+          if (!lightMode && !darkMode) {
+            lightMode = defaultModeObj;
+          } else if (!lightMode && darkMode) {
+            if (defaultModeObj.id !== darkMode.id) {
+              lightMode = defaultModeObj;
+            } else {
+              const id = col.modes.some((m: any) => m.id === "light") ? `light-${randomUUID().slice(0, 6)}` : "light";
+              lightMode = { id, name: "Light" };
+              col.modes.push(lightMode);
+              for (const existingTok of props.tokens) {
+                if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, lightMode.id) && Object.hasOwn(existingTok.values, col.defaultMode)) {
+                  existingTok.values[lightMode.id] = existingTok.values[col.defaultMode];
+                }
+              }
+            }
+          }
+          if (!darkMode) {
+            const id = col.modes.some((m: any) => m.id === "dark") ? `dark-${randomUUID().slice(0, 6)}` : "dark";
+            darkMode = { id, name: "Dark" };
+            col.modes.push(darkMode);
+            for (const existingTok of props.tokens) {
+              if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, darkMode.id) && Object.hasOwn(existingTok.values, col.defaultMode)) {
+                existingTok.values[darkMode.id] = existingTok.values[col.defaultMode];
+              }
+            }
+          }
+          return { lightModeId: lightMode.id, darkModeId: darkMode.id };
+        };
+
+        for (const tok of dir.tokens) {
+          const existing = props.tokens.find((t: any) => t.name === tok.name);
+          const targetCollection = existing
+            ? (props.collections.find((c: any) => c.id === existing.collection) ?? primaryCollection)
+            : primaryCollection;
+          const { lightModeId, darkModeId } = ensureLightAndDarkModes(targetCollection);
+          if (existing) {
+            existing.type = tok.type;
+            existing.values = { ...existing.values, [lightModeId]: tok.light, [darkModeId]: tok.dark };
+            existing.description = tok.description;
+          } else {
+            const values: Record<string, string> = {};
+            for (const mode of targetCollection.modes) {
+              values[mode.id] = mode.id === darkModeId ? tok.dark : tok.light;
+            }
+            props.tokens.push({ name: tok.name, type: tok.type, collection: targetCollection.id, values, description: tok.description });
+          }
+          seededTokens += 1;
+        }
+      }
+
+      const dsProb = designSystemProblem(props);
+      if (dsProb !== null) throw new ToolError(`design system rejected brief update: ${dsProb}`);
+      const dsId = system?.id ?? `design-system-${randomUUID().slice(0, 12)}`;
+      const operations = system === null
+        ? [{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: dsId, type: "design-system", props } }]
+        : [{ type: "set-props", nodeId: system.id, set: { collections: props.collections, tokens: props.tokens, brief: props.brief } }];
+      return {
+        designSystemId: dsId,
+        brief: props.brief,
+        seededTokens,
+        ...(edit(operations, `Set design brief for ${args.productName}`) as object),
+      } as Json;
+    },
+  },
+  {
+    name: "apply_motion",
+    title: "Apply reduced-motion-safe motion presets",
+    description: "Attach one or more Ninerr motion presets (hover, focus, press, enter, exit, modal, drawer, toast, stagger, scroll, skeleton, number-transition, spring) with mandatory prefers-reduced-motion CSS to a layer's stylesheet and register motion tokens on the design system in one undoable change.",
+    inputSchema: object({
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      presetIds: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", enum: [...MOTION_PRESET_IDS] } },
+      selector: { type: "string", minLength: 1, maxLength: 120 },
+      reducedMotion: { type: "string", enum: ["respect", "minimal"] },
+      addMotionTokens: { type: "boolean" },
+    }, ["nodeId", "presetIds"]),
+    run: ({ session, edit }, args) => {
+      const node = nodeOf(session, args.nodeId);
+      if (node.type === "design-system" || node.type === "component-instance" || isCodePart(node)) {
+        throw new ToolError(`cannot apply motion stylesheet directly to ${isCodePart(node) ? "code expression" : node.type} ${node.id}`);
+      }
+      if (!Array.isArray(args.presetIds) || args.presetIds.length === 0 || args.presetIds.length > 8) {
+        throw new ToolError("presetIds must contain 1 to 8 motion preset ids");
+      }
+      const selector = typeof args.selector === "string" && args.selector.trim() !== ""
+        ? args.selector.trim()
+        : ":scope";
+      const reducedMotion = args.reducedMotion ?? "respect";
+      if (reducedMotion !== "respect" && reducedMotion !== "minimal") {
+        throw new ToolError("reducedMotion must be \"respect\" or \"minimal\"");
+      }
+      let compiled;
+      try {
+        compiled = compileMotionStylesheet({ presetIds: args.presetIds, selector, reducedMotion });
+      } catch (error) {
+        throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+      }
+
+      const startMark = "/* ninerr-motion:start */";
+      const endMark = "/* ninerr-motion:end */";
+      const existingSheet = typeof node.props?.stylesheet === "string" ? node.props.stylesheet : "";
+      const stripped = existingSheet.replace(/\/\*\s*ninerr-motion:start\s*\*\/[\s\S]*?\/\*\s*ninerr-motion:end\s*\*\//gu, "").trim();
+      const nextSheet = `${stripped === "" ? "" : `${stripped}\n\n`}${startMark}\n${compiled.css}\n${endMark}`;
+      if (Buffer.byteLength(nextSheet, "utf8") > 512 * 1024) {
+        throw new ToolError("combined node stylesheet exceeds 512 KiB budget");
+      }
+      const planned = planElement({ id: node.id, type: node.type, props: { stylesheet: nextSheet } } as any);
+      if (planned.stylesheet === null || planned.dropped > 0) {
+        throw new ToolError("motion stylesheet was rejected by the renderer sanitizer, so nothing was changed");
+      }
+
+      const operations: unknown[] = [{ type: "set-props", nodeId: node.id, set: { stylesheet: nextSheet } }];
+      const document = session.document as any;
+      let addedTokens = 0;
+
+      if (args.addMotionTokens !== false) {
+        const system = designSystemOf(document);
+        const props = system === null ? newDesignSystemProps() : structuredClone(system.props);
+        const collection = props.collections[0];
+        for (const tok of MOTION_TOKENS) {
+          if (props.tokens.some((existing: any) => existing.name === tok.name)) continue;
+          const values: Record<string, string> = {};
+          for (const mode of collection.modes) values[mode.id] = tok.value;
+          props.tokens.push({ name: tok.name, type: tok.type, collection: collection.id, values, description: tok.description });
+          addedTokens += 1;
+        }
+        const prevMotion = props.motion && typeof props.motion === "object" ? props.motion : null;
+        const mergedPresets = new Map<string, any>();
+        if (Array.isArray(prevMotion?.presets)) {
+          for (const existingPreset of prevMotion.presets) {
+            if (existingPreset && typeof existingPreset.id === "string") mergedPresets.set(existingPreset.id, existingPreset);
+          }
+        }
+        for (const p of compiled.presets) {
+          mergedPresets.set(p.id, {
+            id: p.id,
+            trigger: p.trigger,
+            duration: p.duration,
+            easing: p.easing,
+            properties: [...p.properties],
+            maxFrequency: p.maxFrequency,
+          });
+        }
+        props.motion = {
+          reducedMotion,
+          defaultDuration: typeof prevMotion?.defaultDuration === "string" ? prevMotion.defaultDuration : "220ms",
+          defaultEasing: typeof prevMotion?.defaultEasing === "string" ? prevMotion.defaultEasing : "cubic-bezier(0.23, 1, 0.32, 1)",
+          allowAmbient: prevMotion?.allowAmbient === true,
+          presets: [...mergedPresets.values()],
+        };
+        const dsProb = designSystemProblem(props);
+        if (dsProb !== null) throw new ToolError(`design system rejected motion tokens: ${dsProb}`);
+        if (system === null) {
+          operations.push({ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: `design-system-${randomUUID().slice(0, 12)}`, type: "design-system", props } });
+        } else {
+          operations.push({ type: "set-props", nodeId: system.id, set: { tokens: props.tokens, motion: props.motion } });
+        }
+      }
+
+      return {
+        nodeId: node.id,
+        selector: compiled.selector,
+        presetIds: compiled.presetIds,
+        addedTokens,
+        ...(edit(operations, `Apply motion presets (${compiled.presetIds.join(", ")})`) as object),
+      } as Json;
     },
   },
 ];
@@ -1172,7 +1766,7 @@ export interface McpContext {
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
-const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history"]);
+const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history", "design_intelligence"]);
 
 const rpcError = (id: Json, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 const toolResult = (value: Json, isError = false) => ({
@@ -1277,17 +1871,18 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       session,
       actor,
       toolName,
+      now: context.now,
       dryRun: dryRun === true,
       selection: context.selection,
       references: context.references,
-      edit: (operations, intent) => {
+      edit: (operations, intent, provenance) => {
         if (operations.length === 0) throw new ToolError("nothing to change");
         if (dryRun === true) {
           const preview = session.preview(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
           // Nothing is made: the result says so, and what the change would touch.
           throw new DryRun({ dryRun: true, wouldChange: preview.affectedNodeIds, operations: preview.operations, revision: preview.revision, intent });
         }
-        const event = session.edit(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
+        const event = session.edit(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp", provenance);
         return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds };
       },
     }, args);

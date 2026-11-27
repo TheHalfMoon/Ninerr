@@ -14,7 +14,7 @@ import {
   resolveTarget,
   sourceForRegistryUrl,
 } from "@ninerr/component-sources";
-import { TOKEN_NAME, cssValueProblem, designSystemOf, designSystemProblem, newDesignSystemProps, tokenReferences } from "@ninerr/document-model";
+import { SCHEMA_V2_LIMITS, TOKEN_NAME, TOKEN_TYPES, cssValueProblem, designSystemOf, designSystemProblem, newDesignSystemProps, tokenReferences } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
 
 // Bringing a registry item a person chose into their connected codebase (#405). Only the person,
@@ -271,11 +271,19 @@ export function planItemTokens(document: any, cssVars: any): { tokens: PlannedTo
   const collection = props.collections[0];
   const darkMode = collection.modes.find((mode: any) => mode.id === "dark" || mode.name.toLowerCase() === "dark");
   const darkId = darkMode?.id ?? "dark";
-  const byName = new Map<string, PlannedToken>();
+  const byName = new Map<string, PlannedToken & { description?: string }>();
+  const explicitTypes = cssVars?.types && typeof cssVars.types === "object" ? cssVars.types : null;
+  const explicitDescriptions = cssVars?.descriptions && typeof cssVars.descriptions === "object" ? cssVars.descriptions : null;
   for (const [scope, mode] of [["theme", collection.defaultMode], ["light", collection.defaultMode], ["dark", darkId]] as const) {
     for (const [key, value] of Object.entries(cssVars?.[scope] ?? {})) {
       const name = `--${key}`;
-      const planned = byName.get(name) ?? { name, type: tokenTypeOf(key), values: {}, status: "new" as TokenStatus };
+      const declaredType = explicitTypes && Object.hasOwn(explicitTypes, key) && typeof explicitTypes[key] === "string" && TOKEN_TYPES.includes(explicitTypes[key] as any)
+        ? explicitTypes[key]
+        : tokenTypeOf(key);
+      const declaredDesc = explicitDescriptions && Object.hasOwn(explicitDescriptions, key) && typeof explicitDescriptions[key] === "string" && explicitDescriptions[key].length <= SCHEMA_V2_LIMITS.textLength
+        ? explicitDescriptions[key]
+        : undefined;
+      const planned = byName.get(name) ?? { name, type: declaredType, values: {}, status: "new" as TokenStatus, ...(declaredDesc !== undefined ? { description: declaredDesc } : {}) };
       planned.values[mode] = value as string;
       byName.set(name, planned);
     }
@@ -338,7 +346,7 @@ export function planItemTokens(document: any, cssVars: any): { tokens: PlannedTo
   for (const token of added) {
     const values = { ...token.values };
     if (collection.modes.some((mode: any) => mode.id === darkId) && values[darkId] === undefined && values[collection.defaultMode] !== undefined) values[darkId] = values[collection.defaultMode];
-    props.tokens.push({ name: token.name, type: token.type, collection: collection.id, values });
+    props.tokens.push({ name: token.name, type: token.type, collection: collection.id, values, ...(token.description !== undefined ? { description: token.description } : {}) });
   }
   const problem = designSystemProblem(props);
   if (problem !== null) return { tokens, operations: [], problem };
