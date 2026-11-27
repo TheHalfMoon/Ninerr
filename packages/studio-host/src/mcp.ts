@@ -2,12 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
-import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, briefProblem, compileTokens, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
+import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, briefProblem, compileTokens, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setBreakpoints, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
 import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride, setLayout } from "@ninerr/canvas";
-import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
+import { NINERR_COMPONENT_CATEGORIES, RECORD_SOURCES, UI_COMPONENT_SOURCES, buildComponentOperations, getNinerrComponent, loadComponentRecords, searchComponents, searchNinerrComponents } from "@ninerr/component-sources";
 import { ARCHETYPE_IDS, DOMAIN_ARCHETYPES, MOTION_PRESETS, MOTION_PRESET_IDS, MOTION_TOKENS, compileMotionReact, compileMotionStylesheet, evaluateMotionFrequency, evaluateTaste, getDomainArchetype, getSkill, lintMotionCss, listSkills, planDesignDirections, renderSkillMarkdown } from "@ninerr/design-intelligence";
 import { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
+import { auditDesignSystem, compileBreakpointsStylesheet, generateHighContrastMode, planThemeMigration } from "./design-system-ops.ts";
 import { StudioError } from "./errors.ts";
 import { ImportDesk } from "./imports.ts";
 import { planTokenCss } from "./token-import.ts";
@@ -106,6 +107,8 @@ const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   set_layer_modes: ["collection"],
   import_source: ["name", "stylesheets[].name"],
   export_design: ["name"],
+  instantiate_component: ["label", "title", "description"],
+  migrate_theme: ["tokens[].name", "tokens[].description", "breakpoints[].name"],
 });
 const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
 
@@ -382,7 +385,8 @@ const TOOLS: Tool[] = [
         "A layer whose props hold codeExpression shows {…} code from its source: its text is only a copy, and set_text refuses it and any element holding one.",
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
-        "Library components: search_components finds components of the component sources Ninerr has records of (Meta Astryx, pinned) by name or purpose; get_component gives one's exact props, variants, accessibility criteria, limitations, import path and provenance. Use only props a record lists. They change nothing and fetch nothing.",
+        "Library components: search_components finds native editable Ninerr components (source: \"ninerr\", 41 components across 8 categories) as well as pinned component source records (Meta Astryx) by name or purpose; get_component gives one's exact props, variants, accessibility criteria, limitations, import path and provenance. instantiate_component places any native Ninerr component into the project in one atomic undoable change (as editable layers or as a reusable component definition and instance).",
+        "Design systems: audit_design_system inspects token coverage, duplicates, unused tokens, hardcoded literal matches, and cross-mode WCAG contrast; migrate_theme atomically migrates light and dark semantic tokens, generates a WCAG AAA high-contrast mode, or configures responsive breakpoints and scoped responsive rules.",
         "Design intelligence: design_intelligence reads domain archetypes, plans multi-direction aesthetic tokens, runs brief-aware taste critique, inspects motion presets, checks motion frequency or CSS linting, and lists or renders official Ninerr skills. set_design_brief stores the structured product brief on the design system (optionally seeding a planned direction's tokens), and apply_motion attaches reduced-motion-safe keyframes and transitions to a layer stylesheet along with motion tokens.",
       ].join("\n"),
     }),
@@ -1017,18 +1021,37 @@ const TOOLS: Tool[] = [
   {
     name: "search_components",
     title: "Search library components",
-    description: "Find components of the component sources Ninerr has records of (Meta Astryx, at a pinned commit) by name or purpose, such as \"date picker\" or \"command palette\", optionally in one category (the answer lists the categories). Gives each one's id for get_component.",
-    inputSchema: object({ query: { type: "string", maxLength: 200 }, category: { type: "string", maxLength: 100 }, source: { type: "string", enum: [...RECORD_SOURCES] }, limit: { type: "integer", minimum: 1, maximum: 50 } }),
+    description: "Find components from Ninerr's 41 native editable components (source: \"ninerr\") or pinned component source records (Meta Astryx) by name or purpose, such as \"date picker\", \"pricing\", or \"command palette\", optionally in one category. Gives each one's id for get_component or instantiate_component.",
+    inputSchema: object({ query: { type: "string", maxLength: 200 }, category: { type: "string", maxLength: 100 }, source: { type: "string", enum: ["ninerr", ...RECORD_SOURCES] }, limit: { type: "integer", minimum: 1, maximum: 50 } }),
     run: async (_context, given) => {
       const args = onlyArguments(given, ["query", "category", "source", "limit"]);
       if (args.query !== undefined && (typeof args.query !== "string" || args.query.length > 200)) throw new ToolError("query is text of at most 200 characters");
       if (args.category !== undefined && (typeof args.category !== "string" || args.category.length > 100)) throw new ToolError("category is text");
       if (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 50)) throw new ToolError("limit is a whole number from 1 to 50");
+      const limit = Number.isInteger(args.limit) ? (args.limit as number) : 20;
+      if (args.source === "ninerr") {
+        const found = searchNinerrComponents({
+          query: typeof args.query === "string" ? args.query : "",
+          category: typeof args.category === "string" ? args.category : "",
+        }).slice(0, limit);
+        return {
+          categories: [...NINERR_COMPONENT_CATEGORIES],
+          sources: [{ id: "ninerr", license: "Apache-2.0", native: true, editable: true }],
+          components: found.map((entry: any) => ({
+            id: `ninerr:${entry.id}`,
+            name: entry.name,
+            category: entry.category,
+            description: entry.summary,
+            variants: entry.variants,
+            instantiable: true,
+          })),
+        };
+      }
       const sources = args.source === undefined ? RECORD_SOURCES : [args.source];
-      if (!sources.every((id: string) => RECORD_SOURCES.includes(id))) throw new ToolError(`source is one of ${RECORD_SOURCES.join(", ")}`);
+      if (!sources.every((id: string) => RECORD_SOURCES.includes(id))) throw new ToolError(`source is one of ninerr, ${RECORD_SOURCES.join(", ")}`);
       const snapshots = await Promise.all(sources.map((id: string) => loadComponentRecords(id)));
       const all = snapshots.flatMap((snapshot: any) => snapshot.components);
-      const found = searchComponents(all, { query: typeof args.query === "string" ? args.query : "", category: typeof args.category === "string" ? args.category : null, limit: Number.isInteger(args.limit) ? args.limit : 20 });
+      const found = searchComponents(all, { query: typeof args.query === "string" ? args.query : "", category: typeof args.category === "string" ? args.category : null, limit });
       return {
         categories: [...new Set(all.map((record: any) => record.category).filter(Boolean))].sort(),
         sources: snapshots.map((snapshot: any) => ({ id: snapshot.source, repository: snapshot.repository, commit: snapshot.commit, package: snapshot.package })),
@@ -1039,11 +1062,21 @@ const TOOLS: Tool[] = [
   {
     name: "get_component",
     title: "Library component",
-    description: "One library component's record, by its id from search_components: its exact props and variants, accessibility criteria, guidance, examples, limitations, import path and dependencies, and where the record came from (repository, commit, doc file and its sha256, license, and what Ninerr may import from the source).",
+    description: "One library component's record, by its id from search_components (including native ninerr:<id> blueprints and pinned Astryx records): its variants, tokens, accessibility criteria, guidance, and provenance.",
     inputSchema: object({ id: { type: "string", maxLength: 300 } }, ["id"]),
     run: async (_context, given) => {
       const args = onlyArguments(given, ["id"]);
-      const source = typeof args.id === "string" && args.id.length <= 300 ? args.id.slice(0, args.id.indexOf(":")) : "";
+      const rawId = typeof args.id === "string" && args.id.length <= 300 ? args.id : "";
+      const colon = rawId.indexOf(":");
+      const source = colon > 0 ? rawId.slice(0, colon) : "";
+      if (source === "ninerr") {
+        const entry = getNinerrComponent(rawId.slice(colon + 1));
+        if (!entry) throw new ToolError("no such component; take ids from search_components");
+        return {
+          component: { ...entry, id: `ninerr:${entry.id}`, instantiable: true },
+          provenance: { source: "ninerr", license: { spdx: "Apache-2.0" }, native: true, editable: true, importPolicy: "native-editable-blueprint" },
+        };
+      }
       if (!RECORD_SOURCES.includes(source)) throw new ToolError("no such component; take ids from search_components");
       const snapshot: any = await loadComponentRecords(source);
       const record = snapshot.components.find((entry: any) => entry.id === args.id);
@@ -1575,6 +1608,348 @@ const TOOLS: Tool[] = [
       } as Json;
     },
   },
+  {
+    name: "instantiate_component",
+    title: "Instantiate native Ninerr component",
+    description: "Instantiate any of Ninerr's 41 native editable, token-bound, WCAG-AA components into the open project in one atomic undoable change, either as editable layers or as a reusable component-definition (and optional live instance inside parentId).",
+    inputSchema: object({
+      componentId: { type: "string", minLength: 1, maxLength: 64 },
+      parentId: { type: "string", minLength: 1, maxLength: 128 },
+      index: { type: "integer", minimum: 0, maximum: 100000 },
+      asDefinition: { type: "boolean" },
+      variant: { type: "string", maxLength: 32 },
+      label: { type: "string", maxLength: 120 },
+      title: { type: "string", maxLength: 160 },
+      body: { type: "string", maxLength: 600 },
+      headline: { type: "string", maxLength: 200 },
+      subcopy: { type: "string", maxLength: 600 },
+      placeholder: { type: "string", maxLength: 160 },
+      helper: { type: "string", maxLength: 240 },
+      cta: { type: "string", maxLength: 80 },
+      brand: { type: "string", maxLength: 80 },
+      product: { type: "string", maxLength: 120 },
+      value: { type: "string", maxLength: 80 },
+      delta: { type: "string", maxLength: 80 },
+      description: { type: "string", maxLength: 400 },
+      message: { type: "string", maxLength: 400 },
+      legend: { type: "string", maxLength: 120 },
+      initials: { type: "string", maxLength: 8 },
+      count: { type: "string", maxLength: 24 },
+    }, ["componentId"]),
+    run: ({ session, edit }, given) => {
+      const OPTION_LIMITS: Readonly<Record<string, { max: number; multiline?: boolean }>> = {
+        variant: { max: 32 },
+        label: { max: 120 },
+        title: { max: 160 },
+        body: { max: 600, multiline: true },
+        headline: { max: 200 },
+        subcopy: { max: 600, multiline: true },
+        placeholder: { max: 160 },
+        helper: { max: 240 },
+        cta: { max: 80 },
+        brand: { max: 80 },
+        product: { max: 120 },
+        value: { max: 80 },
+        delta: { max: 80 },
+        description: { max: 400, multiline: true },
+        message: { max: 400, multiline: true },
+        legend: { max: 120 },
+        initials: { max: 8 },
+        count: { max: 24 },
+      };
+      const args = onlyArguments(given, ["componentId", "parentId", "index", "asDefinition", ...Object.keys(OPTION_LIMITS)]);
+      const rawId = typeof args.componentId === "string" ? args.componentId.trim() : "";
+      const componentId = rawId.startsWith("ninerr:") ? rawId.slice(7) : rawId;
+      const meta = getNinerrComponent(componentId);
+      if (!meta) {
+        throw new ToolError(`unknown native Ninerr component ${JSON.stringify(shownPlainly(rawId.slice(0, 64)))}; call search_components({ source: "ninerr" }) to list available ids`);
+      }
+
+      if (args.asDefinition !== undefined && typeof args.asDefinition !== "boolean") {
+        throw new ToolError("asDefinition must be a boolean");
+      }
+
+      const options: Record<string, string> = {};
+      for (const [key, spec] of Object.entries(OPTION_LIMITS)) {
+        if (args[key] === undefined) continue;
+        if (typeof args[key] !== "string") throw new ToolError(`${key} must be a string`);
+        const val = args[key] as string;
+        if (val.length > spec.max) throw new ToolError(`${key} exceeds maximum length of ${spec.max} characters`);
+        const visible = val.replace(JOINERS, "");
+        const body = spec.multiline ? visible.replace(LINE_BREAKS, "") : visible;
+        if (!val.isWellFormed() || HIDDEN_TEXT.test(body) || SELECTOR_SMUGGLING.test(val)) {
+          throw new ToolError(`${key} holds hidden or reordering characters, so nothing was changed`);
+        }
+        if (key === "variant" && !meta.variants.includes(val)) {
+          throw new ToolError(`invalid variant ${JSON.stringify(shownPlainly(val))} for ${meta.id}; valid variants: ${meta.variants.join(", ")}`);
+        }
+        options[key] = val;
+      }
+
+      const document = session.document as any;
+      let targetParentId: string | null = null;
+      let targetSiblings: string[] = document.rootIds;
+      if (args.parentId !== undefined) {
+        const parent = nodeOf(session, args.parentId);
+        if (parent.type === "design-system" || parent.type === "component-instance" || parent.type === "text" || isCodePart(parent)) {
+          throw new ToolError(`cannot instantiate a component inside ${isCodePart(parent) ? "code expression" : parent.type} ${parent.id}`);
+        }
+        targetParentId = parent.id;
+        targetSiblings = parent.children;
+      }
+      let targetIndex = targetSiblings.length;
+      if (args.index !== undefined) {
+        if (!Number.isInteger(args.index) || (args.index as number) < 0 || (args.index as number) > targetSiblings.length) {
+          throw new ToolError(`index must be a whole number from 0 to ${targetSiblings.length}`);
+        }
+        targetIndex = args.index as number;
+      }
+
+      const asDefinition = args.asDefinition === true;
+      let idPrefix = `cmp-${meta.id}-${randomUUID().slice(0, 8)}`;
+      while (Object.hasOwn(document.nodes, `${idPrefix}-def`) || Object.hasOwn(document.nodes, `${idPrefix}-1`)) {
+        idPrefix = `cmp-${meta.id}-${randomUUID().slice(0, 8)}`;
+      }
+
+      const built = buildComponentOperations(meta.id, {
+        parentId: asDefinition ? null : targetParentId,
+        insertIndex: asDefinition ? (targetParentId === null ? targetIndex : document.rootIds.length) : targetIndex,
+        idPrefix,
+        asDefinition,
+        options,
+      });
+
+      for (const op of built.operations as any[]) {
+        if (op.type !== "insert-node" || op.node.type === "component-definition") continue;
+        const planned = planElement(op.node);
+        if (planned.dropped > 0) {
+          throw new ToolError(`component ${meta.id} failed renderer sanitization (${planned.dropped} dropped), so nothing was changed`);
+        }
+      }
+
+      const operations: unknown[] = [...built.operations];
+      let instanceId: string | null = null;
+      if (asDefinition && targetParentId !== null && built.definitionId !== null) {
+        instanceId = `${idPrefix}-inst`;
+        operations.push({
+          type: "insert-node",
+          parentId: targetParentId,
+          index: targetIndex,
+          node: {
+            id: instanceId,
+            type: "component-instance",
+            props: { componentId: built.definitionId, propertyValues: {}, overrides: [] },
+          },
+        });
+      }
+
+      return {
+        componentId: `ninerr:${built.componentId}`,
+        componentName: built.componentName,
+        category: built.category,
+        definitionId: built.definitionId,
+        rootNodeId: built.rootNodeId,
+        instanceId,
+        nodeCount: built.nodeCount,
+        ...(edit(operations, `Instantiate ${built.componentName}`) as object),
+      } as Json;
+    },
+  },
+  {
+    name: "audit_design_system",
+    title: "Audit design system health",
+    description: "Read-only deterministic audit of the project's design system: unused tokens, duplicate literal values, missing mode values, hardcoded layer style values matching existing tokens, and cross-mode WCAG contrast compliance.",
+    inputSchema: object({}),
+    run: ({ session }, given) => {
+      onlyArguments(given, []);
+      return auditDesignSystem(session.document as any) as unknown as Json;
+    },
+  },
+  {
+    name: "migrate_theme",
+    title: "Migrate theme, generate high-contrast mode, or set breakpoints",
+    description: "Atomically update or seed semantic design tokens across light and dark modes (action: \"migrate\"), generate a WCAG AAA high-contrast mode (action: \"generate_high_contrast\"), or store responsive breakpoints and optional scoped @media/@container rules (action: \"set_breakpoints\"). Supports dryRun for safe preview.",
+    inputSchema: object({
+      action: { type: "string", enum: ["migrate", "generate_high_contrast", "set_breakpoints"] },
+      themeName: { type: "string", minLength: 1, maxLength: 120 },
+      collectionId: { type: "string", minLength: 1, maxLength: 128 },
+      tokens: {
+        type: "array",
+        minItems: 1,
+        maxItems: 500,
+        items: object({
+          name: { type: "string", minLength: 3, maxLength: 128 },
+          type: { type: "string", enum: [...TOKEN_TYPES] },
+          light: { type: "string", minLength: 1, maxLength: 400 },
+          dark: { type: "string", minLength: 1, maxLength: 400 },
+          value: { type: "string", minLength: 1, maxLength: 400 },
+          description: { type: "string", maxLength: 500 },
+        }, ["name"]),
+      },
+      breakpoints: {
+        type: "array",
+        minItems: 1,
+        maxItems: 12,
+        items: object({
+          id: { type: "string", minLength: 1, maxLength: 64 },
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          minWidth: { type: "integer", minimum: 0, maximum: 10000 },
+          maxWidth: { type: "integer", minimum: 0, maximum: 10000 },
+        }, ["id", "name"]),
+      },
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      rulesByBreakpoint: { type: "object", additionalProperties: { type: "string", maxLength: 64000 } },
+      useContainer: { type: "boolean" },
+    }),
+    run: ({ session, edit, dryRun }, given) => {
+      const args = onlyArguments(given, ["action", "themeName", "collectionId", "tokens", "breakpoints", "nodeId", "rulesByBreakpoint", "useContainer"]);
+      const action = args.action ?? "migrate";
+      const checkSafeString = (field: string, value: unknown, maxLen: number) => {
+        if (value === undefined) return;
+        if (typeof value !== "string" || value.trim() === "" || value.length > maxLen) {
+          throw new ToolError(`${field} must be a non-empty string of at most ${maxLen} characters`);
+        }
+        const body = value.replace(JOINERS, "");
+        if (!value.isWellFormed() || HIDDEN_TEXT.test(body) || SELECTOR_SMUGGLING.test(value)) {
+          throw new ToolError(`${field} holds hidden or reordering characters, so nothing was changed`);
+        }
+      };
+      checkSafeString("themeName", args.themeName, 120);
+      checkSafeString("collectionId", args.collectionId, 128);
+
+      const document = session.document as any;
+      if (action === "generate_high_contrast") {
+        let planned;
+        try {
+          planned = generateHighContrastMode(document, {
+            ...(typeof args.collectionId === "string" ? { collectionId: args.collectionId } : {}),
+          });
+        } catch (error) {
+          throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+        }
+        return {
+          action,
+          collectionId: planned.collectionId,
+          modeId: planned.modeId,
+          ...(edit(planned.operations, `Generate high-contrast mode for ${planned.collectionId}`) as object),
+        } as Json;
+      }
+
+      if (action === "set_breakpoints") {
+        if (!Array.isArray(args.breakpoints) || args.breakpoints.length === 0) {
+          throw new ToolError("set_breakpoints requires a non-empty breakpoints array");
+        }
+        if ((args.nodeId !== undefined) !== (args.rulesByBreakpoint !== undefined)) {
+          throw new ToolError("set_breakpoints requires both nodeId and rulesByBreakpoint together when attaching responsive CSS");
+        }
+        const system = designSystemOf(document);
+        let operations: unknown[];
+        if (system === null) {
+          const props = newDesignSystemProps();
+          props.breakpoints = args.breakpoints;
+          const dsProb = designSystemProblem(props);
+          if (dsProb !== null) throw new ToolError(`design system rejected breakpoints: ${dsProb}`);
+          operations = [{
+            type: "insert-node",
+            parentId: null,
+            index: document.rootIds.length,
+            node: { id: `design-system-${randomUUID().slice(0, 12)}`, type: "design-system", props },
+          }];
+        } else {
+          operations = tokenOperation(() => setBreakpoints(document, args.breakpoints));
+        }
+
+        let compiledCss: string | null = null;
+        if (args.nodeId !== undefined && args.rulesByBreakpoint !== undefined) {
+          if (typeof args.rulesByBreakpoint !== "object" || args.rulesByBreakpoint === null || Array.isArray(args.rulesByBreakpoint)) {
+            throw new ToolError("rulesByBreakpoint must be a plain object mapping breakpoint ids to CSS strings");
+          }
+          for (const [bpKey, cssText] of Object.entries(args.rulesByBreakpoint as Record<string, unknown>)) {
+            if (typeof cssText !== "string") throw new ToolError(`rulesByBreakpoint[${JSON.stringify(shownPlainly(bpKey.slice(0, 40)))}] must be a string`);
+            if (cssText.length > 64_000) throw new ToolError(`rulesByBreakpoint[${JSON.stringify(shownPlainly(bpKey.slice(0, 40)))}] exceeds 64000 characters`);
+          }
+          const node = nodeOf(session, args.nodeId);
+          if (node.type === "design-system" || node.type === "component-instance" || isCodePart(node)) {
+            throw new ToolError(`cannot attach responsive stylesheet directly to ${isCodePart(node) ? "code expression" : node.type} ${node.id}`);
+          }
+          try {
+            compiledCss = compileBreakpointsStylesheet(
+              args.breakpoints as any,
+              args.rulesByBreakpoint as Record<string, string>,
+              { useContainer: args.useContainer === true },
+            );
+          } catch (error) {
+            throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+          }
+          const startMark = "/* ninerr-breakpoints:start */";
+          const endMark = "/* ninerr-breakpoints:end */";
+          const existingSheet = typeof node.props?.stylesheet === "string" ? node.props.stylesheet : "";
+          const stripped = existingSheet.replace(/\/\*\s*ninerr-breakpoints:start\s*\*\/[\s\S]*?\/\*\s*ninerr-breakpoints:end\s*\*\//gu, "").trim();
+          const nextSheet = compiledCss === ""
+            ? stripped
+            : `${stripped === "" ? "" : `${stripped}\n\n`}${startMark}\n${compiledCss}\n${endMark}`;
+          if (nextSheet !== existingSheet) {
+            if (Buffer.byteLength(nextSheet, "utf8") > 512 * 1024) {
+              throw new ToolError("combined node stylesheet exceeds 512 KiB budget");
+            }
+            if (nextSheet !== "") {
+              const plannedNode = planElement({ id: node.id, type: node.type, props: { stylesheet: nextSheet } } as any);
+              if (plannedNode.stylesheet === null || plannedNode.dropped > 0) {
+                throw new ToolError("responsive stylesheet was rejected by the renderer sanitizer, so nothing was changed");
+              }
+            }
+            operations = [...operations, { type: "set-props", nodeId: node.id, set: { stylesheet: nextSheet } }];
+          }
+        }
+
+        return {
+          action,
+          breakpointCount: args.breakpoints.length,
+          compiledCss,
+          ...(edit(operations, "Set responsive breakpoints") as object),
+        } as Json;
+      }
+
+      if (action === "migrate") {
+        if (!Array.isArray(args.tokens) || args.tokens.length === 0) {
+          throw new ToolError("migrate action requires a non-empty tokens array");
+        }
+        let planned;
+        try {
+          planned = planThemeMigration(document, {
+            tokens: args.tokens as any,
+            ...(typeof args.themeName === "string" ? { themeName: args.themeName } : {}),
+            ...(typeof args.collectionId === "string" ? { collectionId: args.collectionId } : {}),
+          });
+        } catch (error) {
+          throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+        }
+        if (planned.operations.length === 0) {
+          return {
+            action,
+            themeName: planned.themeName,
+            collectionId: planned.collectionId,
+            updated: planned.updated,
+            added: planned.added,
+            unchanged: planned.unchanged,
+            ...(dryRun ? { dryRun: true, wouldChange: [], operations: 0 } : {}),
+            revision: session.revision,
+          } as unknown as Json;
+        }
+        return {
+          action,
+          themeName: planned.themeName,
+          collectionId: planned.collectionId,
+          updated: planned.updated,
+          added: planned.added,
+          unchanged: planned.unchanged,
+          ...(edit(planned.operations, `Migrate theme (${planned.themeName})`) as object),
+        } as unknown as Json;
+      }
+
+      throw new ToolError(`unsupported migrate_theme action ${JSON.stringify(shownPlainly(String(action).slice(0, 64)))}`);
+    },
+  },
 ];
 
 const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
@@ -1766,7 +2141,7 @@ export interface McpContext {
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
-const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history", "design_intelligence"]);
+const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history", "design_intelligence", "audit_design_system"]);
 
 const rpcError = (id: Json, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 const toolResult = (value: Json, isError = false) => ({
