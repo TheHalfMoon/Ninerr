@@ -1406,7 +1406,7 @@ const TOOLS: Tool[] = [
         const primaryCollection = props.collections[0];
         const ensureLightAndDarkModes = (col: any) => {
           let lightMode = col.modes.find((m: any) => m.id === "light" || m.name.toLowerCase() === "light");
-          let darkMode = col.modes.find((m: any) => m.id === "dark" || m.name.toLowerCase() === "dark");
+          let darkMode = col.modes.find((m: any) => m.id !== lightMode?.id && (m.id === "dark" || m.name.toLowerCase() === "dark"));
           const defaultModeObj = col.modes.find((m: any) => m.id === col.defaultMode) ?? col.modes[0];
           if (!lightMode && !darkMode) {
             lightMode = defaultModeObj;
@@ -1418,7 +1418,7 @@ const TOOLS: Tool[] = [
               lightMode = { id, name: "Light" };
               col.modes.push(lightMode);
               for (const existingTok of props.tokens) {
-                if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, lightMode.id)) {
+                if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, lightMode.id) && Object.hasOwn(existingTok.values, col.defaultMode)) {
                   existingTok.values[lightMode.id] = existingTok.values[col.defaultMode];
                 }
               }
@@ -1429,7 +1429,7 @@ const TOOLS: Tool[] = [
             darkMode = { id, name: "Dark" };
             col.modes.push(darkMode);
             for (const existingTok of props.tokens) {
-              if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, darkMode.id)) {
+              if (existingTok.collection === col.id && !Object.hasOwn(existingTok.values, darkMode.id) && Object.hasOwn(existingTok.values, col.defaultMode)) {
                 existingTok.values[darkMode.id] = existingTok.values[col.defaultMode];
               }
             }

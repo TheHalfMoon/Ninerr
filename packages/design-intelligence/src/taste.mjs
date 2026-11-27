@@ -353,7 +353,7 @@ export function evaluateTaste(document, { brief: briefOverride = null, rootId = 
       });
     }
 
-    // Anti-slop: heavy harsh shadows (large blur >= 40px, or murky wide blur >= 24px with heavy opacity >= 0.35)
+    // Anti-slop: heavy harsh shadows (large blur >= 40px, or murky wide blur >= 32px with heavy opacity >= 0.4)
     if (typeof rawShadow === "string" && rawShadow.trim() !== "" && rawShadow !== "none") {
       const { maxBlurPx, maxAlpha } = inspectBoxShadow(rawShadow);
       if (maxBlurPx >= 40 || (maxBlurPx >= 32 && maxAlpha >= 0.4)) {

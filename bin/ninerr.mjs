@@ -17,7 +17,7 @@ import { createInterface } from "node:readline";
 import * as studioHost from "../packages/studio-host/src/index.ts";
 const { prepareProjectsFolder, resolveProjectsFolder, runHeadless } = studioHost;
 
-const USAGE = "usage: ninerr mcp [--projects <folder>] | ninerr doctor [--projects <folder>] | ninerr design <plan|archetypes|skills> | ninerr motion <presets|compile|lint|react|frequency> | ninerr --version";
+const USAGE = "usage: ninerr mcp [--projects <folder>] | ninerr doctor [--projects <folder>] | ninerr design <plan|archetypes|archetype|skills> | ninerr motion <presets|compile|lint|react|frequency> | ninerr --version";
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 function fail(message) {

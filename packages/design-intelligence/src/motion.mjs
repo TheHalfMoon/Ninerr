@@ -360,7 +360,7 @@ export function lintMotionCss(cssText, { nodeId = null, allowAmbient = false } =
   return findings;
 }
 
-const SAFE_SELECTOR = /^[A-Za-z0-9_.\-#:\[\]="~ >+*-]{1,120}$/u;
+const SAFE_SELECTOR = /^[A-Za-z0-9_.#:\[\]="~ >+*-]{1,120}$/u;
 const UNSAFE_SELECTOR_SCHEME = /(?:javascript|vbscript|behavior\s*:|-moz-binding)/iu;
 
 function validateMotionSelector(raw) {

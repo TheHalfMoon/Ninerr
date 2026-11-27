@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
-import { PROJECT_FILES } from "../packages/persistence/src/index.ts";
+import { PROJECT_FILES, createProject } from "../packages/persistence/src/index.ts";
+import { createDocument } from "@ninerr/document-model";
 import { runHeadless } from "../packages/studio-host/src/index.ts";
 import { exportDtcgTokens, parseDtcgTokens } from "../packages/studio-host/src/tokens-dtcg.ts";
 
@@ -704,13 +705,14 @@ test("an agent plans aesthetic directions, sets a product brief with seeded toke
 
   await agent.call("close_project");
 
-  // 4. Dark-as-default & multi-collection set_design_brief({ applyDirectionId }) preserves light and dark modes safely.
+  // 4. Token missing defaultMode & dark-as-default set_design_brief({ applyDirectionId }) preserves light and dark modes safely.
   await agent.call("create_project", { name: "dark-default" });
-  await agent.call("import_source", {
-    format: "tokens-css",
-    name: "dark-first.css",
-    source: ":root { --bg-surface: 16px; } .dark { --bg-surface: 24px; }",
-  });
+  const initTok = await agent.call("set_token", { name: "--bg-surface", type: "spacing", collection: "base", values: { default: "16px" } });
+  assert.equal(initTok.isError, undefined, text(initTok));
+  const addAlt = await agent.call("add_token_mode", { collection: "base", id: "alt", name: "Alt" });
+  assert.equal(addAlt.isError, undefined, text(addAlt));
+  const onlyAltSet = await agent.call("set_token", { name: "--only-alt", type: "color", collection: "base", values: { alt: "#123456" } });
+  assert.equal(onlyAltSet.isError, undefined, text(onlyAltSet));
   const fintechPlan = (await agent.call("design_intelligence", { action: "plan", productName: "Vault", domain: "fintech" })).structuredContent;
   const darkSeeded = await agent.call("set_design_brief", {
     productName: "Vault",
@@ -719,9 +721,45 @@ test("an agent plans aesthetic directions, sets a product brief with seeded toke
   });
   assert.equal(darkSeeded.isError, undefined, text(darkSeeded));
   const tokensAfter = (await agent.call("design_tokens")).structuredContent.tokens;
+  const onlyAlt = tokensAfter.find((t) => t.name === "--only-alt");
+  assert.deepEqual(onlyAlt.values, { alt: "#123456" }, "token missing defaultMode is never backfilled with undefined");
   const bgSurface = tokensAfter.find((t) => t.name === "--bg-surface");
   assert.equal(bgSurface.type, "color", "existing token type reconciled to planned token type");
   assert.notEqual(bgSurface.values.default, bgSurface.values.dark, "light and dark values stay distinct");
+  await agent.call("close_project");
+
+  // 5. True dark-as-default collection (defaultMode: "dark", only dark mode) creates a distinct light mode without dropping light values.
+  const darkDoc = createDocument({ id: "doc-dark-only", name: "Dark First" });
+  darkDoc.schemaVersion = 2;
+  darkDoc.rootIds.push("ds-dark");
+  darkDoc.nodes["ds-dark"] = {
+    id: "ds-dark",
+    type: "design-system",
+    parentId: null,
+    children: [],
+    metadata: {},
+    props: {
+      name: "Dark DS",
+      collections: [{ id: "base", name: "Base", modes: [{ id: "dark", name: "Dark" }], defaultMode: "dark" }],
+      tokens: [{ name: "--existing-dark", type: "color", collection: "base", values: { dark: "#090d16" } }],
+    },
+  };
+  const darkProjectDir = join(projects, "dark-only");
+  mkdirSync(darkProjectDir, { recursive: true });
+  createProject(darkProjectDir, { projectId: "dark-only", document: darkDoc, createdAt: "2026-11-27T00:00:00.000Z" });
+  const openDark = await agent.call("open_project", { name: "dark-only" });
+  assert.equal(openDark.isError, undefined, text(openDark));
+  const darkOnlySeed = await agent.call("set_design_brief", {
+    productName: "Nocturne",
+    domain: "developer-tools",
+    applyDirectionId: chosenId,
+  });
+  assert.equal(darkOnlySeed.isError, undefined, text(darkOnlySeed));
+  const darkOnlyTokens = (await agent.call("design_tokens")).structuredContent;
+  assert.ok(darkOnlyTokens.collections[0].modes.some((m) => m.id === "light"), "light mode created for dark-as-default collection");
+  const darkOnlyBg = darkOnlyTokens.tokens.find((t) => t.name === "--bg-surface");
+  assert.ok(typeof darkOnlyBg.values.light === "string" && typeof darkOnlyBg.values.dark === "string");
+  assert.notEqual(darkOnlyBg.values.light, darkOnlyBg.values.dark, "dark-as-default preserves distinct light and dark token values");
 
   await agent.call("close_project");
   await agent.stop();
