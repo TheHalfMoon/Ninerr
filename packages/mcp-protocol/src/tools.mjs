@@ -55,6 +55,10 @@ const CLASSES = Object.freeze({
   // Code, markup and tokens imported into the project; code and previews exported to exports/.
   import_source: "write",
   export_design: "write",
+  // Design intelligence: briefs, archetypes, multi-direction planning, taste critique, motion, and skills.
+  design_intelligence: "read",
+  set_design_brief: "write",
+  apply_motion: "write",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

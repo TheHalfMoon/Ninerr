@@ -622,3 +622,73 @@ test("DTCG export resolves cross-collection aliases, ignores var() in quoted str
   assert.equal(re.types["font-note"], "fontFamily");
   assert.equal(re.descriptions["brand-action"], "Primary CTA");
 });
+
+
+test("an agent plans aesthetic directions, sets a product brief with seeded tokens, evaluates taste, applies reduced-motion presets, and reads skills via MCP", () => withProjects(async (projects) => {
+  const agent = engine(projects);
+  await agent.initialize("DesignAgent");
+  await agent.call("create_project", { name: "intel" });
+
+  // 1. Read archetypes, plan 3 distinct directions, and read skills.
+  const archs = (await agent.call("design_intelligence", { action: "archetypes" })).structuredContent;
+  assert.equal(archs.archetypes.length, 9);
+
+  const plan = (await agent.call("design_intelligence", { action: "plan", productName: "PulseOps", domain: "developer-tools", density: "compact" })).structuredContent;
+  assert.equal(plan.directions.length, 3);
+  const chosenId = plan.recommendedDirectionId;
+
+  const skills = (await agent.call("design_intelligence", { action: "skills" })).structuredContent;
+  assert.equal(skills.skills.length, 19);
+  const motionSkill = (await agent.call("design_intelligence", { action: "skill", skillId: "motion" })).structuredContent;
+  assert.match(motionSkill.markdown, /^---\nname: ninerr-motion\n/u);
+
+  // 2. Store brief + seed direction tokens in one atomic undoable transaction; BiDi refused.
+  assert.equal((await agent.call("set_design_brief", { productName: "Bad\u202eName", domain: "fintech" })).isError, true, "BiDi brief rejected");
+  const seeded = await agent.call("set_design_brief", {
+    productName: "PulseOps",
+    domain: "developer-tools",
+    density: "compact",
+    themePreference: "dark",
+    applyDirectionId: chosenId,
+  });
+  assert.equal(seeded.isError, undefined, text(seeded));
+  assert.ok(seeded.structuredContent.seededTokens >= 30);
+
+  const briefRead = (await agent.call("design_intelligence", { action: "brief" })).structuredContent;
+  assert.equal(briefRead.brief.productName, "PulseOps");
+
+  // 3. Create a frame with a low-contrast child, run taste critique, and apply reduced-motion presets.
+  const built = (await agent.call("create_layers", {
+    nodes: [
+      { tempId: "root", type: "frame", tag: "main", name: "Console", style: { padding: "48px", background: "linear-gradient(90deg, #6366f1, #ec4899)" } },
+      { parentId: "root", type: "element", tag: "p", name: "Faint", text: "Low contrast", style: { color: "#aaaaaa", "background-color": "#bbbbbb" } },
+    ],
+  })).structuredContent;
+  const rootId = built.created[0].nodeId;
+
+  const taste = (await agent.call("design_intelligence", { action: "taste", nodeId: rootId })).structuredContent;
+  assert.ok(taste.summary.deterministicDefects >= 1);
+  assert.ok(taste.findings.some((f) => f.ruleId === "taste:color-low-contrast"));
+  assert.ok(taste.findings.some((f) => f.ruleId === "taste:anti-slop-gratuitous-gradient"));
+
+  const applied = await agent.call("apply_motion", { nodeId: rootId, presetIds: ["hover", "focus", "enter"] });
+  assert.equal(applied.isError, undefined, text(applied));
+  assert.equal(applied.structuredContent.nodeId, rootId);
+
+  // Verify motion stylesheet compiles cleanly into exported HTML with prefers-reduced-motion, while tokens CSS stays :root/mode only.
+  const htmlOut = (await agent.call("export_design", { nodeId: rootId, format: "html", name: "console" })).structuredContent;
+  const htmlText = readFileSync(htmlOut.path, "utf8");
+  assert.match(htmlText, /@keyframes ninerr-enter/u);
+  assert.match(htmlText, /prefers-reduced-motion: reduce/u);
+
+  const tokCssOut = (await agent.call("export_design", { format: "tokens-css", name: "tokens" })).structuredContent;
+  const tokCssText = readFileSync(tokCssOut.path, "utf8");
+  assert.match(tokCssText, /--ease-out:/u);
+  assert.doesNotMatch(tokCssText, /@keyframes|@media/iu);
+
+  const lintClean = (await agent.call("design_intelligence", { action: "motion_lint", nodeId: rootId })).structuredContent;
+  assert.deepEqual(lintClean.findings, [], "applied Ninerr motion stylesheet has 0 lint findings");
+
+  await agent.call("close_project");
+  await agent.stop();
+}));

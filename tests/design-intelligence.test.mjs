@@ -237,7 +237,7 @@ test("all 19 official Ninerr skills exist, render SKILL.md cleanly, and referenc
   assert.ok(listSkills("motion").some((s) => s.id === "motion"));
   assert.equal(getSkill("nonexistent"), null);
 
-  // Allowed tool surface: live catalog + Phase 1/2 tools + lifecycle tools.
+  // Allowed tool surface: live MCP_TOOL_NAMES + the 5 headless lifecycle tools (zero drift).
   const validTools = new Set([
     ...MCP_TOOL_NAMES,
     "list_projects",
@@ -245,11 +245,6 @@ test("all 19 official Ninerr skills exist, render SKILL.md cleanly, and referenc
     "open_project",
     "save_project",
     "close_project",
-    "create_layers",
-    "import_source",
-    "design_intelligence",
-    "set_design_brief",
-    "apply_motion",
   ]);
   for (const skill of OFFICIAL_SKILLS) {
     assert.ok(skill.recommendedTools.length > 0, `${skill.id} has tools`);

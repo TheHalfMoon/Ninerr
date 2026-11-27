@@ -2,10 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
-import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, compileTokens, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
+import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, briefProblem, compileTokens, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
 import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride, setLayout } from "@ninerr/canvas";
 import { RECORD_SOURCES, UI_COMPONENT_SOURCES, loadComponentRecords, searchComponents } from "@ninerr/component-sources";
+import { ARCHETYPE_IDS, DOMAIN_ARCHETYPES, MOTION_PRESETS, MOTION_PRESET_IDS, MOTION_TOKENS, compileMotionReact, compileMotionStylesheet, evaluateMotionFrequency, evaluateTaste, getDomainArchetype, getSkill, lintMotionCss, listSkills, planDesignDirections, renderSkillMarkdown } from "@ninerr/design-intelligence";
 import { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
 import { StudioError } from "./errors.ts";
 import { ImportDesk } from "./imports.ts";
@@ -382,6 +383,7 @@ const TOOLS: Tool[] = [
         "Style values are CSS strings (\"24px\", \"#336699\"); null removes a property.",
         "search_design_references and get_design_reference read the local reference pack the person has chosen for this project. They change nothing, and a reference's rights say whether it may be reused.",
         "Library components: search_components finds components of the component sources Ninerr has records of (Meta Astryx, pinned) by name or purpose; get_component gives one's exact props, variants, accessibility criteria, limitations, import path and provenance. Use only props a record lists. They change nothing and fetch nothing.",
+        "Design intelligence: design_intelligence reads domain archetypes, plans multi-direction aesthetic tokens, runs brief-aware taste critique, inspects motion presets, checks motion frequency or CSS linting, and lists or renders official Ninerr skills. set_design_brief stores the structured product brief on the design system (optionally seeding a planned direction's tokens), and apply_motion attaches reduced-motion-safe keyframes and transitions to a layer stylesheet along with motion tokens.",
       ].join("\n"),
     }),
   },
@@ -1224,6 +1226,300 @@ const TOOLS: Tool[] = [
       return { path, format: args.format, componentName, layers, bytes: Buffer.byteLength(text), replaced: taken } as Json;
     },
   },
+  {
+    name: "design_intelligence",
+    title: "Design intelligence, taste, motion, and skills",
+    description: "Read-only local design intelligence: list domain archetypes, plan 3 distinct token-ready aesthetic directions, run context-aware taste critique on the open document, inspect the stored design brief, list motion presets, evaluate motion frequency or lint motion CSS, and list or read Ninerr's 19 official design skills.",
+    inputSchema: object({
+      action: { type: "string", enum: ["archetypes", "plan", "taste", "brief", "motion_presets", "motion_frequency", "motion_lint", "skills", "skill"] },
+      domain: { type: "string", maxLength: 64 },
+      productName: { type: "string", maxLength: 160 },
+      audience: { type: "string", maxLength: 400 },
+      density: { type: "string", enum: ["compact", "balanced", "spacious"] },
+      themePreference: { type: "string", enum: ["light", "dark", "system"] },
+      nodeId: { type: "string", maxLength: 128 },
+      presetId: { type: "string", maxLength: 64 },
+      trigger: { type: "string", maxLength: 64 },
+      dailyUses: { type: "integer", minimum: 0, maximum: 100000 },
+      css: { type: "string", maxLength: 200000 },
+      allowAmbient: { type: "boolean" },
+      query: { type: "string", maxLength: 120 },
+      skillId: { type: "string", maxLength: 64 },
+    }, ["action"]),
+    run: ({ session }, args) => {
+      const action = args.action;
+      if (action === "archetypes") {
+        if (typeof args.domain === "string" && args.domain !== "") {
+          return { archetype: getDomainArchetype(args.domain) as unknown as Json };
+        }
+        return {
+          archetypes: ARCHETYPE_IDS.map((id) => ({
+            id,
+            title: DOMAIN_ARCHETYPES[id].title,
+            summary: DOMAIN_ARCHETYPES[id].summary,
+            defaultDensity: DOMAIN_ARCHETYPES[id].defaultDensity,
+            defaultTheme: DOMAIN_ARCHETYPES[id].defaultTheme,
+          })),
+        } as Json;
+      }
+      if (action === "brief") {
+        const system = designSystemOf(session.document as any);
+        return {
+          brief: (system?.props?.brief ?? null) as Json,
+          breakpoints: (system?.props?.breakpoints ?? null) as Json,
+          motion: (system?.props?.motion ?? null) as Json,
+        };
+      }
+      if (action === "plan") {
+        const system = designSystemOf(session.document as any);
+        const stored = system?.props?.brief;
+        const input: Record<string, unknown> = {
+          productName: typeof args.productName === "string" && args.productName.trim() !== "" ? args.productName.trim() : (stored?.productName ?? (session.document as any).name ?? "Untitled Product"),
+          domain: typeof args.domain === "string" && args.domain.trim() !== "" ? args.domain.trim() : (stored?.domain ?? "enterprise-saas"),
+        };
+        if (typeof args.audience === "string" && args.audience.trim() !== "") input.audience = args.audience.trim();
+        else if (stored?.audience) input.audience = stored.audience;
+        if (args.density !== undefined) input.density = args.density;
+        else if (stored?.density) input.density = stored.density;
+        if (args.themePreference !== undefined) input.themePreference = args.themePreference;
+        else if (stored?.themePreference) input.themePreference = stored.themePreference;
+        try {
+          return planDesignDirections(input) as unknown as Json;
+        } catch (error) {
+          throw new ToolError(error instanceof Error ? error.message : String(error));
+        }
+      }
+      if (action === "taste") {
+        const rootId = args.nodeId === undefined ? null : nodeOf(session, args.nodeId).id;
+        return evaluateTaste(session.document as any, { rootId }) as unknown as Json;
+      }
+      if (action === "motion_presets") {
+        if (typeof args.presetId === "string" && args.presetId !== "") {
+          if (!Object.hasOwn(MOTION_PRESETS, args.presetId)) throw new ToolError(`unknown motion preset ${JSON.stringify(args.presetId)}`);
+          const preset = MOTION_PRESETS[args.presetId as keyof typeof MOTION_PRESETS];
+          return {
+            preset: { id: preset.id, trigger: preset.trigger, duration: preset.duration, easing: preset.easing, properties: preset.properties, maxFrequency: preset.maxFrequency, summary: preset.summary },
+            react: compileMotionReact(preset.id),
+          } as unknown as Json;
+        }
+        return {
+          tokens: MOTION_TOKENS,
+          presets: MOTION_PRESET_IDS.map((id) => {
+            const p = MOTION_PRESETS[id as keyof typeof MOTION_PRESETS];
+            return { id: p.id, trigger: p.trigger, duration: p.duration, easing: p.easing, properties: p.properties, maxFrequency: p.maxFrequency, summary: p.summary };
+          }),
+        } as unknown as Json;
+      }
+      if (action === "motion_frequency") {
+        if (typeof args.trigger !== "string" || typeof args.presetId !== "string") {
+          throw new ToolError("motion_frequency requires trigger and presetId");
+        }
+        return evaluateMotionFrequency({
+          trigger: args.trigger,
+          presetId: args.presetId,
+          dailyUses: typeof args.dailyUses === "number" ? args.dailyUses : null,
+        }) as unknown as Json;
+      }
+      if (action === "motion_lint") {
+        let css = typeof args.css === "string" ? args.css : "";
+        let nodeId: string | null = null;
+        if (args.nodeId !== undefined) {
+          const node = nodeOf(session, args.nodeId);
+          nodeId = node.id;
+          css = typeof node.props?.stylesheet === "string" ? node.props.stylesheet : "";
+        }
+        return { nodeId, findings: lintMotionCss(css, { nodeId, allowAmbient: args.allowAmbient === true }) } as unknown as Json;
+      }
+      if (action === "skills") {
+        return { skills: listSkills(typeof args.query === "string" ? args.query : "") } as unknown as Json;
+      }
+      if (action === "skill") {
+        if (typeof args.skillId !== "string" || args.skillId.trim() === "") throw new ToolError("skill action requires skillId");
+        const skill = getSkill(args.skillId);
+        if (!skill) throw new ToolError(`unknown Ninerr skill ${JSON.stringify(args.skillId)}`);
+        return { skill, markdown: renderSkillMarkdown(skill) } as unknown as Json;
+      }
+      throw new ToolError(`unsupported design_intelligence action ${JSON.stringify(String(action))}`);
+    },
+  },
+  {
+    name: "set_design_brief",
+    title: "Set product design brief",
+    description: "Store a structured product design brief on the project's design-system node (creating it if needed) in one undoable change. Optionally pass applyDirectionId from design_intelligence(action: \"plan\") to seed that direction's full light and dark token palette atomically.",
+    inputSchema: object({
+      productName: { type: "string", minLength: 1, maxLength: 160 },
+      domain: { type: "string", minLength: 1, maxLength: 64 },
+      audience: { type: "string", maxLength: 400 },
+      brandTone: { type: "array", maxItems: 12, items: { type: "string", minLength: 1, maxLength: 48 } },
+      density: { type: "string", enum: ["compact", "balanced", "spacious"] },
+      themePreference: { type: "string", enum: ["light", "dark", "system"] },
+      aestheticDirection: { type: "string", maxLength: 120 },
+      constraints: { type: "array", maxItems: 24, items: { type: "string", minLength: 1, maxLength: 240 } },
+      allowExpressiveMotion: { type: "boolean" },
+      allowEditorialGradients: { type: "boolean" },
+      notes: { type: "string", maxLength: 1000 },
+      applyDirectionId: { type: "string", maxLength: 128 },
+    }, ["productName", "domain"]),
+    run: ({ session, edit }, args) => {
+      const checkBriefText = (field: string, value: unknown, multiline = false) => {
+        if (typeof value !== "string") return;
+        const body = multiline ? value.replace(JOINERS, "").replace(LINE_BREAKS, "") : value.replace(JOINERS, "");
+        if (!value.isWellFormed() || HIDDEN_TEXT.test(body) || SELECTOR_SMUGGLING.test(value)) {
+          throw new ToolError(`${field} holds hidden or reordering characters, so nothing was changed`);
+        }
+      };
+      checkBriefText("productName", args.productName);
+      checkBriefText("domain", args.domain);
+      checkBriefText("audience", args.audience);
+      checkBriefText("aestheticDirection", args.aestheticDirection);
+      checkBriefText("notes", args.notes, true);
+      if (Array.isArray(args.brandTone)) args.brandTone.forEach((v, i) => checkBriefText(`brandTone[${i}]`, v));
+      if (Array.isArray(args.constraints)) args.constraints.forEach((v, i) => checkBriefText(`constraints[${i}]`, v));
+
+      const brief: Record<string, unknown> = { productName: args.productName, domain: args.domain };
+      for (const key of ["audience", "brandTone", "density", "themePreference", "aestheticDirection", "constraints", "allowExpressiveMotion", "allowEditorialGradients", "notes"] as const) {
+        if (args[key] !== undefined) brief[key] = args[key];
+      }
+      const prob = briefProblem(brief);
+      if (prob !== null) throw new ToolError(`invalid design brief: ${prob}`);
+
+      const document = session.document as any;
+      const system = designSystemOf(document);
+      const props = system === null ? newDesignSystemProps(`${args.productName} Design System`) : structuredClone(system.props);
+      props.brief = brief;
+
+      let seededTokens = 0;
+      if (typeof args.applyDirectionId === "string" && args.applyDirectionId !== "") {
+        const planned = planDesignDirections(brief);
+        const dir = planned.directions.find((d) => d.id === args.applyDirectionId);
+        if (!dir) {
+          throw new ToolError(`unknown applyDirectionId ${JSON.stringify(args.applyDirectionId)}; valid ids: ${planned.directions.map((d) => d.id).join(", ")}`);
+        }
+        props.brief = { ...brief, aestheticDirection: brief.aestheticDirection ?? dir.name };
+        const collection = props.collections[0];
+        let darkMode = collection.modes.find((m: any) => m.id === "dark" || m.name.toLowerCase() === "dark");
+        if (!darkMode) {
+          darkMode = { id: "dark", name: "Dark" };
+          collection.modes.push(darkMode);
+          for (const existing of props.tokens) {
+            if (existing.collection === collection.id && existing.values[darkMode.id] === undefined) {
+              existing.values[darkMode.id] = existing.values[collection.defaultMode];
+            }
+          }
+        }
+        for (const tok of dir.tokens) {
+          const existing = props.tokens.find((t: any) => t.name === tok.name);
+          const nextValues = { [collection.defaultMode]: tok.light, [darkMode.id]: tok.dark };
+          if (existing) {
+            existing.values = { ...existing.values, ...nextValues };
+            existing.description = tok.description;
+          } else {
+            props.tokens.push({ name: tok.name, type: tok.type, collection: collection.id, values: nextValues, description: tok.description });
+          }
+          seededTokens += 1;
+        }
+      }
+
+      const dsProb = designSystemProblem(props);
+      if (dsProb !== null) throw new ToolError(`design system rejected brief update: ${dsProb}`);
+      const dsId = system?.id ?? `design-system-${randomUUID().slice(0, 12)}`;
+      const operations = system === null
+        ? [{ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: dsId, type: "design-system", props } }]
+        : [{ type: "set-props", nodeId: system.id, set: { collections: props.collections, tokens: props.tokens, brief: props.brief } }];
+      return {
+        designSystemId: dsId,
+        brief: props.brief,
+        seededTokens,
+        ...(edit(operations, `Set design brief for ${args.productName}`) as object),
+      } as Json;
+    },
+  },
+  {
+    name: "apply_motion",
+    title: "Apply reduced-motion-safe motion presets",
+    description: "Attach one or more Ninerr motion presets (hover, focus, press, enter, exit, modal, drawer, toast, stagger, scroll, skeleton, number-transition, spring) with mandatory prefers-reduced-motion CSS to a layer's stylesheet and register motion tokens on the design system in one undoable change.",
+    inputSchema: object({
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      presetIds: { type: "array", minItems: 1, maxItems: 8, items: { type: "string", enum: [...MOTION_PRESET_IDS] } },
+      selector: { type: "string", minLength: 1, maxLength: 120 },
+      reducedMotion: { type: "string", enum: ["respect", "minimal", "none"] },
+      addMotionTokens: { type: "boolean" },
+    }, ["nodeId", "presetIds"]),
+    run: ({ session, edit }, args) => {
+      const node = nodeOf(session, args.nodeId);
+      if (node.type === "design-system" || node.type === "component-instance" || isCodePart(node)) {
+        throw new ToolError(`cannot apply motion stylesheet directly to ${isCodePart(node) ? "code expression" : node.type} ${node.id}`);
+      }
+      if (!Array.isArray(args.presetIds) || args.presetIds.length === 0 || args.presetIds.length > 8) {
+        throw new ToolError("presetIds must contain 1 to 8 motion preset ids");
+      }
+      const selector = typeof args.selector === "string" && args.selector.trim() !== ""
+        ? args.selector.trim()
+        : `[data-ninerr-id="${node.id}"]`;
+      const reducedMotion = args.reducedMotion ?? "respect";
+      let compiled;
+      try {
+        compiled = compileMotionStylesheet({ presetIds: args.presetIds, selector, reducedMotion });
+      } catch (error) {
+        throw new ToolError(error instanceof Error ? error.message : String(error));
+      }
+
+      const startMark = "/* ninerr-motion:start */";
+      const endMark = "/* ninerr-motion:end */";
+      const existingSheet = typeof node.props?.stylesheet === "string" ? node.props.stylesheet : "";
+      const stripped = existingSheet.replace(/\/\*\s*ninerr-motion:start\s*\*\/[\s\S]*?\/\*\s*ninerr-motion:end\s*\*\//gu, "").trim();
+      const nextSheet = `${stripped === "" ? "" : `${stripped}\n\n`}${startMark}\n${compiled.css}\n${endMark}`;
+      if (Buffer.byteLength(nextSheet, "utf8") > 512 * 1024) {
+        throw new ToolError("combined node stylesheet exceeds 512 KiB budget");
+      }
+
+      const operations: unknown[] = [{ type: "set-props", nodeId: node.id, set: { stylesheet: nextSheet } }];
+      const document = session.document as any;
+      let addedTokens = 0;
+
+      if (args.addMotionTokens !== false) {
+        const system = designSystemOf(document);
+        const props = system === null ? newDesignSystemProps() : structuredClone(system.props);
+        const collection = props.collections[0];
+        for (const tok of MOTION_TOKENS) {
+          if (props.tokens.some((existing: any) => existing.name === tok.name)) continue;
+          const values: Record<string, string> = {};
+          for (const mode of collection.modes) values[mode.id] = tok.value;
+          props.tokens.push({ name: tok.name, type: tok.type, collection: collection.id, values, description: tok.description });
+          addedTokens += 1;
+        }
+        props.motion = {
+          reducedMotion,
+          defaultDuration: "220ms",
+          defaultEasing: "cubic-bezier(0.23, 1, 0.32, 1)",
+          allowAmbient: props.motion?.allowAmbient === true,
+          presets: compiled.presets.map((p) => ({
+            id: p.id,
+            trigger: p.trigger,
+            duration: p.duration,
+            easing: p.easing,
+            properties: [...p.properties],
+            maxFrequency: p.maxFrequency,
+          })),
+        };
+        const dsProb = designSystemProblem(props);
+        if (dsProb !== null) throw new ToolError(`design system rejected motion tokens: ${dsProb}`);
+        if (system === null) {
+          operations.push({ type: "insert-node", parentId: null, index: document.rootIds.length, node: { id: `design-system-${randomUUID().slice(0, 12)}`, type: "design-system", props } });
+        } else {
+          operations.push({ type: "set-props", nodeId: system.id, set: { tokens: props.tokens, motion: props.motion } });
+        }
+      }
+
+      return {
+        nodeId: node.id,
+        selector: compiled.selector,
+        presetIds: compiled.presetIds,
+        addedTokens,
+        ...(edit(operations, `Apply motion presets (${compiled.presetIds.join(", ")})`) as object),
+      } as Json;
+    },
+  },
 ];
 
 const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
@@ -1415,7 +1711,7 @@ export interface McpContext {
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
-const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history"]);
+const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history", "design_intelligence"]);
 
 const rpcError = (id: Json, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 const toolResult = (value: Json, isError = false) => ({
