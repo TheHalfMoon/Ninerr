@@ -102,7 +102,7 @@ async function doctor() {
         if (pending) {
           answers.delete(message.id);
           if (Object.hasOwn(message, "error") && message.error !== undefined) {
-            const detail = message.error !== null && typeof message.error === "object"
+            const detail = message.error !== null && typeof message.error === "object" && !Array.isArray(message.error)
               ? `MCP error ${message.error.code ?? "unknown"}: ${message.error.message ?? "unspecified"}`
               : `MCP error: ${JSON.stringify(message.error)}`;
             pending.reject(new Error(detail));
@@ -145,7 +145,15 @@ async function doctor() {
     lines.close();
     output.destroy();
     if (running !== null) {
-      await Promise.race([running.catch(() => {}), new Promise((resolve) => setTimeout(resolve, 1_000).unref?.())]);
+      let teardownTimer;
+      try {
+        await Promise.race([
+          running.catch(() => {}),
+          new Promise((resolve) => { teardownTimer = setTimeout(resolve, 1_000); }),
+        ]);
+      } finally {
+        clearTimeout(teardownTimer);
+      }
     }
     rmSync(scratch, { recursive: true, force: true, maxRetries: 5 });
   }

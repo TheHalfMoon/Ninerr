@@ -112,3 +112,14 @@ test("doctor rejects a JSON-RPC error on a subsequent tool call", () => {
     assert.match(result.stdout, /MCP error -32000: disk full/);
   });
 });
+
+test("doctor exits cleanly with code 1 even if a broken engine never resolves after an RPC error", () => {
+  withFakeEngine('await new Promise((resolve) => input.once("data", resolve)); output.write(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32603, message: "hung after error" } }) + "\\n"); await new Promise(() => {});', (cli, root) => {
+    const result = spawnSync(process.execPath, [cli, "doctor", "--projects", root], {
+      encoding: "utf8", timeout: 8_000,
+    });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stdout, /MCP error -32603: hung after error/);
+    assert.match(result.stdout, /1 check failed\./);
+  });
+});
