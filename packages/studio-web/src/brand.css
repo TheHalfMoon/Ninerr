@@ -1,0 +1,41 @@
+/* Ninerr brand tokens (identity v1.1). The one source for brand colour and type in the
+   editor: styles.css reads only these variables, never raw brand hexes. Palette from
+   Ninerr_Brand_Identity_v1.1: Mint #54F0D0, Ink #091715, Deep Green #092C29, Canvas
+   #F7F9F8, White #FFFFFF. The workspace greys keep long sessions easy on the eye; every
+   text pair below is at least 4.5:1 (checked by tests/editor-accessibility.test.mjs). */
+:root {
+  --brand-mint: #54f0d0;
+  --brand-ink: #091715;
+  --brand-deep-green: #092c29;
+  --brand-canvas: #f7f9f8;
+  --brand-white: #ffffff;
+
+  /* Workspace roles. */
+  --ws-canvas: #e8ecea;        /* the area behind artboards */
+  --ws-panel: #f7f9f8;         /* toolbar, side panels, status bar */
+  --ws-surface: #ffffff;       /* inputs, dialogs, cards */
+  --ws-field: #eef1f0;         /* quiet field and disabled fill */
+  --ws-line: #d9e0dd;          /* hairlines */
+  --ws-field-line: #8a9a95;    /* input borders (3:1 on white) */
+  --ws-text: #091715;          /* Ink: 15.4:1 on canvas grey */
+  --ws-muted: #4d615b;         /* secondary text: >= 5.3:1 on every panel grey */
+  --ws-select: #ddfbf4;        /* selection fill, Ink text on it */
+  --ws-select-line: #0a7d69;   /* selection and drop markers */
+  --ws-focus: #0a7d69;         /* focus ring: >= 3:1 on every surface */
+  /* Soft accents (founder pick, 2026-11-14): teal marks agent work, peach marks notes. */
+  --brand-teal-soft: #c7e9e2;
+  --brand-peach: #f9dcbd;
+  --ws-agent: #0a6b5a;         /* agent changes: 4.9:1 on teal-soft */
+  --ws-agent-fill: var(--brand-teal-soft);
+  --ws-note-fill: var(--brand-peach);
+  --ws-danger: #a3202b;
+  --ws-primary: #091715;       /* primary action: Ink with White text, 18.3:1 */
+  --ws-primary-text: #ffffff;
+  --ws-hover: #e8ecea;
+  --ws-backdrop: #2f3d39;
+
+  /* Type: Manrope for the interface (SIL OFL 1.1). Until the font file is vendored the
+     stack falls back to the platform UI face. */
+  --font-ui: "Manrope", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}

@@ -216,7 +216,7 @@ test("every editor action works from the keyboard, with visible focus", browserT
     const shot = await page.screenshot({ clip: { x: stageBox.x, y: stageBox.y + stageBox.height / 2, width: 2, height: 1 } });
     const { PNG } = await import("./support/png.mjs");
     const pixel = PNG.firstPixel(shot);
-    assert.deepEqual(pixel, [26, 95, 208], `the ring is visible at the canvas edge (got ${pixel})`);
+    assert.deepEqual(pixel, [10, 125, 105], `the ring is visible at the canvas edge (got ${pixel})`);
     // The design frame is not a tab stop: Tab leaves the canvas for the next control.
     await page.keyboard.press("Tab");
     assert.notEqual(await page.evaluate(() => document.activeElement.localName), "iframe", "Tab does not stop on the design frame");
@@ -660,7 +660,7 @@ test("at 320 px every Tab stop shows a ring, in view", browserTestOptions(), asy
         const box = await page.locator("[role=application]").boundingBox();
         const { PNG } = await import("./support/png.mjs");
         const shot = await page.screenshot({ clip: { x: box.x, y: box.y + box.height / 2, width: 2, height: 1 } });
-        assert.deepEqual(PNG.firstPixel(shot), [26, 95, 208], "the canvas shows focus at 320 px");
+        assert.deepEqual(PNG.firstPixel(shot), [10, 125, 105], "the canvas shows focus at 320 px");
       } else assert.ok(now.visible, `${name} shows focus at 320 px`);
       assert.ok(now.inView, `${name} is in view at 320 px`);
     }
