@@ -2,16 +2,16 @@
 // 1. Static offline codebase analysis (framework, styling, routes, components, static AST token
 //    extraction, and functional contract inventory — never executes target code or configs).
 // 2. Whole-File @babel/parser Business-Logic & JSX Functional-Contract Invariance Gate
-//    (including preservation of dynamic className/style expressions).
-// 3. 3-Tier Bounded Patch Engine (Tier 1 CSS variables, Tier 2 JSX className / cn / clsx / twMerge /
-//    cva static strings, Tier 3 opt-in structural) with SHA-256 conflict checks, symlink-safe
-//    workspace confinement, trusted journaled backups, and atomic multi-file rollback.
+//    (strict container allowlist, TS generic preservation, fail-closed dynamic styling skeletons).
+// 3. 3-Tier Bounded Patch Engine (Tier 1 CSS variables, Tier 2 JSX className / cn / clsx / twMerge
+//    static strings, Tier 3 opt-in structural JSX/TS) with SHA-256 conflict checks, symlink-safe
+//    workspace confinement, trusted owner-only rollback journals, and atomic multi-file rollback.
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
-  chmodSync,
   closeSync,
   constants,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   lstatSync,
@@ -24,11 +24,12 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, join, parse as parsePath, relative, resolve, sep } from "node:path";
 import { parse as babelParse } from "@babel/parser";
 import { cssValueProblem } from "@ninerr/document-model";
 import { StudioError } from "./errors.ts";
 import { readTrustedFile, writeTrustedFile } from "./trusted-file.ts";
+import { readWithSecurity } from "./windows-security.ts";
 
 export const REDESIGN_LIMITS = Object.freeze({
   maxScanFiles: 600,
@@ -45,20 +46,20 @@ const SKIP_DIRS = new Set([
   "node_modules", ".git", ".next", "dist", "build", "out",
   ".turbo", ".nuxt", ".svelte-kit", "coverage", ".cache",
 ]);
-const CODE_EXTS = new Set([".tsx", ".jsx", ".ts", ".js", ".mjs", ".vue", ".svelte", ".astro"]);
+const CODE_EXTS = new Set([".tsx", ".jsx", ".ts", ".js", ".mjs", ".mts", ".cts", ".cjs", ".vue", ".svelte", ".astro"]);
 const JSX_EXTS = new Set([".tsx", ".jsx", ".js", ".mjs"]);
+/** Every file extension permitted for Tier 3 explicitPatches — all MUST pass Whole-File AST Invariance. */
+const INVARIANCE_GATED_EXTS = new Set([".tsx", ".jsx", ".js", ".mjs", ".ts", ".mts", ".cts", ".cjs"]);
 const CSS_EXTS = new Set([".css", ".scss"]);
-const CLASS_HELPERS = new Set(["cn", "clsx", "cx", "twMerge", "classNames", "cva"]);
+const CLASS_HELPERS = new Set(["cn", "clsx", "cx", "twMerge", "classNames"]);
 const FUNCTIONAL_ATTR_PREFIXES = ["on", "aria-", "data-"];
 const FUNCTIONAL_ATTRS = new Set([
   "ref", "key", "id", "name", "type", "role", "href", "to", "action", "method",
   "value", "defaultValue", "checked", "defaultChecked", "disabled", "required",
   "readOnly", "tabIndex", "data-testid", "htmlFor", "for", "target", "rel",
 ]);
-const PRESERVED_ELEMENTS = new Set([
-  "form", "button", "a", "input", "select", "textarea", "label",
-  "img", "video", "audio", "canvas", "iframe", "dialog", "details", "summary", "slot",
-]);
+/** Explicit allowlist of interchangeable HTML layout container tags; EVERY other tag stays verbatim. */
+const INTERCHANGEABLE_CONTAINERS = new Set(["div", "section", "article", "aside", "header", "footer", "main", "nav"]);
 const INTERACTIVE_ELEMENTS = new Set(["form", "button", "a", "input", "select", "textarea", "label"]);
 const AST_META_KEYS = new Set([
   "start", "end", "loc", "extra", "leadingComments", "trailingComments",
@@ -87,6 +88,32 @@ function insideFolder(parent: string, child: string): boolean {
   return child === parent || child.startsWith(prefix);
 }
 
+/**
+ * Walk every component of an absolute path and reject any symlink (existing or dangling),
+ * permitting only macOS top-level OS symlinks (`/var`, `/tmp`, `/etc` -> `/private/*`).
+ */
+export function assertNoSymlinkPath(absPath: string, label: string): string {
+  const abs = resolve(absPath);
+  const parsed = parsePath(abs);
+  const tail = abs.slice(parsed.root.length).split(sep).filter(Boolean);
+  let cursor = parsed.root;
+  for (const part of tail) {
+    cursor = join(cursor, part);
+    const stat = lstatOrNull(cursor);
+    if (stat !== null && stat.isSymbolicLink()) {
+      if (process.platform === "darwin" && (cursor === "/var" || cursor === "/tmp" || cursor === "/etc")) {
+        const target = realpathSync.native(cursor);
+        if (target === `/private${cursor}`) {
+          cursor = target;
+          continue;
+        }
+      }
+      throw new StudioError(409, "symlink-refused", `refusing to use symlinked ${label}`);
+    }
+  }
+  return cursor;
+}
+
 /** Validate and resolve a workspace folder (existing non-root directory, optional non-overlap with projectsRoot). */
 export function assertWorkspaceRoot(workspaceRoot: string, projectsRoot?: string): string {
   if (typeof workspaceRoot !== "string" || workspaceRoot.trim() === "" || workspaceRoot.length > 1024 || /[\u0000-\u001f]/u.test(workspaceRoot)) {
@@ -110,15 +137,27 @@ export function assertWorkspaceRoot(workspaceRoot: string, projectsRoot?: string
     throw new StudioError(400, "workspace-is-root", "choose an application folder, not the filesystem root");
   }
   if (projectsRoot !== undefined) {
-    const projectsReal = realpathSync.native(resolve(projectsRoot));
-    if (insideFolder(projectsReal, rootReal) || insideFolder(rootReal, projectsReal)) {
+    const projectsResolved = resolve(projectsRoot);
+    let projectsCmp = projectsResolved;
+    try {
+      projectsCmp = realpathSync.native(projectsResolved);
+    } catch {
+      // Projects folder may not exist yet on first CLI invocation; compare resolved paths.
+    }
+    const cmpA = process.platform === "win32" ? projectsCmp.toLowerCase() : projectsCmp;
+    const cmpB = process.platform === "win32" ? rootReal.toLowerCase() : rootReal;
+    if (insideFolder(cmpA, cmpB) || insideFolder(cmpB, cmpA)) {
       throw new StudioError(400, "workspace-overlaps-projects", "workspace folder must not overlap Ninerr's projects folder");
     }
   }
   return rootReal;
 }
 
-/** Resolve a forward-slash relative path inside `workspaceRoot`, rejecting symlinks, traversal, and non-regular files. */
+/**
+ * Resolve a forward-slash relative path inside `workspaceRoot`, rejecting symlinks, traversal,
+ * forbidden directories (`.git`, `node_modules`, build caches), and non-regular files.
+ * Canonicalizes case on Windows/macOS via `realpathSync.native` when the file exists.
+ */
 export function resolveSafeWorkspaceFile(
   workspaceRoot: string,
   relPath: string,
@@ -142,6 +181,12 @@ export function resolveSafeWorkspaceFile(
     const seg = segments[i];
     if (seg === "" || seg === "." || seg === "..") {
       throw new StudioError(400, "invalid-path", `path escapes workspace: ${relPath.slice(0, 80)}`);
+    }
+    if (i < segments.length - 1 && SKIP_DIRS.has(seg)) {
+      throw new StudioError(400, "forbidden-path", `refusing to access restricted directory ${seg} in ${relPath.slice(0, 80)}`);
+    }
+    if (i === segments.length - 1 && (seg === ".git" || seg === "node_modules")) {
+      throw new StudioError(400, "forbidden-path", `refusing to access restricted path ${relPath.slice(0, 80)}`);
     }
     cursor = join(cursor, seg);
     const stat = lstatOrNull(cursor);
@@ -169,13 +214,13 @@ export function resolveSafeWorkspaceFile(
         throw new StudioError(400, "invalid-path", `path escapes workspace: ${relPath.slice(0, 80)}`);
       }
     }
-  } else {
-    const leafReal = realpathSync.native(cursor);
-    if (!leafReal.startsWith(rootReal.endsWith(sep) ? rootReal : `${rootReal}${sep}`)) {
-      throw new StudioError(400, "invalid-path", `path escapes workspace: ${relPath.slice(0, 80)}`);
-    }
+    return { rootReal, absPath: cursor, relNorm: segments.join("/") };
   }
-  return { rootReal, absPath: cursor, relNorm: segments.join("/") };
+  const leafReal = realpathSync.native(cursor);
+  if (!leafReal.startsWith(rootReal.endsWith(sep) ? rootReal : `${rootReal}${sep}`)) {
+    throw new StudioError(400, "invalid-path", `path escapes workspace: ${relPath.slice(0, 80)}`);
+  }
+  return { rootReal, absPath: leafReal, relNorm: relative(rootReal, leafReal).split(sep).join("/") };
 }
 
 /** Read a bounded UTF-8 regular file inside `workspaceRoot` without following symlinks or blocking on FIFOs. */
@@ -185,10 +230,30 @@ export function readBoundedWorkspaceFile(
   maxBytes = REDESIGN_LIMITS.maxFileBytes,
 ): { file: string; absPath: string; content: string; sha256: string; mode: number } {
   const { absPath, relNorm } = resolveSafeWorkspaceFile(workspaceRoot, relPath, { mustExist: true });
-  const preStat = lstatOrNull(absPath);
-  if (!preStat || preStat.isSymbolicLink() || !preStat.isFile()) {
-    throw new StudioError(409, "symlink-refused", `refusing to read non-regular or symlinked file ${relNorm}`);
+
+  if (process.platform === "win32") {
+    let winRead;
+    try {
+      winRead = readWithSecurity(absPath, maxBytes);
+    } catch (error) {
+      throw new StudioError(500, "read-failed", `could not open ${relNorm}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (winRead === null) throw new StudioError(404, "missing-file", `file not found: ${relNorm}`);
+    if (!winRead.regularFile) {
+      throw new StudioError(409, "symlink-refused", `refusing to read non-regular or symlinked file ${relNorm}`);
+    }
+    if (winRead.size > maxBytes || winRead.bytes === null) {
+      throw new StudioError(413, "file-too-large", `${relNorm} exceeds maximum allowed size of ${maxBytes} bytes`);
+    }
+    let content: string;
+    try {
+      content = UTF8.decode(winRead.bytes);
+    } catch {
+      throw new StudioError(409, "source-not-utf8", `${relNorm} is not valid UTF-8`);
+    }
+    return { file: relNorm, absPath, content, sha256: sha256(content), mode: 0o644 };
   }
+
   const openFlags =
     constants.O_RDONLY |
     (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0) |
@@ -208,9 +273,18 @@ export function readBoundedWorkspaceFile(
     if (stat.size > maxBytes) {
       throw new StudioError(413, "file-too-large", `${relNorm} exceeds maximum allowed size of ${maxBytes} bytes`);
     }
-    const buf = Buffer.allocUnsafe(maxBytes + 1);
+    const allocBytes = Math.min(maxBytes + 1, Math.max(4096, stat.size + 1));
+    let buf = Buffer.allocUnsafe(allocBytes);
     let total = 0;
-    while (total < buf.length) {
+    while (true) {
+      if (total >= buf.length) {
+        if (total > maxBytes) {
+          throw new StudioError(413, "file-too-large", `${relNorm} exceeds maximum allowed size of ${maxBytes} bytes`);
+        }
+        const grown = Buffer.allocUnsafe(Math.min(maxBytes + 1, buf.length * 2));
+        buf.copy(grown, 0, 0, total);
+        buf = grown;
+      }
       const n = readSync(fd, buf, total, buf.length - total, null);
       if (n === 0) break;
       total += n;
@@ -230,39 +304,51 @@ export function readBoundedWorkspaceFile(
   }
 }
 
-/** Verify a journal directory (or its deepest existing parent) is not a symlink, and create it owner-only (0o700). */
+/** Read-only resolution of an existing journal directory (never creates directories on disk). */
+function resolveExistingJournalDir(journalDir: string): string | null {
+  if (typeof journalDir !== "string" || journalDir.trim() === "" || journalDir.length > 1024 || /[\u0000-\u001f]/u.test(journalDir)) {
+    throw new StudioError(400, "invalid-journal-dir", "journalDir must be a valid directory path");
+  }
+  const checked = assertNoSymlinkPath(journalDir, "journal directory");
+  const stat = lstatOrNull(checked);
+  if (stat === null) return null;
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new StudioError(409, "symlink-refused", "journalDir is not a trusted directory");
+  }
+  return realpathSync.native(checked);
+}
+
+/** Verify a journal directory has no user symlinks anywhere in its path and create it owner-only (0o700). */
 function prepareSafeJournalDir(journalDir: string): string {
   if (typeof journalDir !== "string" || journalDir.trim() === "" || journalDir.length > 1024 || /[\u0000-\u001f]/u.test(journalDir)) {
     throw new StudioError(400, "invalid-journal-dir", "journalDir must be a valid directory path");
   }
-  const abs = resolve(journalDir);
-  let probe = abs;
-  while (true) {
-    const stat = lstatOrNull(probe);
-    if (stat !== null) {
-      if (stat.isSymbolicLink()) {
-        throw new StudioError(409, "symlink-refused", "refusing to use a symlinked journal directory");
-      }
-      if (!stat.isDirectory()) {
-        throw new StudioError(400, "invalid-journal-dir", "journalDir path contains a non-directory segment");
-      }
-      break;
-    }
-    const parent = dirname(probe);
-    if (parent === probe) break;
-    probe = parent;
+  const checked = assertNoSymlinkPath(journalDir, "journal directory");
+  const existing = lstatOrNull(checked);
+  if (existing !== null && !existing.isDirectory()) {
+    throw new StudioError(400, "invalid-journal-dir", "journalDir path is not a directory");
   }
-  mkdirSync(abs, { recursive: true, mode: 0o700 });
-  const finalStat = lstatOrNull(abs);
+  mkdirSync(checked, { recursive: true, mode: 0o700 });
+  const finalStat = lstatOrNull(checked);
   if (!finalStat || finalStat.isSymbolicLink() || !finalStat.isDirectory()) {
     throw new StudioError(409, "symlink-refused", "journalDir is not a trusted directory");
   }
-  return realpathSync.native(abs);
+  return realpathSync.native(checked);
 }
 
-/** Atomically replace a workspace file without following symlinks, preserving permissions on POSIX. */
-function writeWorkspaceFileAtomic(workspaceRoot: string, relPath: string, content: string, preserveMode?: number): void {
+/** Atomically replace a workspace file without following symlinks, preserving permissions via `fchmodSync`. */
+function writeWorkspaceFileAtomic(
+  workspaceRoot: string,
+  relPath: string,
+  content: string,
+  { preserveMode, expectedBeforeSha256 }: { preserveMode?: number; expectedBeforeSha256?: string } = {},
+): void {
   const { absPath } = resolveSafeWorkspaceFile(workspaceRoot, relPath);
+  const parentDir = dirname(absPath);
+  const parentStat = lstatOrNull(parentDir);
+  if (!parentStat || parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+    throw new StudioError(409, "missing-parent", `parent directory for ${relPath} is missing or untrusted`);
+  }
   const buf = Buffer.from(content, "utf8");
   const tmpPath = `${absPath}.${randomBytes(8).toString("hex")}.ninerr-tmp`;
   let created = false;
@@ -276,19 +362,22 @@ function writeWorkspaceFileAtomic(workspaceRoot: string, relPath: string, conten
         if (written <= 0) throw new Error("short write while replacing workspace file");
         offset += written;
       }
+      if (process.platform !== "win32" && typeof preserveMode === "number") {
+        fchmodSync(fd, preserveMode & 0o777);
+      }
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-    if (process.platform !== "win32" && typeof preserveMode === "number") {
-      chmodSync(tmpPath, preserveMode & 0o777);
+    // Re-verify full workspace path chain & optional disk SHA-256 immediately before rename.
+    const verified = resolveSafeWorkspaceFile(workspaceRoot, relPath);
+    if (expectedBeforeSha256 !== undefined) {
+      const current = readBoundedWorkspaceFile(workspaceRoot, relPath);
+      if (current.sha256 !== expectedBeforeSha256) {
+        throw new StudioError(409, "file-changed", `${relPath} changed on disk during apply; re-plan before applying`);
+      }
     }
-    // Re-verify target is not a symlink right before rename.
-    const targetStat = lstatOrNull(absPath);
-    if (targetStat !== null && (targetStat.isSymbolicLink() || !targetStat.isFile())) {
-      throw new StudioError(409, "symlink-refused", `refusing to overwrite symlink or non-regular file ${relPath}`);
-    }
-    renameSync(tmpPath, absPath);
+    renameSync(tmpPath, verified.absPath);
     created = false;
   } finally {
     if (created) {
@@ -304,8 +393,8 @@ function writeWorkspaceFileAtomic(workspaceRoot: string, relPath: string, conten
 function parseCodeAst(source: string, filePath: string) {
   const ext = extname(filePath).toLowerCase();
   const plugins: any[] = ["decorators-legacy", "importAttributes"];
-  if (ext === ".ts" || ext === ".tsx") plugins.push("typescript");
-  if (ext === ".tsx" || ext === ".jsx" || ext === ".js" || ext === ".mjs") plugins.push("jsx");
+  if (ext === ".ts" || ext === ".tsx" || ext === ".mts" || ext === ".cts") plugins.push("typescript");
+  if (ext === ".tsx" || ext === ".jsx" || ext === ".js" || ext === ".mjs" || ext === ".cjs") plugins.push("jsx");
   return babelParse(source, { sourceType: "unambiguous", plugins, errorRecovery: false });
 }
 
@@ -332,13 +421,21 @@ function jsxElementName(node: any): string {
   return "";
 }
 
+/** Normalize ONLY explicitly interchangeable layout container identifiers; keep EVERY other tag verbatim. */
+function canonicalJsxTag(nameNode: any): string {
+  if (nameNode?.type === "JSXIdentifier" && INTERCHANGEABLE_CONTAINERS.has(nameNode.name)) {
+    return "container";
+  }
+  return jsxElementName(nameNode);
+}
+
 /**
  * Extract the dynamic expression skeleton inside a styling attribute (`className`, `class`, `style`).
- * Pure static string/numeric/boolean literals and pure static style objects return `null` (so adding,
- * removing, or editing static styling passes invariance). Any dynamic binding, condition, variable,
- * or non-helper call is preserved canonically so dropping or mutating reactive logic is caught.
+ * Pure static literals and pure static style objects return `null` (so adding, removing, or editing
+ * pure static styling passes invariance). Any dynamic binding, condition, helper callee, variable,
+ * computed key, ObjectMethod, or unknown AST node fails closed into a canonicalized representation.
  */
-function dynamicStylingSkeleton(node: any): unknown | null {
+function dynamicStylingSkeleton(node: any, isStyleAttr: boolean): unknown | null {
   if (!node || typeof node !== "object") return null;
   switch (node.type) {
     case "StringLiteral":
@@ -347,47 +444,70 @@ function dynamicStylingSkeleton(node: any): unknown | null {
     case "NullLiteral":
     case "JSXEmptyExpression":
       return null;
+    case "UnaryExpression":
+      if ((node.operator === "-" || node.operator === "+") && node.argument?.type === "NumericLiteral") {
+        return null;
+      }
+      return canonicalAstJson(node, { stripJsxStyling: true });
+    case "ParenthesizedExpression":
+      return dynamicStylingSkeleton(node.expression, isStyleAttr);
+    case "TSAsExpression":
+    case "TSSatisfiesExpression": {
+      const inner = dynamicStylingSkeleton(node.expression, isStyleAttr);
+      return inner === null ? null : canonicalAstJson(node, { stripJsxStyling: true });
+    }
     case "JSXExpressionContainer":
-      return dynamicStylingSkeleton(node.expression);
+      return dynamicStylingSkeleton(node.expression, isStyleAttr);
     case "TemplateLiteral": {
-      const exprs = (node.expressions ?? []).map((e: any) => dynamicStylingSkeleton(e)).filter((v: unknown) => v !== null);
+      const exprs = (node.expressions ?? []).map((e: any) => dynamicStylingSkeleton(e, isStyleAttr)).filter((v: unknown) => v !== null);
       return exprs.length > 0 ? { t: "tpl", exprs } : null;
     }
     case "ArrayExpression": {
-      const elems = (node.elements ?? []).map((e: any) => dynamicStylingSkeleton(e)).filter((v: unknown) => v !== null);
+      const elems = (node.elements ?? [])
+        .map((e: any) => (e === null ? null : dynamicStylingSkeleton(e, isStyleAttr)))
+        .filter((v: unknown) => v !== null);
       return elems.length > 0 ? { t: "arr", elems } : null;
     }
     case "ObjectExpression": {
       const entries: unknown[] = [];
       for (const prop of node.properties ?? []) {
-        if (prop.type === "SpreadElement") {
+        if (prop?.type === "SpreadElement") {
           entries.push({ t: "spread", arg: canonicalAstJson(prop.argument, { stripJsxStyling: true }) });
-        } else if (prop.type === "ObjectProperty") {
+        } else if (prop?.type === "ObjectProperty") {
           const keyDyn = prop.computed ? canonicalAstJson(prop.key, { stripJsxStyling: true }) : null;
-          const valDyn = dynamicStylingSkeleton(prop.value);
+          const valDyn = dynamicStylingSkeleton(prop.value, isStyleAttr);
           if (keyDyn !== null || valDyn !== null) {
-            entries.push({ t: "prop", ...(keyDyn !== null ? { key: keyDyn } : {}), ...(valDyn !== null ? { val: valDyn } : {}) });
+            const propKey = prop.computed
+              ? keyDyn
+              : (isStyleAttr ? (prop.key?.name ?? prop.key?.value ?? canonicalAstJson(prop.key, { stripJsxStyling: true })) : null);
+            entries.push({ t: "prop", ...(propKey !== null ? { key: propKey } : {}), ...(valDyn !== null ? { val: valDyn } : {}) });
           }
+        } else {
+          // Fail closed for ObjectMethod (getters/setters/methods) or any unexpected AST node!
+          entries.push({ t: "raw", node: canonicalAstJson(prop, { stripJsxStyling: true }) });
         }
       }
       return entries.length > 0 ? { t: "obj", entries } : null;
     }
     case "CallExpression": {
-      if (node.callee?.type === "Identifier" && CLASS_HELPERS.has(node.callee.name)) {
-        const args = (node.arguments ?? []).map((a: any) => dynamicStylingSkeleton(a)).filter((v: unknown) => v !== null);
-        return args.length > 0 ? { t: "helper", args } : null;
+      if (!isStyleAttr && node.callee?.type === "Identifier" && CLASS_HELPERS.has(node.callee.name)) {
+        const args = (node.arguments ?? [])
+          .map((a: any) => (a?.type === "SpreadElement" ? { t: "spread", arg: canonicalAstJson(a.argument, { stripJsxStyling: true }) } : dynamicStylingSkeleton(a, false)))
+          .filter((v: unknown) => v !== null);
+        // Preserve helper callee identity so unimported helpers cannot be introduced or swapped.
+        return { t: "helper", callee: node.callee.name, args };
       }
       return canonicalAstJson(node, { stripJsxStyling: true });
     }
     case "ConditionalExpression": {
       const test = canonicalAstJson(node.test, { stripJsxStyling: true });
-      const cons = dynamicStylingSkeleton(node.consequent);
-      const alt = dynamicStylingSkeleton(node.alternate);
+      const cons = dynamicStylingSkeleton(node.consequent, isStyleAttr);
+      const alt = dynamicStylingSkeleton(node.alternate, isStyleAttr);
       return { t: "cond", test, ...(cons !== null ? { cons } : {}), ...(alt !== null ? { alt } : {}) };
     }
     case "LogicalExpression": {
       const left = canonicalAstJson(node.left, { stripJsxStyling: true });
-      const right = dynamicStylingSkeleton(node.right);
+      const right = dynamicStylingSkeleton(node.right, isStyleAttr);
       return { t: "logic", op: node.operator, left, ...(right !== null ? { right } : {}) };
     }
     default:
@@ -404,7 +524,7 @@ function canonicalAstJson(node: any, { stripJsxStyling = false }: { stripJsxStyl
       if (stripJsxStyling && entry?.type === "JSXAttribute") {
         const name = jsxAttrName(entry);
         if (name === "className" || name === "class" || name === "style") {
-          const dynamic = dynamicStylingSkeleton(entry.value);
+          const dynamic = dynamicStylingSkeleton(entry.value, name === "style");
           if (dynamic !== null) {
             items.push({ type: "DynamicStyleAttr", name, dynamic });
           }
@@ -422,16 +542,38 @@ function canonicalAstJson(node: any, { stripJsxStyling = false }: { stripJsxStyl
     if (stripJsxStyling && node.type === "JSXElement" && (key === "openingElement" || key === "closingElement")) {
       if (key === "closingElement") continue;
       const opening = node.openingElement;
-      const tag = jsxElementName(opening?.name);
-      out.openingElement = {
-        tag: /^[A-Z]/u.test(tag) || PRESERVED_ELEMENTS.has(tag) ? tag : "container",
+      const openRecord: Record<string, unknown> = {
+        tag: canonicalJsxTag(opening?.name),
         attributes: canonicalAstJson(opening?.attributes ?? [], { stripJsxStyling: true }),
       };
+      if (opening?.typeParameters) {
+        openRecord.typeParameters = canonicalAstJson(opening.typeParameters, { stripJsxStyling: true });
+      }
+      if (opening?.typeArguments) {
+        openRecord.typeArguments = canonicalAstJson(opening.typeArguments, { stripJsxStyling: true });
+      }
+      out.openingElement = openRecord;
       continue;
     }
     out[key] = canonicalAstJson(node[key], { stripJsxStyling });
   }
   return out;
+}
+
+function hookNameOfCall(node: any): string | null {
+  if (node?.type !== "CallExpression") return null;
+  if (node.callee?.type === "Identifier" && /^use[A-Z]/u.test(node.callee.name)) {
+    return node.callee.name;
+  }
+  if (
+    node.callee?.type === "MemberExpression" &&
+    !node.callee.computed &&
+    node.callee.property?.type === "Identifier" &&
+    /^use[A-Z]/u.test(node.callee.property.name)
+  ) {
+    return node.callee.property.name;
+  }
+  return null;
 }
 
 function extractFunctionalContract(ast: any, source: string) {
@@ -441,20 +583,20 @@ function extractFunctionalContract(ast: any, source: string) {
   const functionalAttrs: string[] = [];
   const spreads: string[] = [];
   const interactiveTags: Record<string, number> = Object.create(null);
-  const childExpressions: string[] = [];
 
   const stack: any[] = [ast.program];
   while (stack.length > 0) {
     const node = stack.pop();
     if (!node || typeof node !== "object") continue;
 
-    if (node.type === "CallExpression" && node.callee?.type === "Identifier" && /^use[A-Z]/u.test(node.callee.name)) {
-      hooks.push(node.callee.name);
-    }
+    const hookName = hookNameOfCall(node);
+    if (hookName !== null) hooks.push(hookName);
+
     if (node.type === "JSXOpeningElement") {
-      const tag = jsxElementName(node.name);
-      if (INTERACTIVE_ELEMENTS.has(tag)) {
-        interactiveTags[tag] = (interactiveTags[tag] ?? 0) + 1;
+      const rawTag = jsxElementName(node.name);
+      const normTag = canonicalJsxTag(node.name);
+      if (INTERACTIVE_ELEMENTS.has(rawTag)) {
+        interactiveTags[rawTag] = (interactiveTags[rawTag] ?? 0) + 1;
       }
       for (const attr of node.attributes ?? []) {
         if (attr.type === "JSXSpreadAttribute") {
@@ -463,26 +605,17 @@ function extractFunctionalContract(ast: any, source: string) {
           const name = jsxAttrName(attr);
           if (isFunctionalJsxAttr(name)) {
             const valSlice = attr.value ? source.slice(attr.value.start, attr.value.end).replace(/\s+/gu, " ").trim() : "true";
-            const entry = `${tag}:${name}=${valSlice}`;
+            const entry = `${normTag}:${name}=${valSlice}`;
             if (/^on[A-Z]/u.test(name)) handlers.push(entry);
             else functionalAttrs.push(entry);
           }
         }
       }
     }
-    if (node.type === "JSXExpressionContainer" && node.expression && node.expression.type !== "JSXEmptyExpression") {
-      childExpressions.push(JSON.stringify(canonicalAstJson(node.expression)));
-    }
 
     for (const key of Object.keys(node)) {
       if (AST_META_KEYS.has(key)) continue;
       const child = node[key];
-      if (node.type === "JSXAttribute" && key === "value") {
-        const attrName = jsxAttrName(node);
-        if ((attrName === "className" || attrName === "class" || attrName === "style") && child?.type === "JSXExpressionContainer") {
-          continue;
-        }
-      }
       if (Array.isArray(child)) {
         for (const item of child) if (item && typeof item === "object" && typeof item.type === "string") stack.push(item);
       } else if (child && typeof child === "object" && typeof child.type === "string") {
@@ -495,15 +628,14 @@ function extractFunctionalContract(ast: any, source: string) {
   handlers.sort(compareCodeUnits);
   functionalAttrs.sort(compareCodeUnits);
   spreads.sort(compareCodeUnits);
-  childExpressions.sort(compareCodeUnits);
-  return { directives, hooks, handlers, functionalAttrs, spreads, interactiveTags, childExpressions };
+  return { directives, hooks, handlers, functionalAttrs, spreads, interactiveTags };
 }
 
 /**
  * Whole-File @babel/parser Business-Logic & JSX Functional-Contract Invariance Gate.
  * Proves a visual redesign patch kept directive prologues, non-JSX business logic, hooks,
- * event handlers, spreads, form/test/aria/data attributes, interactive/media elements,
- * and dynamic styling conditions 100% intact.
+ * event handlers, spreads, form/test/aria/data attributes, non-container tags, TS generics,
+ * and dynamic styling expressions 100% intact.
  */
 export function verifyFunctionalInvariance(beforeSource: string, afterSource: string, filePath = "Component.tsx") {
   const violations: string[] = [];
@@ -558,13 +690,19 @@ export function verifyFunctionalInvariance(beforeSource: string, afterSource: st
 }
 
 /**
- * Character-level CSS custom-property scanner skipping comments and quoted strings.
- * Handles both `;`-terminated and `}`-terminated declarations without executing anything.
+ * Declaration-context-aware CSS/SCSS custom-property scanner skipping comments (`/* ... *\/` and
+ * SCSS `// ...`), quoted strings, and `url(...)` arguments. Recognizes `--name: value` ONLY at
+ * declaration start inside `{ ... }` blocks.
  */
-export function extractCssCustomProperties(cssText: string): Array<{ name: string; value: string; start: number; end: number }> {
+export function extractCssCustomProperties(
+  cssText: string,
+  { scss = false }: { scss?: boolean } = {},
+): Array<{ name: string; value: string; start: number; end: number }> {
   const found: Array<{ name: string; value: string; start: number; end: number }> = [];
   const len = cssText.length;
   let i = 0;
+  let blockDepth = 0;
+  let expectDeclStart = false;
 
   while (i < len) {
     const ch = cssText[i];
@@ -573,6 +711,12 @@ export function extractCssCustomProperties(cssText: string): Array<{ name: strin
       i += 2;
       while (i < len && !(cssText[i] === "*" && cssText[i + 1] === "/")) i += 1;
       i = Math.min(len, i + 2);
+      continue;
+    }
+    // Skip SCSS single-line comments
+    if (scss && ch === "/" && cssText[i + 1] === "/") {
+      i += 2;
+      while (i < len && cssText[i] !== "\n") i += 1;
       continue;
     }
     // Skip quoted strings
@@ -584,43 +728,16 @@ export function extractCssCustomProperties(cssText: string): Array<{ name: strin
         if (cssText[i] === quote) { i += 1; break; }
         i += 1;
       }
+      expectDeclStart = false;
       continue;
     }
-    // Potential custom property declaration (`--name: value;` or `--name: value }`)
-    if (ch === "-" && cssText[i + 1] === "-") {
-      const prev = i > 0 ? cssText[i - 1] : " ";
-      // Must start a declaration token (not inside var(--foo) or middle of an ident).
-      if (/[A-Za-z0-9_(-]/u.test(prev)) {
-        i += 2;
-        continue;
-      }
-      let nameEnd = i + 2;
-      while (nameEnd < len && /[A-Za-z0-9_-]/u.test(cssText[nameEnd])) nameEnd += 1;
-      const name = cssText.slice(i, nameEnd);
-      if (!CSS_CUSTOM_PROP_NAME.test(name)) {
-        i = nameEnd;
-        continue;
-      }
-      // Skip whitespace/comments between property name and ':'
-      let colon = nameEnd;
-      while (colon < len) {
-        if (/\s/u.test(cssText[colon])) { colon += 1; continue; }
-        if (cssText[colon] === "/" && cssText[colon + 1] === "*") {
-          colon += 2;
-          while (colon < len && !(cssText[colon] === "*" && cssText[colon + 1] === "/")) colon += 1;
-          colon = Math.min(len, colon + 2);
-          continue;
-        }
-        break;
-      }
-      if (cssText[colon] !== ":") {
-        i = nameEnd;
-        continue;
-      }
-      let valStart = colon + 1;
-      while (valStart < len && /[ \t]/u.test(cssText[valStart])) valStart += 1;
-      let cursor = valStart;
-      let parenDepth = 0;
+    // Skip url(...) arguments (including unquoted URLs containing -- or ;)
+    if (
+      (ch === "u" || ch === "U") &&
+      /^url\s*\(/iu.test(cssText.slice(i, i + 16)) &&
+      (i === 0 || !/[A-Za-z0-9_-]/u.test(cssText[i - 1]))
+    ) {
+      let cursor = cssText.indexOf("(", i) + 1;
       let quote: string | null = null;
       while (cursor < len) {
         const c = cssText[cursor];
@@ -630,32 +747,106 @@ export function extractCssCustomProperties(cssText: string): Array<{ name: strin
           cursor += 1;
           continue;
         }
-        if (c === "/" && cssText[cursor + 1] === "*") {
-          cursor += 2;
-          while (cursor < len && !(cssText[cursor] === "*" && cssText[cursor + 1] === "/")) cursor += 1;
-          cursor = Math.min(len, cursor + 2);
-          continue;
-        }
         if (c === '"' || c === "'") { quote = c; cursor += 1; continue; }
-        if (c === "(") { parenDepth += 1; cursor += 1; continue; }
-        if (c === ")") { parenDepth = Math.max(0, parenDepth - 1); cursor += 1; continue; }
-        if (parenDepth === 0 && (c === ";" || c === "}" || c === "{")) break;
+        if (c === ")") { cursor += 1; break; }
         cursor += 1;
       }
-      if (cssText[cursor] === "{") {
-        // Not a declaration (e.g., selector-like construct).
-        i = cursor + 1;
-        continue;
-      }
-      let valEnd = cursor;
-      while (valEnd > valStart && /\s/u.test(cssText[valEnd - 1])) valEnd -= 1;
-      const rawVal = cssText.slice(valStart, valEnd);
-      if (rawVal.length > 0 && !rawVal.includes("\n")) {
-        found.push({ name, value: rawVal, start: valStart, end: valEnd });
-      }
-      i = cursor + (cssText[cursor] === ";" ? 1 : 0);
+      i = cursor;
+      expectDeclStart = false;
       continue;
     }
+    if (/\s/u.test(ch)) {
+      i += 1;
+      continue;
+    }
+    if (ch === "{") {
+      blockDepth += 1;
+      expectDeclStart = true;
+      i += 1;
+      continue;
+    }
+    if (ch === "}") {
+      blockDepth = Math.max(0, blockDepth - 1);
+      expectDeclStart = blockDepth > 0;
+      i += 1;
+      continue;
+    }
+    if (ch === ";") {
+      expectDeclStart = blockDepth > 0;
+      i += 1;
+      continue;
+    }
+
+    // Match custom property declaration ONLY at declaration start inside a block.
+    if (blockDepth > 0 && expectDeclStart && ch === "-" && cssText[i + 1] === "-") {
+      let nameEnd = i + 2;
+      while (nameEnd < len && /[A-Za-z0-9_-]/u.test(cssText[nameEnd])) nameEnd += 1;
+      const name = cssText.slice(i, nameEnd);
+      if (CSS_CUSTOM_PROP_NAME.test(name)) {
+        let colon = nameEnd;
+        while (colon < len) {
+          if (/\s/u.test(cssText[colon])) { colon += 1; continue; }
+          if (cssText[colon] === "/" && cssText[colon + 1] === "*") {
+            colon += 2;
+            while (colon < len && !(cssText[colon] === "*" && cssText[colon + 1] === "/")) colon += 1;
+            colon = Math.min(len, colon + 2);
+            continue;
+          }
+          break;
+        }
+        if (cssText[colon] === ":") {
+          let valStart = colon + 1;
+          while (valStart < len && /[ \t]/u.test(cssText[valStart])) valStart += 1;
+          let cursor = valStart;
+          let parenDepth = 0;
+          let bracketDepth = 0;
+          let quote: string | null = null;
+          while (cursor < len) {
+            const c = cssText[cursor];
+            if (quote !== null) {
+              if (c === "\\") { cursor += 2; continue; }
+              if (c === quote) quote = null;
+              cursor += 1;
+              continue;
+            }
+            if (c === "/" && cssText[cursor + 1] === "*") {
+              cursor += 2;
+              while (cursor < len && !(cssText[cursor] === "*" && cssText[cursor + 1] === "/")) cursor += 1;
+              cursor = Math.min(len, cursor + 2);
+              continue;
+            }
+            if (scss && c === "/" && cssText[cursor + 1] === "/") {
+              break;
+            }
+            if (c === '"' || c === "'") { quote = c; cursor += 1; continue; }
+            if (c === "(") { parenDepth += 1; cursor += 1; continue; }
+            if (c === ")") { parenDepth = Math.max(0, parenDepth - 1); cursor += 1; continue; }
+            if (c === "[") { bracketDepth += 1; cursor += 1; continue; }
+            if (c === "]") { bracketDepth = Math.max(0, bracketDepth - 1); cursor += 1; continue; }
+            if (parenDepth === 0 && bracketDepth === 0 && (c === ";" || c === "}" || c === "{")) break;
+            cursor += 1;
+          }
+          if (cssText[cursor] !== "{") {
+            let valEnd = cursor;
+            while (valEnd > valStart && /\s/u.test(cssText[valEnd - 1])) valEnd -= 1;
+            const rawVal = cssText.slice(valStart, valEnd);
+            if (rawVal.length > 0 && !rawVal.includes("\n")) {
+              found.push({ name, value: rawVal, start: valStart, end: valEnd });
+            }
+            if (cssText[cursor] === ";") {
+              expectDeclStart = true;
+              i = cursor + 1;
+            } else {
+              expectDeclStart = false;
+              i = cursor;
+            }
+            continue;
+          }
+        }
+      }
+    }
+
+    expectDeclStart = false;
     i += 1;
   }
   return found;
@@ -720,7 +911,9 @@ export function analyzeCodebase(workspaceRoot: string) {
 
   // Detect styling systems & scan tokens + contracts
   const styling = new Set<string>();
-  if (allDeps.tailwindcss) styling.add(String(allDeps.tailwindcss).includes("4") ? "tailwind-v4" : "tailwind-v3");
+  if (typeof allDeps.tailwindcss === "string") {
+    styling.add(allDeps.tailwindcss.includes("4") ? "tailwind-v4" : "tailwind-v3");
+  }
   if (allDeps["@stylexjs/stylex"] || allDeps["@astryxdesign/core"]) styling.add("stylex");
 
   const cssFiles = files.filter((f) => CSS_EXTS.has(extname(f).toLowerCase()));
@@ -737,7 +930,7 @@ export function analyzeCodebase(workspaceRoot: string) {
     }
     if (/@theme\b/u.test(text)) styling.add("tailwind-v4");
     if (rel.endsWith(".module.css") || rel.endsWith(".module.scss")) styling.add("css-modules");
-    const props = extractCssCustomProperties(text);
+    const props = extractCssCustomProperties(text, { scss: rel.toLowerCase().endsWith(".scss") });
     if (props.length > 0) styling.add("css-variables");
     for (const prop of props) tokens.push({ file: rel, name: prop.name, value: prop.value });
   }
@@ -797,9 +990,9 @@ export function analyzeCodebase(workspaceRoot: string) {
 
 /**
  * Tier 1: Patch CSS custom-property values in place without ever renaming or deleting variables.
- * Rejects unsafe CSS values (external loads, scripts, comments, block escapes) via `cssValueProblem`.
+ * Rejects unsafe CSS values (external loads, scripts, comments, unbalanced brackets/blocks) via `cssValueProblem`.
  */
-export function patchCssTokensSource(cssText: string, updates: Record<string, string>) {
+export function patchCssTokensSource(cssText: string, updates: Record<string, string>, { scss = false }: { scss?: boolean } = {}) {
   if (updates === null || typeof updates !== "object" || Array.isArray(updates)) {
     throw new StudioError(400, "invalid-updates", "cssTokenUpdates must be an object mapping --token to value");
   }
@@ -823,7 +1016,7 @@ export function patchCssTokensSource(cssText: string, updates: Record<string, st
     validated.set(name, trimmed);
   }
 
-  const decls = extractCssCustomProperties(cssText);
+  const decls = extractCssCustomProperties(cssText, { scss });
   const replacements: Array<{ start: number; end: number; value: string; name: string; before: string }> = [];
   for (const decl of decls) {
     const nextVal = validated.get(decl.name);
@@ -844,8 +1037,25 @@ export function patchCssTokensSource(cssText: string, updates: Record<string, st
   };
 }
 
+function formatStringLiteral(value: string, quote: "'" | '"', isJsxAttr: boolean): string {
+  if (isJsxAttr) {
+    const escaped = quote === '"'
+      ? value.replaceAll('"', "&quot;")
+      : value.replaceAll("'", "&apos;");
+    return `${quote}${escaped}${quote}`;
+  }
+  const escaped = value
+    .replaceAll("\\", "\\\\")
+    .replaceAll(quote, `\\${quote}`)
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+  return `${quote}${escaped}${quote}`;
+}
+
 /**
- * Tier 2: Range-anchored JSX className / cn / clsx / twMerge / cva static string patching
+ * Tier 2: Range-anchored JSX className / cn / clsx / twMerge static string patching
  * gated by the Whole-File AST Business-Logic & JSX Functional-Contract Invariance Gate.
  */
 export function patchJsxClassStrings(source: string, filePath: string, classReplacements: Record<string, string>) {
@@ -886,17 +1096,17 @@ export function patchJsxClassStrings(source: string, filePath: string, classRepl
     return changed ? next.join(" ").trim() : raw;
   };
 
-  const inspectStringLiteral = (node: any) => {
+  const inspectStringLiteral = (node: any, isJsxAttr: boolean) => {
     if (!node || node.type !== "StringLiteral" || typeof node.start !== "number" || typeof node.end !== "number") return;
     if (editByStart.has(node.start)) return;
     const nextVal = rewriteClassText(node.value);
     if (nextVal !== node.value) {
-      const quote = source[node.start] === "'" ? "'" : '"';
+      const quote: "'" | '"' = source[node.start] === "'" ? "'" : '"';
       editByStart.set(node.start, {
         start: node.start,
         end: node.end,
         before: node.value,
-        after: `${quote}${nextVal}${quote}`,
+        after: formatStringLiteral(nextVal, quote, isJsxAttr),
       });
     }
   };
@@ -904,7 +1114,7 @@ export function patchJsxClassStrings(source: string, filePath: string, classRepl
   const inspectClassExpr = (expr: any, depth = 0) => {
     if (!expr || depth > 12) return;
     if (expr.type === "StringLiteral") {
-      inspectStringLiteral(expr);
+      inspectStringLiteral(expr, false);
     } else if (expr.type === "LogicalExpression") {
       inspectClassExpr(expr.right, depth + 1);
     } else if (expr.type === "ConditionalExpression") {
@@ -913,9 +1123,22 @@ export function patchJsxClassStrings(source: string, filePath: string, classRepl
     } else if (expr.type === "ArrayExpression") {
       for (const el of expr.elements ?? []) inspectClassExpr(el, depth + 1);
     } else if (expr.type === "ObjectExpression") {
+      // Detect duplicate post-replacement keys so we never clobber a conditional branch or break TS.
+      const resultingKeys = new Set<string>();
       for (const prop of expr.properties ?? []) {
-        if (prop?.type === "ObjectProperty" && !prop.computed && prop.key?.type === "StringLiteral") {
-          inspectStringLiteral(prop.key);
+        if (prop?.type !== "ObjectProperty" || prop.computed) continue;
+        if (prop.key?.type === "StringLiteral") {
+          const nextKey = rewriteClassText(prop.key.value);
+          if (resultingKeys.has(nextKey)) {
+            throw new StudioError(422, "duplicate-class-key", `class replacement in ${filePath} produces duplicate object key ${JSON.stringify(nextKey)}`);
+          }
+          resultingKeys.add(nextKey);
+          inspectStringLiteral(prop.key, false);
+        } else if (prop.key?.type === "Identifier") {
+          if (resultingKeys.has(prop.key.name)) {
+            throw new StudioError(422, "duplicate-class-key", `class replacement in ${filePath} collides with existing object key ${JSON.stringify(prop.key.name)}`);
+          }
+          resultingKeys.add(prop.key.name);
         }
       }
     } else if (expr.type === "CallExpression" && expr.callee?.type === "Identifier" && CLASS_HELPERS.has(expr.callee.name)) {
@@ -932,7 +1155,7 @@ export function patchJsxClassStrings(source: string, filePath: string, classRepl
     if (node.type === "JSXAttribute") {
       const name = jsxAttrName(node);
       if (name === "className" || name === "class") {
-        if (node.value?.type === "StringLiteral") inspectStringLiteral(node.value);
+        if (node.value?.type === "StringLiteral") inspectStringLiteral(node.value, true);
         else if (node.value?.type === "JSXExpressionContainer") inspectClassExpr(node.value.expression, 0);
         continue;
       }
@@ -983,8 +1206,8 @@ export interface RedesignPlan {
 
 /**
  * Build a verified multi-file redesign plan (Tier 1 CSS token updates, Tier 2 JSX class
- * replacements, and/or Tier 3 verified source updates), enforcing Whole-File AST Invariance
- * on every JS/TS/JSX/TSX file before anything can be written.
+ * replacements, and/or Tier 3 verified JS/TS/JSX/TSX visual patches), enforcing Whole-File AST
+ * Invariance on every Tier 2 and Tier 3 file before anything can be written.
  */
 export function planRedesign(workspaceRoot: string, {
   cssTokenUpdates = {},
@@ -1005,25 +1228,34 @@ export function planRedesign(workspaceRoot: string, {
     throw new StudioError(400, "invalid-patches", `explicitPatches must be a list of at most ${REDESIGN_LIMITS.maxPatchFiles} patches`);
   }
 
+  // Validate every caller-supplied relative path up front (never silently skip invalid/traversal entries).
+  const validatedFiles: string[] = [];
+  for (const rel of files) {
+    if (typeof rel !== "string") throw new StudioError(400, "invalid-files", "each entry in files must be a relative path string");
+    const resolved = resolveSafeWorkspaceFile(rootReal, rel, { mustExist: true });
+    validatedFiles.push(resolved.relNorm);
+  }
+
   const patches: PlannedFilePatch[] = [];
   const seen = new Set<string>();
-  const targetFiles = files.length > 0 ? files : scanWorkspacePaths(rootReal);
+  const targetFiles = validatedFiles.length > 0 ? validatedFiles : scanWorkspacePaths(rootReal);
 
   if (Object.keys(cssTokenUpdates).length > 0) {
     for (const rel of targetFiles) {
       if (patches.length >= REDESIGN_LIMITS.maxPatchFiles) break;
-      if (typeof rel !== "string" || !CSS_EXTS.has(extname(rel).toLowerCase())) continue;
+      const ext = extname(rel).toLowerCase();
+      if (!CSS_EXTS.has(ext)) continue;
       let read;
       try {
         read = readBoundedWorkspaceFile(rootReal, rel);
       } catch (error) {
-        if (error instanceof StudioError && (error.code === "missing-file" || error.code === "file-too-large" || error.code === "source-not-utf8") && files.length === 0) {
+        if (error instanceof StudioError && (error.code === "missing-file" || error.code === "file-too-large" || error.code === "source-not-utf8") && validatedFiles.length === 0) {
           continue;
         }
         throw error;
       }
       if (seen.has(read.file)) continue;
-      const res = patchCssTokensSource(read.content, cssTokenUpdates);
+      const res = patchCssTokensSource(read.content, cssTokenUpdates, { scss: ext === ".scss" });
       if (!res.changed) continue;
       seen.add(read.file);
       patches.push({
@@ -1040,12 +1272,12 @@ export function planRedesign(workspaceRoot: string, {
   if (Object.keys(jsxClassReplacements).length > 0) {
     for (const rel of targetFiles) {
       if (patches.length >= REDESIGN_LIMITS.maxPatchFiles) break;
-      if (typeof rel !== "string" || !JSX_EXTS.has(extname(rel).toLowerCase())) continue;
+      if (!JSX_EXTS.has(extname(rel).toLowerCase())) continue;
       let read;
       try {
         read = readBoundedWorkspaceFile(rootReal, rel);
       } catch (error) {
-        if (error instanceof StudioError && (error.code === "missing-file" || error.code === "file-too-large" || error.code === "source-not-utf8") && files.length === 0) {
+        if (error instanceof StudioError && (error.code === "missing-file" || error.code === "file-too-large" || error.code === "source-not-utf8") && validatedFiles.length === 0) {
           continue;
         }
         throw error;
@@ -1055,8 +1287,7 @@ export function planRedesign(workspaceRoot: string, {
       try {
         res = patchJsxClassStrings(read.content, read.file, jsxClassReplacements);
       } catch (error) {
-        // When scanning an entire workspace automatically, skip non-JSX parse errors; explicit targets fail closed.
-        if (files.length === 0 && !(error instanceof StudioError)) continue;
+        if (validatedFiles.length === 0 && !(error instanceof StudioError)) continue;
         throw error;
       }
       if (!res.changed) continue;
@@ -1073,7 +1304,6 @@ export function planRedesign(workspaceRoot: string, {
   }
 
   for (const explicit of explicitPatches) {
-    if (patches.length >= REDESIGN_LIMITS.maxPatchFiles) break;
     if (!explicit || typeof explicit !== "object" || typeof explicit.file !== "string" || typeof explicit.afterContent !== "string") {
       throw new StudioError(400, "invalid-patches", "each explicit patch requires file and afterContent strings");
     }
@@ -1081,14 +1311,19 @@ export function planRedesign(workspaceRoot: string, {
       throw new StudioError(413, "file-too-large", `explicit patch for ${explicit.file} exceeds ${REDESIGN_LIMITS.maxFileBytes} bytes`);
     }
     const read = readBoundedWorkspaceFile(rootReal, explicit.file);
+    const ext = extname(read.file).toLowerCase();
+    if (!INVARIANCE_GATED_EXTS.has(ext)) {
+      throw new StudioError(422, "unsupported-tier3-file", `Tier 3 explicitPatches only supports JS/TS/JSX/TSX component files (got ${read.file}); update CSS tokens via Tier 1 cssTokenUpdates`);
+    }
     if (seen.has(read.file)) throw new StudioError(409, "duplicate-file", `duplicate patch target: ${read.file}`);
-    if (JSX_EXTS.has(extname(read.file).toLowerCase())) {
-      const check = verifyFunctionalInvariance(read.content, explicit.afterContent, read.file);
-      if (!check.ok) {
-        throw new StudioError(422, "invariance-violated", `${read.file} failed AST invariance gate: ${check.violations.join("; ")}`);
-      }
+    const check = verifyFunctionalInvariance(read.content, explicit.afterContent, read.file);
+    if (!check.ok) {
+      throw new StudioError(422, "invariance-violated", `${read.file} failed AST invariance gate: ${check.violations.join("; ")}`);
     }
     if (read.content !== explicit.afterContent) {
+      if (patches.length >= REDESIGN_LIMITS.maxPatchFiles) {
+        throw new StudioError(400, "too-many-patches", `redesign plan exceeds maximum of ${REDESIGN_LIMITS.maxPatchFiles} files`);
+      }
       seen.add(read.file);
       patches.push({
         file: read.file,
@@ -1137,8 +1372,12 @@ export function applyRedesignPlan(plan: RedesignPlan, { journalDir, expectedPlan
     throw new StudioError(400, "too-many-patches", `redesign plan exceeds ${REDESIGN_LIMITS.maxPatchFiles} files`);
   }
 
+  const seen = new Set<string>();
   const backups: Array<{ file: string; beforeContent: string; beforeSha256: string; afterSha256: string; mode: number }> = [];
   for (const patch of plan.patches) {
+    if (patch.tier !== 1 && patch.tier !== 2 && patch.tier !== 3) {
+      throw new StudioError(400, "invalid-plan", `invalid patch tier for ${String(patch.file)}`);
+    }
     if (typeof patch.afterContent !== "string" || Buffer.byteLength(patch.afterContent, "utf8") > REDESIGN_LIMITS.maxFileBytes) {
       throw new StudioError(413, "file-too-large", `patch content for ${patch.file} exceeds ${REDESIGN_LIMITS.maxFileBytes} bytes`);
     }
@@ -1154,10 +1393,22 @@ export function applyRedesignPlan(plan: RedesignPlan, { journalDir, expectedPlan
       }
       throw error;
     }
-    if (read.sha256 !== patch.beforeSha256) {
-      throw new StudioError(409, "file-changed", `${patch.file} changed on disk since planning; re-plan before applying`);
+    if (seen.has(read.file)) {
+      throw new StudioError(409, "duplicate-file", `redesign plan targets ${read.file} more than once`);
     }
-    if (JSX_EXTS.has(extname(read.file).toLowerCase())) {
+    seen.add(read.file);
+    if (read.sha256 !== patch.beforeSha256) {
+      throw new StudioError(409, "file-changed", `${read.file} changed on disk since planning; re-plan before applying`);
+    }
+    const ext = extname(read.file).toLowerCase();
+    if (patch.tier === 1) {
+      if (!CSS_EXTS.has(ext)) {
+        throw new StudioError(422, "unsupported-tier1-file", `Tier 1 patches may only target .css/.scss files (got ${read.file})`);
+      }
+    } else if (patch.tier === 2 || patch.tier === 3) {
+      if (!INVARIANCE_GATED_EXTS.has(ext)) {
+        throw new StudioError(422, "unsupported-tier3-file", `Tier ${patch.tier} patches only support JS/TS/JSX/TSX files (got ${read.file})`);
+      }
       const check = verifyFunctionalInvariance(read.content, patch.afterContent, read.file);
       if (!check.ok) {
         throw new StudioError(422, "invariance-violated", `${read.file} failed AST invariance gate: ${check.violations.join("; ")}`);
@@ -1172,10 +1423,8 @@ export function applyRedesignPlan(plan: RedesignPlan, { journalDir, expectedPlan
     });
   }
 
-  const safeJournalDir = prepareSafeJournalDir(journalDir);
   const runId = `redesign-${randomUUID().slice(0, 12)}`;
-  const journalPath = join(safeJournalDir, `${runId}.json`);
-  writeTrustedFile(journalPath, JSON.stringify({
+  const journalJson = JSON.stringify({
     runId,
     planToken: plan.planToken,
     workspaceRoot: rootReal,
@@ -1187,19 +1436,29 @@ export function applyRedesignPlan(plan: RedesignPlan, { journalDir, expectedPlan
       beforeContent,
       mode,
     })),
-  }, null, 2));
+  }, null, 2);
+  if (Buffer.byteLength(journalJson, "utf8") > REDESIGN_LIMITS.maxJournalBytes) {
+    throw new StudioError(413, "journal-too-large", `redesign backup journal exceeds ${REDESIGN_LIMITS.maxJournalBytes} bytes; split into smaller batches`);
+  }
+
+  const safeJournalDir = prepareSafeJournalDir(journalDir);
+  const journalPath = join(safeJournalDir, `${runId}.json`);
+  writeTrustedFile(journalPath, journalJson);
 
   const written: typeof backups = [];
   try {
     for (let i = 0; i < plan.patches.length; i += 1) {
-      writeWorkspaceFileAtomic(rootReal, backups[i].file, plan.patches[i].afterContent, backups[i].mode);
+      writeWorkspaceFileAtomic(rootReal, backups[i].file, plan.patches[i].afterContent, {
+        preserveMode: backups[i].mode,
+        expectedBeforeSha256: backups[i].beforeSha256,
+      });
       written.push(backups[i]);
     }
   } catch (error) {
     // Roll back already-written files atomically on any partial write failure.
     for (let i = written.length - 1; i >= 0; i -= 1) {
       try {
-        writeWorkspaceFileAtomic(rootReal, written[i].file, written[i].beforeContent, written[i].mode);
+        writeWorkspaceFileAtomic(rootReal, written[i].file, written[i].beforeContent, { preserveMode: written[i].mode });
       } catch {
         // best-effort rollback
       }
@@ -1211,18 +1470,29 @@ export function applyRedesignPlan(plan: RedesignPlan, { journalDir, expectedPlan
     runId,
     planToken: plan.planToken,
     journalPath,
-    filesApplied: plan.patches.map((p) => ({ file: p.file, tier: p.tier, summary: p.summary })),
+    filesApplied: plan.patches.map((p, idx) => ({ file: backups[idx].file, tier: p.tier, summary: p.summary })),
   };
 }
 
+export interface ValidatedJournalEntry {
+  file: string;
+  beforeSha256: string;
+  afterSha256: string;
+  beforeContent: string;
+  mode?: number;
+}
+
 /**
- * Inspect a trusted redesign journal without modifying disk (used for confirmation summaries and CLI inspection).
+ * Inspect a trusted redesign journal without modifying disk (never creates directories).
  */
 export function readRedesignJournal({ workspaceRoot, journalDir, runId }: { workspaceRoot: string; journalDir: string; runId: string }) {
   if (typeof runId !== "string" || !/^redesign-[a-f0-9-]{6,36}$/u.test(runId)) {
     throw new StudioError(400, "invalid-run-id", "invalid redesign runId");
   }
-  const safeJournalDir = prepareSafeJournalDir(journalDir);
+  const safeJournalDir = resolveExistingJournalDir(journalDir);
+  if (safeJournalDir === null) {
+    throw new StudioError(404, "missing-journal", `redesign journal ${runId} not found`);
+  }
   const journalPath = join(safeJournalDir, `${runId}.json`);
   let bytes: Buffer | null;
   try {
@@ -1233,6 +1503,7 @@ export function readRedesignJournal({ workspaceRoot, journalDir, runId }: { work
   if (bytes === null) {
     throw new StudioError(404, "missing-journal", `redesign journal ${runId} not found`);
   }
+  const journalSha256 = createHash("sha256").update(bytes).digest("hex");
   let record: any;
   try {
     record = JSON.parse(bytes.toString("utf8"));
@@ -1240,15 +1511,84 @@ export function readRedesignJournal({ workspaceRoot, journalDir, runId }: { work
     throw new StudioError(409, "corrupt-journal", `redesign journal ${runId} is not valid JSON`);
   }
   const rootReal = assertWorkspaceRoot(workspaceRoot);
-  if (record?.workspaceRoot !== rootReal || !Array.isArray(record?.files)) {
-    throw new StudioError(409, "workspace-mismatch", "redesign journal belongs to a different workspace");
+  if (record?.workspaceRoot !== rootReal || !Array.isArray(record?.files) || record.files.length === 0) {
+    throw new StudioError(409, "workspace-mismatch", "redesign journal belongs to a different workspace or is malformed");
   }
-  return { rootReal, record };
+  const entries: ValidatedJournalEntry[] = [];
+  for (const entry of record.files) {
+    if (
+      !entry ||
+      typeof entry.file !== "string" ||
+      typeof entry.beforeContent !== "string" ||
+      typeof entry.beforeSha256 !== "string" ||
+      typeof entry.afterSha256 !== "string"
+    ) {
+      throw new StudioError(409, "corrupt-journal", "redesign journal contains a malformed file entry");
+    }
+    entries.push({
+      file: entry.file,
+      beforeSha256: entry.beforeSha256,
+      afterSha256: entry.afterSha256,
+      beforeContent: entry.beforeContent,
+      mode: typeof entry.mode === "number" ? entry.mode : undefined,
+    });
+  }
+  return { rootReal, journalSha256, record: { ...record, files: entries } };
+}
+
+/**
+ * Validate rollback preconditions (workspace confinement, journal integrity, and conflict checks
+ * when `force !== true`) without modifying disk.
+ */
+export function validateRollbackTargets({
+  workspaceRoot,
+  journalDir,
+  runId,
+  force = false,
+}: {
+  workspaceRoot: string;
+  journalDir: string;
+  runId: string;
+  force?: boolean;
+}) {
+  const { rootReal, journalSha256, record } = readRedesignJournal({ workspaceRoot, journalDir, runId });
+  const targets: Array<{
+    file: string;
+    absPath: string;
+    beforeContent: string;
+    mode?: number;
+    preRollback: { missing: true } | { missing: false; content: string; sha256: string; mode: number };
+  }> = [];
+
+  for (const entry of record.files) {
+    const { absPath, relNorm } = resolveSafeWorkspaceFile(rootReal, entry.file);
+    const stat = lstatOrNull(absPath);
+    if (stat === null) {
+      if (!force) {
+        throw new StudioError(409, "file-deleted-after-redesign", `${relNorm} was deleted after redesign; pass force: true to recreate it`);
+      }
+      targets.push({ file: relNorm, absPath, beforeContent: entry.beforeContent, mode: entry.mode, preRollback: { missing: true } });
+    } else {
+      const read = readBoundedWorkspaceFile(rootReal, relNorm);
+      if (!force && read.sha256 !== entry.afterSha256) {
+        throw new StudioError(409, "file-modified-after-redesign", `${relNorm} was edited after redesign; pass force: true to overwrite`);
+      }
+      targets.push({
+        file: relNorm,
+        absPath: read.absPath,
+        beforeContent: entry.beforeContent,
+        mode: entry.mode,
+        preRollback: { missing: false, content: read.content, sha256: read.sha256, mode: read.mode },
+      });
+    }
+  }
+  return { rootReal, journalSha256, targets };
 }
 
 /**
  * Roll back a previously applied redesign run from its trusted journal backup, verifying disk
  * SHA-256 matches the applied output unless `force: true` is explicitly passed.
+ * Atomically reverts any partial restore if a later file fails.
  */
 export function rollbackRedesign({
   workspaceRoot,
@@ -1261,27 +1601,33 @@ export function rollbackRedesign({
   runId: string;
   force?: boolean;
 }) {
-  const { rootReal, record } = readRedesignJournal({ workspaceRoot, journalDir, runId });
+  const { rootReal, targets } = validateRollbackTargets({ workspaceRoot, journalDir, runId, force });
 
-  const targets: Array<{ file: string; beforeContent: string; mode?: number }> = [];
-  for (const entry of record.files) {
-    if (!entry || typeof entry.file !== "string" || typeof entry.beforeContent !== "string") {
-      throw new StudioError(409, "corrupt-journal", "redesign journal contains a malformed file entry");
+  const restored: typeof targets = [];
+  try {
+    for (const target of targets) {
+      writeWorkspaceFileAtomic(rootReal, target.file, target.beforeContent, {
+        preserveMode: target.mode,
+        ...(target.preRollback.missing === false ? { expectedBeforeSha256: target.preRollback.sha256 } : {}),
+      });
+      restored.push(target);
     }
-    const { absPath, relNorm } = resolveSafeWorkspaceFile(rootReal, entry.file);
-    const stat = lstatOrNull(absPath);
-    if (!force && stat !== null) {
-      const read = readBoundedWorkspaceFile(rootReal, relNorm);
-      if (read.sha256 !== entry.afterSha256) {
-        throw new StudioError(409, "file-modified-after-redesign", `${relNorm} was edited after redesign; pass force: true to overwrite`);
+  } catch (error) {
+    for (let i = restored.length - 1; i >= 0; i -= 1) {
+      const t = restored[i];
+      try {
+        if (t.preRollback.missing) {
+          rmSync(t.absPath, { force: true });
+        } else {
+          writeWorkspaceFileAtomic(rootReal, t.file, t.preRollback.content, { preserveMode: t.preRollback.mode });
+        }
+      } catch {
+        // best-effort recovery
       }
     }
-    targets.push({ file: relNorm, beforeContent: entry.beforeContent, mode: typeof entry.mode === "number" ? entry.mode : undefined });
+    throw new StudioError(500, "rollback-failed", `redesign rollback failed and reverted: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  for (const target of targets) {
-    writeWorkspaceFileAtomic(rootReal, target.file, target.beforeContent, target.mode);
-  }
   return {
     runId,
     restoredFiles: targets.map((t) => t.file),

@@ -15,7 +15,7 @@ import { ImportDesk } from "./imports.ts";
 import { planTokenCss } from "./token-import.ts";
 import { exportDtcgTokens, planDtcgTokens } from "./tokens-dtcg.ts";
 import { UntrustedFileError, readTrustedFile, writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
-import { REDESIGN_LIMITS, analyzeCodebase, applyRedesignPlan, planRedesign, readBoundedWorkspaceFile, readRedesignJournal, rollbackRedesign } from "./redesign.ts";
+import { REDESIGN_LIMITS, analyzeCodebase, applyRedesignPlan, planRedesign, readBoundedWorkspaceFile, rollbackRedesign, validateRollbackTargets } from "./redesign.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
@@ -2603,13 +2603,13 @@ const TOOLS: Tool[] = [
           throw new ToolError("force is true or false");
         }
         if (dryRun) {
-          const { record } = readRedesignJournal({ workspaceRoot: root, journalDir, runId: args.runId });
+          const { targets } = validateRollbackTargets({ workspaceRoot: root, journalDir, runId: args.runId, force: args.force === true });
           return {
             dryRun: true,
             action: "rollback",
             workspaceName: basename(root),
             runId: args.runId,
-            wouldRestoreFiles: record.files.map((f: any) => f.file),
+            wouldRestoreFiles: targets.map((t) => t.file),
           } as unknown as Json;
         }
         const rolled = rollbackRedesign({ workspaceRoot: root, journalDir, runId: args.runId, force: args.force === true });
@@ -2773,20 +2773,22 @@ export class ConfirmationBroker {
   }
 
   /**
-   * Ask the person, reusing an identical open request. Resolves with their decision (an
-   * approval carries its time), "timeout", or "busy" when too many requests are waiting:
-   * at most 20 in all, 5 per agent, and 4 calls waiting on one request.
+   * Ask the person, reusing an identical open request (unless `singleWaiter` is set for
+   * non-idempotent tools like `apply_redesign`). Resolves with their decision (an approval
+   * carries its time), "timeout", or "busy" when too many requests are waiting: at most 20 in
+   * all, 5 per agent, and 4 calls waiting on one request (1 when `singleWaiter` is true).
    */
-  request(input: Omit<PendingConfirmation, "id" | "requestedAt"> & { subjectSha256?: string }, at: string, waitMs: number): Promise<Decision> {
+  request(input: Omit<PendingConfirmation, "id" | "requestedAt"> & { subjectSha256?: string; singleWaiter?: boolean }, at: string, waitMs: number): Promise<Decision> {
     this.#prune();
-    let item = [...this.#items.values()].find((candidate) => candidate.decision === "pending" && candidate.agentId === input.agentId && candidate.toolName === input.toolName && candidate.documentId === input.documentId && candidate.argumentsSha256 === input.argumentsSha256 && candidate.subjectSha256 === input.subjectSha256);
+    const { singleWaiter, ...entryInput } = input;
+    let item = [...this.#items.values()].find((candidate) => candidate.decision === "pending" && candidate.agentId === entryInput.agentId && candidate.toolName === entryInput.toolName && candidate.documentId === entryInput.documentId && candidate.argumentsSha256 === entryInput.argumentsSha256 && candidate.subjectSha256 === entryInput.subjectSha256);
     if (item === undefined) {
       const pending = this.pending();
-      if (pending.length >= 20 || pending.filter((other) => other.agentId === input.agentId).length >= 5) return Promise.resolve({ outcome: "busy" });
-      item = { ...input, id: `confirm-${randomUUID()}`, requestedAt: at, expires: Date.now() + CONFIRMATION_TTL_MS, decision: "pending", waiters: [] };
+      if (pending.length >= 20 || pending.filter((other) => other.agentId === entryInput.agentId).length >= 5) return Promise.resolve({ outcome: "busy" });
+      item = { ...entryInput, id: `confirm-${randomUUID()}`, requestedAt: at, expires: Date.now() + CONFIRMATION_TTL_MS, decision: "pending", waiters: [] };
       this.#items.set(item.id, item);
       this.#notify(this.pending());
-    } else if (item.waiters.length >= 4) {
+    } else if (singleWaiter === true || item.waiters.length >= 4) {
       return Promise.resolve({ outcome: "busy" });
     }
     const target = item;
@@ -3052,6 +3054,9 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
     if (typeof journalDir !== "string" || journalDir.trim() === "") {
       return "Redesign journaling is not configured in this session.";
     }
+    // Check elicitation availability before touching workspace/journal files.
+    const unavailableEarly = context.confirmationUnavailable?.(toolName) ?? null;
+    if (unavailableEarly !== null) return unavailableEarly;
     try {
       const given = onlyArguments(args, ["action", "planToken", "cssTokenUpdates", "jsxClassReplacements", "files", "explicitPatches", "runId", "force"]);
       if (given.action === "apply") {
@@ -3071,27 +3076,36 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
             return "";
           }
         };
-        redesignSummary = `Apply redesign to ${plan.patches.length} file${plan.patches.length === 1 ? "" : "s"} in ${basename(root)} (plan ${plan.planToken.slice(0, 12)}): ${plan.patches.slice(0, 5).map((p) => `${p.file} [tier ${p.tier}]`).join(", ")}${plan.patches.length > 5 ? ", …" : ""}`;
+        const tierCounts = [1, 2, 3].map((t) => plan.patches.filter((p) => p.tier === t).length);
+        const tierBreakdown = `T1:${tierCounts[0]}/T2:${tierCounts[1]}/T3:${tierCounts[2]}`;
+        const tier3Files = plan.patches.filter((p) => p.tier === 3).map((p) => `${p.file} [tier 3]`);
+        const otherFiles = plan.patches.filter((p) => p.tier !== 3);
+        const listed = [
+          ...tier3Files,
+          ...otherFiles.slice(0, 5).map((p) => `${p.file} [tier ${p.tier}]`),
+        ];
+        const omitted = otherFiles.length > 5 ? `, … (+${otherFiles.length - 5} tier 1/2)` : "";
+        redesignSummary = `Apply redesign to ${plan.patches.length} file${plan.patches.length === 1 ? "" : "s"} (${tierBreakdown}) in ${basename(root)} (plan ${plan.planToken.slice(0, 12)}): ${listed.join(", ")}${omitted}`;
       } else if (given.action === "rollback") {
         if (typeof given.runId !== "string" || given.runId.trim() === "") return "rollback requires runId";
         if (given.force !== undefined && typeof given.force !== "boolean") return "force is true or false";
-        const { record } = readRedesignJournal({ workspaceRoot: root, journalDir, runId: given.runId });
+        const initial = validateRollbackTargets({ workspaceRoot: root, journalDir, runId: given.runId, force: given.force === true });
         const digestTargets = () => {
           try {
-            const files = (record.files ?? []).map((entry: any) => {
-              try {
-                return { file: entry.file, sha: readBoundedWorkspaceFile(root, entry.file).sha256 };
-              } catch {
-                return { file: entry.file, sha: null };
-              }
-            });
-            return createHash("sha256").update(JSON.stringify({ runId: given.runId, force: given.force === true, files })).digest("hex");
+            const check = validateRollbackTargets({ workspaceRoot: root, journalDir, runId: given.runId as string, force: given.force === true });
+            return createHash("sha256").update(JSON.stringify({
+              workspaceRoot: check.rootReal,
+              journalSha256: check.journalSha256,
+              runId: given.runId,
+              force: given.force === true,
+              files: check.targets.map((t) => ({ file: t.file, sha: t.preRollback.missing ? null : t.preRollback.sha256 })),
+            })).digest("hex");
           } catch {
             return "";
           }
         };
         redesignSubjectOf = digestTargets;
-        redesignSummary = `Roll back redesign run ${given.runId} in ${basename(root)} (${record.files.length} file${record.files.length === 1 ? "" : "s"}: ${record.files.slice(0, 5).map((f: any) => f.file).join(", ")}${record.files.length > 5 ? ", …" : ""})${given.force === true ? " [force overwrite]" : ""}`;
+        redesignSummary = `Roll back redesign run ${given.runId} in ${basename(root)} (${initial.targets.length} file${initial.targets.length === 1 ? "" : "s"}: ${initial.targets.slice(0, 8).map((t) => t.file).join(", ")}${initial.targets.length > 8 ? ", …" : ""})${given.force === true ? " [force overwrite]" : ""}`;
       } else {
         return "action must be \"apply\" or \"rollback\"";
       }
@@ -3151,7 +3165,7 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
         ? tokenSummary()
         : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`,
   );
-  const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
+  const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary, ...(toolName === "apply_redesign" ? { singleWaiter: true } : {}) }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
   // What was approved must still be what runs: a token or workspace file changed while the call waited is asked about again.
   if (decision.outcome === "approved" && subjectOf() !== subjectSha256) {
     return toolName === "apply_redesign"

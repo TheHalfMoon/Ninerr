@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -466,4 +466,121 @@ test("CLI ninerr redesign inspect -> plan -> apply -> rollback works end to end"
 
   assert.equal(await run(["rollback", root, "--run", applied.runId, "--journal", journalDir, "--json"]), 0, err);
   assert.equal(readFileSync(join(root, "src", "app.css"), "utf8"), origCss);
+}));
+
+test("PR 487 review regressions: AST invariance closes ObjectMethod, tag XSS, dynamic keys, cva/helper swaps, and accepts static TS/unary styles", () => {
+  // C2: ObjectMethod inside style or cn(...) is blocked!
+  const baseDiv = `export function A() { return <div className="p-4">Hi</div>; }\n`;
+  assert.equal(
+    verifyFunctionalInvariance(
+      baseDiv,
+      `export function A() { return <div className="p-4" style={{ get x() { fetch("https://evil.test"); return 1; } }}>Hi</div>; }\n`,
+      "A.tsx",
+    ).ok,
+    false,
+  );
+  assert.equal(
+    verifyFunctionalInvariance(
+      baseDiv,
+      `export function A() { return <div className={cn({ get a() { return true; } })}>Hi</div>; }\n`,
+      "A.tsx",
+    ).ok,
+    false,
+  );
+
+  // C3: <div> -> <script>/<style>, <motion.div>, custom elements, <option>, <table>, and TS generics are preserved!
+  assert.equal(verifyFunctionalInvariance(`export const A = ({ m }) => <div>{m}</div>;`, `export const A = ({ m }) => <script>{m}</script>;`, "A.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(`export const A = () => <motion.div className="p-4">Hi</motion.div>;`, `export const A = () => <div className="p-8">Hi</div>;`, "A.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(`export const A = () => <my-checkout className="p-4">Hi</my-checkout>;`, `export const A = () => <div className="p-8">Hi</div>;`, "A.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(`export const A = () => <select><option>One</option></select>;`, `export const A = () => <select><div>One</div></select>;`, "A.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(`export const A = ({ r }) => <Table<User> rows={r} />;`, `export const A = ({ r }) => <Table rows={r} />;`, "A.tsx").ok, false);
+
+  // H1: dynamic style property rebinding, helper callee swap, and cva removal are blocked!
+  assert.equal(verifyFunctionalInvariance(`export const A = ({ n }) => <div style={{ width: \`\${n}%\` }} />;`, `export const A = ({ n }) => <div style={{ opacity: \`\${n}%\` }} />;`, "A.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(`export const A = ({ x }) => <div className={cn("p-4", x && "b")} />;`, `export const A = ({ x }) => <div className={twMerge("p-4", x && "b")} />;`, "A.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(`export const A = () => <div className="p-4" />;`, `export const A = () => <div className={cn("p-4")} />;`, "A.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(`export const A = () => <div className={cva("p-4", { variants: { s: { sm: "p-2" } } })} />;`, `export const A = () => <div className="p-4" />;`, "A.tsx").ok, false);
+
+  // H1 false positives fixed: interchangeable <div data-testid> <-> <section data-testid>, unary negative numeric style, and static TS cast pass!
+  const beforePos = `export const A = () => <div data-testid="box" style={{ marginTop: -8, padding: 8 } as React.CSSProperties}>Hi</div>;\n`;
+  const afterPos = `export const A = () => <section data-testid="box" style={{ marginTop: -12, padding: 16 } as React.CSSProperties}>Hi</section>;\n`;
+  assert.equal(verifyFunctionalInvariance(beforePos, afterPos, "A.tsx").ok, true);
+});
+
+test("PR 487 review regressions: Tier 3 allowlist, .git/node_modules block, CSS/SCSS/bracket safety, JSX escaping & duplicate keys, and CLI/MCP hardening", async () => withTempWorkspace(async (root, journalDir, projectsRoot) => {
+  mkdirSync(join(root, ".git", "hooks"), { recursive: true });
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, ".git", "hooks", "pre-commit"), "#!/bin/sh\necho ok\n");
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "app", dependencies: { tailwindcss: { broken: true } } }));
+  writeFileSync(join(root, "src", "tokens.css"), ":root { --accent: #3b82f6; }\n.bg { background: url(https://cdn.example.com/--accent:123); }\n");
+  writeFileSync(join(root, "src", "styles.scss"), "// don't touch --accent: #000;\n:root { --accent: #3b82f6; }\n");
+
+  // L1: malformed tailwindcss object in package.json never crashes analyzeCodebase.
+  assert.equal(analyzeCodebase(root).projectName, "app");
+
+  // C1: .git/hooks/* and non-component files refused in Tier 3 explicitPatches.
+  assert.throws(() => resolveSafeWorkspaceFile(root, ".git/hooks/pre-commit"), /restricted/u);
+  assert.throws(() => planRedesign(root, { explicitPatches: [{ file: "package.json", afterContent: "{}" }] }), /only supports JS\/TS\/JSX\/TSX/u);
+  assert.throws(() => planRedesign(root, { explicitPatches: [{ file: "src/tokens.css", afterContent: "@import url(https://evil.test);" }] }), /only supports JS\/TS\/JSX\/TSX/u);
+
+  // M2: CSS scanner ignores url(...) and SCSS // comments; cssValueProblem rejects unbalanced [ and vendor loading functions.
+  const cssPatched = patchCssTokensSource(readFileSync(join(root, "src", "tokens.css"), "utf8"), { "--accent": "#0f766e" });
+  assert.match(cssPatched.after, /url\(https:\/\/cdn\.example\.com\/--accent:123\)/u);
+  assert.match(cssPatched.after, /--accent: #0f766e;/u);
+  const scssPatched = patchCssTokensSource(readFileSync(join(root, "src", "styles.scss"), "utf8"), { "--accent": "#0f766e" }, { scss: true });
+  assert.match(scssPatched.after, /\/\/ don't touch --accent: #000;/u);
+  assert.match(scssPatched.after, /--accent: #0f766e;/u);
+  assert.throws(() => patchCssTokensSource(":root { --a: red; }", { "--a": "red [" }), /brackets/u);
+  assert.throws(() => patchCssTokensSource(":root { --a: red; }", { "--a": "-moz-element(#x)" }), /invalid CSS value/u);
+
+  // M3: JSX escaping preserves escaped quotes and refuses duplicate object keys in clsx.
+  const withEscaped = `export const B = () => <div className={"bg-blue-500 before:content-[\\"a\\"]"} />;\n`;
+  const escRes = patchJsxClassStrings(withEscaped, "B.tsx", { "bg-blue-500": "bg-teal-700" });
+  assert.equal(escRes.invariance.ok, true);
+  assert.match(escRes.after, /bg-teal-700/u);
+  assert.throws(
+    () => patchJsxClassStrings(`export const C = ({ a, b }) => <div className={clsx({ "p-4": a, "p-8": b })} />;`, "C.tsx", { "p-4": "p-8" }),
+    /duplicate object key/u,
+  );
+
+  // H2: dryRun rollback & read-only journal lookup NEVER create missing journal directories.
+  const missingJournal = join(journalDir, "never-create-me");
+  const engine = new HeadlessEngine({ projectsRoot, workspaceRoot: root, write: () => {} });
+  try {
+    await engine.receive({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test" } } });
+    await engine.receive({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "create_project", arguments: { name: "drytest" } } });
+    const dryRb = await engine.receive({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "apply_redesign", arguments: { dryRun: true, action: "rollback", runId: "redesign-000000000000" } } });
+    assert.equal(dryRb.result.isError, true);
+    assert.equal(existsSync(join(projectsRoot, ".ninerr-redesign-journals")), false, "dryRun rollback must not create journal directory");
+  } finally {
+    engine.close();
+  }
+  assert.throws(() => rollbackRedesign({ workspaceRoot: root, journalDir: missingJournal, runId: "redesign-000000000000" }), /not found/u);
+  assert.equal(existsSync(missingJournal), false);
+
+  // H3: CLI --expected-token empty or valueless is rejected (exit 2), never silently skipped!
+  const planFile = join(journalDir, "p.json");
+  const plan = planRedesign(root, { cssTokenUpdates: { "--accent": "#0f766e" }, files: ["src/tokens.css"] });
+  writeFileSync(planFile, JSON.stringify(plan));
+  let errOut = "";
+  const rcEmpty = await runCliCommand("redesign", ["apply", root, "--plan", planFile, "--expected-token=", "--journal", journalDir], {
+    version: "0.0.0",
+    stdout: () => {},
+    stderr: (s) => { errOut += s; },
+  });
+  assert.equal(rcEmpty, 2);
+  assert.match(errOut, /--expected-token/u);
+
+  // H4 + H5: Duplicate targets in plan refused; deleted file after redesign requires force: true on rollback!
+  const dupPlan = {
+    workspaceRoot: plan.workspaceRoot,
+    patches: [plan.patches[0], { ...plan.patches[0] }],
+    planToken: "",
+  };
+  assert.throws(() => applyRedesignPlan(dupPlan, { journalDir }), /planToken|more than once/u);
+  const applied = applyRedesignPlan(plan, { journalDir, expectedPlanToken: plan.planToken });
+  rmSync(join(root, "src", "tokens.css"));
+  assert.throws(() => rollbackRedesign({ workspaceRoot: root, journalDir, runId: applied.runId }), /deleted after redesign/u);
+  const forced = rollbackRedesign({ workspaceRoot: root, journalDir, runId: applied.runId, force: true });
+  assert.deepEqual(forced.restoredFiles, ["src/tokens.css"]);
 }));
