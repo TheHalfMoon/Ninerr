@@ -179,6 +179,14 @@ const SUBSYSTEMS = [
     dependsOn: ["document-model", "network-policy"],
   },
   {
+    id: "design-intelligence",
+    title: "Design intelligence, taste, motion, and skills",
+    owner: "@ninerr/design-intelligence",
+    status: "implemented",
+    boundary: "Structured product design briefs, domain archetypes, multi-direction aesthetic planning, brief-aware taste evaluation, canonical motion tokens and reduced-motion stylesheet compilation, and Ninerr's official agent skill catalog.",
+    dependsOn: ["document-model", "design-assurance"],
+  },
+  {
     id: "decision-router",
     title: "Decision router",
     owner: "@ninerr/decision-router",

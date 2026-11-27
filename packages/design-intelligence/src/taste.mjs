@@ -228,7 +228,7 @@ export function evaluateTaste(document, { brief: briefOverride = null, rootId = 
       for (const token of resolved.split(/\s+/u)) {
         const px = parsePx(token);
         if (px !== null && px > 2) {
-          if (prop === "padding") paddings.push({ nodeId: node.id, px });
+          if (prop === "padding" && !INTERACTIVE_TAGS.has(tag)) paddings.push({ nodeId: node.id, px });
           if (px % 4 !== 0) {
             findings.push({
               ruleId: "taste:spacing-off-grid",

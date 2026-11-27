@@ -9,7 +9,7 @@ const SKILLS = [
     title: "Product Design",
     summary: "Frame user goals, information architecture, state coverage, and design direction before writing pixels or markup.",
     whenToUse: "Starting any new feature, screen, or product from a prompt or problem statement.",
-    recommendedTools: ["design_intelligence", "set_design_brief", "create_layers", "inspect_document"],
+    recommendedTools: ["design_intelligence", "set_design_brief", "create_layers", "project_info"],
     principles: [
       "Define the product domain, target user, density posture, and core task before generating components.",
       "Compare at least two distinct aesthetic directions rather than defaulting to generic template defaults.",
@@ -30,7 +30,7 @@ const SKILLS = [
     title: "Frontend Design",
     summary: "Author semantic, token-driven HTML, CSS, and TSX interfaces with crisp layout rhythm and zero visual bloat.",
     whenToUse: "Building production web interfaces, marketing sites, or web application views.",
-    recommendedTools: ["design_intelligence", "create_layers", "list_tokens", "export_design"],
+    recommendedTools: ["design_intelligence", "create_layers", "design_tokens", "export_design"],
     principles: [
       "Author semantic HTML landmarks (header, nav, main, section, article, footer) and real buttons or links.",
       "Bind colors, spacing, typography, radii, and motion to design-system var(--token) custom properties.",
@@ -72,7 +72,7 @@ const SKILLS = [
     title: "Application Interfaces",
     summary: "Structure durable software workspaces with clear navigation landmarks, predictable controls, and low cognitive load.",
     whenToUse: "Designing SaaS applications, editors, workspaces, settings panels, and CRUD tools.",
-    recommendedTools: ["set_design_brief", "create_layers", "create_component", "create_instance", "inspect_document"],
+    recommendedTools: ["set_design_brief", "create_layers", "create_component", "insert_instance", "project_info"],
     principles: [
       "Separate persistent shell chrome from contextual workspace content with quiet 1px borders and subtle tonal steps.",
       "Reserve the primary filled button style for at most one decisive action per view or dialog.",
@@ -93,7 +93,7 @@ const SKILLS = [
     title: "Dashboards",
     summary: "Design high-signal analytical and operational dashboards where data anomalies and key trends stand out immediately.",
     whenToUse: "Building analytics consoles, monitoring screens, executive summaries, or financial overviews.",
-    recommendedTools: ["design_intelligence", "set_design_brief", "create_layers", "list_tokens"],
+    recommendedTools: ["design_intelligence", "set_design_brief", "create_layers", "design_tokens"],
     principles: [
       "Apply font-variant-numeric: tabular-nums on all KPI numbers, deltas, and quantitative table columns.",
       "Lead with 3 to 5 decision-driving KPIs, followed by primary trend visualization and filterable detail rows.",
@@ -114,7 +114,7 @@ const SKILLS = [
     title: "Mobile & Responsive Design",
     summary: "Ensure fluid, touch-friendly ergonomics from 320px compact phones through ultrawide desktop displays.",
     whenToUse: "Designing mobile apps, responsive web layouts, or adapting desktop views to small viewports.",
-    recommendedTools: ["design_intelligence", "create_layers", "edit_layer", "export_design"],
+    recommendedTools: ["design_intelligence", "create_layers", "set_styles", "set_layout", "export_design"],
     principles: [
       "Size interactive mobile touch targets to at least 44px by 44px with clear spacing between adjacent controls.",
       "Collapse multi-column grids gracefully into prioritized single-column flows with zero horizontal scroll.",
@@ -135,7 +135,7 @@ const SKILLS = [
     title: "Design Systems",
     summary: "Build scalable token hierarchies, multi-mode themes, and composable component libraries with zero token drift.",
     whenToUse: "Establishing or auditing a shared token architecture, theme modes, or component library.",
-    recommendedTools: ["list_tokens", "create_token", "edit_token", "add_token_mode", "rename_token", "inspect_token_drift", "create_component"],
+    recommendedTools: ["design_tokens", "set_token", "add_token_mode", "rename_token", "set_layer_modes", "create_component"],
     principles: [
       "Separate primitive values, semantic surface-text-accent roles, and component-specific overrides.",
       "Support light, dark, and high-contrast modes through semantic aliases rather than duplicated stylesheets.",
@@ -148,7 +148,7 @@ const SKILLS = [
     checklist: [
       "All semantic tokens resolve cleanly across every collection mode.",
       "No circular aliases or unused orphan tokens.",
-      "Token drift against connected stylesheets is verified with inspect_token_drift.",
+      "Tokens export cleanly to CSS and W3C DTCG JSON via export_design.",
     ],
   },
   {
@@ -156,7 +156,7 @@ const SKILLS = [
     title: "Typography",
     summary: "Achieve crisp readability and expressive hierarchy through intentional font pairing, modular scale, measure, and tracking.",
     whenToUse: "Selecting font stacks, tuning heading scales, improving long-form readability, or fixing visual flatness.",
-    recommendedTools: ["design_intelligence", "create_token", "edit_layer"],
+    recommendedTools: ["design_intelligence", "set_token", "set_styles"],
     principles: [
       "Limit each product to 1 to 3 coordinated font families (heading, body, mono) with reliable fallbacks.",
       "Pair tight display line-height (1.05 to 1.2) and slight negative tracking with comfortable body leading (1.5 to 1.7).",
@@ -177,7 +177,7 @@ const SKILLS = [
     title: "Color Systems",
     summary: "Construct restrained, accessible tonal palettes with calibrated surface steps and verified WCAG contrast.",
     whenToUse: "Creating brand palettes, building dark mode, or resolving contrast and visual-noise issues.",
-    recommendedTools: ["design_intelligence", "create_token", "add_token_mode", "set_layer_mode"],
+    recommendedTools: ["design_intelligence", "set_token", "add_token_mode", "set_layer_modes"],
     principles: [
       "Anchor 85% to 90% of the viewport in calibrated neutrals so brand and semantic colors communicate meaning.",
       "Verify >= 4.5:1 contrast for normal text and >= 3:1 for large headings and interactive boundaries across every mode.",
@@ -198,7 +198,7 @@ const SKILLS = [
     title: "Motion Engineering",
     summary: "Apply purposeful, tactile, GPU-composited motion with interaction-frequency restraint and full reduced-motion safety.",
     whenToUse: "Adding transitions, entrances, modals, drawers, toasts, or reviewing animation performance.",
-    recommendedTools: ["design_intelligence", "apply_motion", "edit_layer"],
+    recommendedTools: ["design_intelligence", "apply_motion", "set_styles"],
     principles: [
       "Animate compositor-only properties (transform, opacity, clip-path); never animate width, height, margin, padding, or transition: all.",
       "Keep interactive UI transitions crisp (100ms to 300ms) with responsive ease-out curves (cubic-bezier(0.23, 1, 0.32, 1)).",
@@ -219,7 +219,7 @@ const SKILLS = [
     title: "Accessibility",
     summary: "Guarantee WCAG 2.1 AA compliance across semantics, keyboard focus, contrast, landmarks, and assistive labels.",
     whenToUse: "Auditing or authoring any user-facing interface before shipping.",
-    recommendedTools: ["design_intelligence", "inspect_document", "layer_tree", "edit_layer"],
+    recommendedTools: ["design_intelligence", "project_info", "layer_tree", "set_attributes", "set_styles"],
     principles: [
       "Provide explicit accessible names for every image, icon button, link, and form control.",
       "Maintain logical heading order (h1 -> h2 -> h3 without skipping levels) and visible focus-visible rings.",
@@ -240,7 +240,7 @@ const SKILLS = [
     title: "Component Selection",
     summary: "Choose clean, accessible, license-verified components that fit the project stack and token architecture.",
     whenToUse: "Selecting reusable primitives, patterns, or external registry components for an interface.",
-    recommendedTools: ["search_components", "get_component", "import_component", "list_components", "create_instance"],
+    recommendedTools: ["search_components", "get_component", "list_components", "create_component", "insert_instance"],
     principles: [
       "Prefer accessible headless primitives and token-bound components over brittle ad-hoc markup.",
       "Keep one coherent primitive family per component set instead of mixing conflicting UI kits.",
@@ -261,7 +261,7 @@ const SKILLS = [
     title: "Design Criticism",
     summary: "Deliver rigorous, evidence-backed design critiques separating objective defects from brief-aware heuristics and optional taste.",
     whenToUse: "Reviewing any draft design, generated page, or redesign proposal.",
-    recommendedTools: ["design_intelligence", "inspect_document", "layer_tree", "inspect_layer", "list_tokens"],
+    recommendedTools: ["design_intelligence", "project_info", "layer_tree", "layer_details", "design_tokens"],
     principles: [
       "Resolve deterministic defects (contrast failures, tiny targets, broken motion rules, accessibility errors) first.",
       "Evaluate aesthetic choices strictly against the active product brief rather than dogmatic universal rules.",
@@ -282,7 +282,7 @@ const SKILLS = [
     title: "Existing Application Redesign",
     summary: "Elevate the visual craft and UX of an existing codebase while strictly preserving business logic, routing, and state.",
     whenToUse: "Modernizing or polishing an existing production web or desktop app without regressions.",
-    recommendedTools: ["design_intelligence", "set_design_brief", "import_source", "inspect_token_drift", "export_design"],
+    recommendedTools: ["design_intelligence", "set_design_brief", "import_source", "design_tokens", "export_design"],
     principles: [
       "Inventory existing routes, state hooks, event handlers, and test selectors before touching a single style.",
       "Start with token and theme normalization (Tier 1 CSS variables), then refine layout spacing and visual hierarchy.",
@@ -303,7 +303,7 @@ const SKILLS = [
     title: "Design to Code",
     summary: "Export clean, maintainable HTML, JSX, TSX, Tailwind, CSS variables, and W3C DTCG tokens directly from the canonical document.",
     whenToUse: "Turning an approved Ninerr design into production source files or token packages.",
-    recommendedTools: ["inspect_document", "list_tokens", "export_design"],
+    recommendedTools: ["project_info", "design_tokens", "layer_code", "export_design"],
     principles: [
       "Verify token bindings and semantic tags before exporting so emitted code is clean and idiomatic.",
       "Export design tokens alongside component code (tokens-css or tokens-json) so styling stays parameterized.",
@@ -324,7 +324,7 @@ const SKILLS = [
     title: "Code to Design",
     summary: "Bring existing HTML, JSX, CSS variables, and DTCG token files into Ninerr for structured critique, editing, and evolution.",
     whenToUse: "Onboarding an existing interface or token file into a Ninerr design project.",
-    recommendedTools: ["import_source", "inspect_document", "layer_tree", "list_tokens", "inspect_token_drift"],
+    recommendedTools: ["import_source", "project_info", "layer_tree", "design_tokens", "design_intelligence"],
     principles: [
       "Import tokens first (tokens-css or tokens-json) so imported markup immediately resolves semantic variables.",
       "Preserve structural hierarchy and provenance when importing HTML or JSX fragments.",
@@ -345,7 +345,7 @@ const SKILLS = [
     title: "Visual Verification",
     summary: "Verify layout hierarchy, token application, dark-mode fidelity, and responsive behavior rather than trusting markup in isolation.",
     whenToUse: "Validating any substantial layout creation, theme migration, or redesign before concluding work.",
-    recommendedTools: ["export_design", "design_intelligence", "set_layer_mode", "inspect_document"],
+    recommendedTools: ["export_design", "design_intelligence", "set_layer_modes", "project_info"],
     principles: [
       "Verify both light and dark modes (and high-contrast where configured) before calling a design complete.",
       "Check both compact mobile and desktop layouts for clipping, overflow, and hierarchy balance.",
@@ -366,10 +366,10 @@ const SKILLS = [
     title: "Brand Adaptation",
     summary: "Translate an organization's tone, palette, typography, and personality faithfully across modes without losing usability.",
     whenToUse: "Tailoring a design system or component set to match a specific brand identity.",
-    recommendedTools: ["set_design_brief", "design_intelligence", "edit_token", "add_token_mode", "set_layer_mode"],
+    recommendedTools: ["set_design_brief", "design_intelligence", "set_token", "add_token_mode", "set_layer_modes"],
     principles: [
       "Capture brand tone, constraints, and audience in the design brief before tuning tokens.",
-      "Calibrate brand accent shades for AA/AAA legibility on both light and dark surfaces rather than pasting raw print hex values.",
+      "Calibrate brand accent shades for AA and AAA legibility on both light and dark surfaces rather than pasting raw print hex values.",
       "Express brand personality primarily through typography, surface warmth, radius geometry, and editorial voice.",
     ],
     antiPatterns: [
@@ -387,7 +387,7 @@ const SKILLS = [
     title: "UX & Interaction Clarity",
     summary: "Reduce user friction through clear information scent, progressive disclosure, forgiving flows, and explicit feedback.",
     whenToUse: "Designing multi-step workflows, onboarding, forms, navigation, or diagnosing usability friction.",
-    recommendedTools: ["set_design_brief", "design_intelligence", "create_layers", "list_history", "undo"],
+    recommendedTools: ["set_design_brief", "design_intelligence", "create_layers", "project_history", "undo_change"],
     principles: [
       "Keep forms concise with clear visible labels, sensible defaults, inline validation, and specific recovery guidance.",
       "Use progressive disclosure so novices see the essentials while power users reach advanced controls cleanly.",
