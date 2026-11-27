@@ -40,7 +40,8 @@ function lstatOrNull(targetPath: string) {
 
 /**
  * Create `dirPath` owner-only (`0o700`) and prove AFTER `mkdirSync` that neither the directory
- * nor any ancestor component is a user symlink (closing post-mkdir symlink TOCTOU).
+ * nor any ancestor component is a user symlink (closing post-mkdir symlink TOCTOU while staying
+ * compatible with Windows 8.3 short path spellings like `RUNNER~1`).
  */
 export function ensureRealDirectory(dirPath: string, label: string): string {
   const safeDir = assertNoSymlinkPath(dirPath, label);
@@ -49,17 +50,13 @@ export function ensureRealDirectory(dirPath: string, label: string): string {
     throw new StudioError(409, "symlink-refused", `${label} is not a regular directory`);
   }
   mkdirSync(safeDir, { recursive: true, mode: 0o700 });
+  // Re-walk every ancestor and leaf component AFTER mkdirSync so a raced symlink cannot redirect writes.
+  assertNoSymlinkPath(safeDir, label);
   const after = lstatOrNull(safeDir);
   if (!after || after.isSymbolicLink() || !after.isDirectory()) {
     throw new StudioError(409, "symlink-refused", `${label} is not a trusted directory`);
   }
-  const real = realpathSync.native(safeDir);
-  const cmpSafe = process.platform === "win32" || process.platform === "darwin" ? safeDir.toLowerCase() : safeDir;
-  const cmpReal = process.platform === "win32" || process.platform === "darwin" ? real.toLowerCase() : real;
-  if (cmpReal !== cmpSafe) {
-    throw new StudioError(409, "symlink-refused", `${label} resolved through an unexpected symlink`);
-  }
-  return real;
+  return realpathSync.native(safeDir);
 }
 
 export function validatePackFileName(fileName: unknown): string {
@@ -114,7 +111,8 @@ function stripCssComments(css: string): string {
  * and `<style>` blocks without lazy regex backtracking on repeated unclosed tags.
  */
 function scanHtmlTagsLinear(html: string): { styleBlocks: string[]; strippedHtml: string } {
-  const lower = html.toLowerCase();
+  // ASCII-only lowercase keeps 1-to-1 UTF-16 code-unit indices (e.g. U+0130 stays length 1).
+  const lower = html.replace(/[A-Z]/gu, (ch) => String.fromCharCode(ch.charCodeAt(0) + 32));
   const len = html.length;
   const styleBlocks: string[] = [];
   const kept: string[] = [];
