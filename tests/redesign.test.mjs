@@ -1,25 +1,47 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  HeadlessEngine,
   analyzeCodebase,
   applyRedesignPlan,
+  assertWorkspaceRoot,
+  extractCssCustomProperties,
+  patchCssTokensSource,
+  patchJsxClassStrings,
   planRedesign,
+  resolveSafeWorkspaceFile,
   rollbackRedesign,
+  runCliCommand,
   verifyFunctionalInvariance,
-} from "../packages/studio-host/src/redesign.ts";
+} from "../packages/studio-host/src/index.ts";
 
 function withTempWorkspace(run) {
-  const dir = mkdtempSync(join(tmpdir(), "ninerr-redesign-"));
-  const journal = mkdtempSync(join(tmpdir(), "ninerr-redesign-journal-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-redesign-")));
+  const journal = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-redesign-journal-")));
+  const projects = realpathSync(mkdtempSync(join(tmpdir(), "ninerr-redesign-projects-")));
+  let result;
   try {
-    return run(dir, journal);
-  } finally {
+    result = run(dir, journal, projects);
+  } catch (error) {
     rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
     rmSync(journal, { recursive: true, force: true, maxRetries: 5 });
+    rmSync(projects, { recursive: true, force: true, maxRetries: 5 });
+    throw error;
   }
+  if (result && typeof result.then === "function") {
+    return result.finally(() => {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+      rmSync(journal, { recursive: true, force: true, maxRetries: 5 });
+      rmSync(projects, { recursive: true, force: true, maxRetries: 5 });
+    });
+  }
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(journal, { recursive: true, force: true, maxRetries: 5 });
+  rmSync(projects, { recursive: true, force: true, maxRetries: 5 });
+  return result;
 }
 
 test("analyzeCodebase discovers framework, styling, CSS tokens, routes, and functional contracts offline", () => withTempWorkspace((root) => {
@@ -28,7 +50,7 @@ test("analyzeCodebase discovers framework, styling, CSS tokens, routes, and func
     name: "sample-app",
     dependencies: { next: "15.0.0", react: "19.0.0", tailwindcss: "4.0.0" },
   }));
-  writeFileSync(join(root, "src", "app", "globals.css"), ":root { --bg-canvas: #ffffff; --accent-primary: #3b82f6; }\n");
+  writeFileSync(join(root, "src", "app", "globals.css"), ":root { --bg-canvas: #ffffff; --accent-primary: #3b82f6 }\n");
   writeFileSync(join(root, "src", "app", "page.tsx"), `"use client";
 import { useState } from "react";
 export default function HomePage() {
@@ -58,14 +80,16 @@ export default function HomePage() {
   assert.equal(analysis.counts.testIds, 1);
 }));
 
-test("Whole-File AST Invariance Gate approves styling-only changes and blocks logic/handler/directive/testid mutations", () => {
+test("Whole-File AST Invariance Gate approves styling-only changes and blocks logic, handler, directive, testid, and dynamic-style mutations", () => {
   const before = `"use client";
 import { useState } from "react";
-export function BillingForm({ onSave }) {
+export function BillingForm({ onSave, styles }) {
   const [amount, setAmount] = useState("100");
   return (
     <form onSubmit={onSave} className="p-4 bg-gray-100">
-      <input name="amount" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="amount-input" />
+      <div className={styles.wrapper} style={{ width: \`\${amount}%\` }}>
+        <input name="amount" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="amount-input" />
+      </div>
       <button type="submit" className={cn("bg-blue-500 px-3", amount === "" && "opacity-50")}>Pay {amount}</button>
     </form>
   );
@@ -74,12 +98,14 @@ export function BillingForm({ onSave }) {
 
   const validStyleRedesign = `"use client";
 import { useState } from "react";
-export function BillingForm({ onSave }) {
+export function BillingForm({ onSave, styles }) {
   const [amount, setAmount] = useState("100");
   return (
-    <form onSubmit={onSave} className="p-8 bg-slate-50 rounded-xl border">
-      <input name="amount" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="amount-input" />
-      <button type="submit" className={cn("bg-teal-700 px-5", amount === "" && "opacity-50")}>Pay {amount}</button>
+    <form onSubmit={onSave} className="p-8 bg-slate-50 rounded-xl border" style={{ gap: 16 }}>
+      <div className={styles.wrapper} style={{ width: \`\${amount}%\`, padding: 12 }}>
+        <input name="amount" value={amount} onChange={(e) => setAmount(e.target.value)} data-testid="amount-input" />
+      </div>
+      <button type="submit" className={cn("bg-teal-700 px-5", amount === "" && "opacity-40")}>Pay {amount}</button>
     </form>
   );
 }
@@ -88,21 +114,121 @@ export function BillingForm({ onSave }) {
   assert.equal(ok.ok, true, JSON.stringify(ok.violations));
 
   // Dropping "use client" directive is blocked.
-  const noDirective = validStyleRedesign.replace('"use client";\n', "");
-  assert.equal(verifyFunctionalInvariance(before, noDirective, "BillingForm.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(before, validStyleRedesign.replace('"use client";\n', ""), "BillingForm.tsx").ok, false);
 
   // Altering onSubmit handler is blocked.
-  const badHandler = validStyleRedesign.replace("onSubmit={onSave}", "onSubmit={() => {}}");
-  assert.equal(verifyFunctionalInvariance(before, badHandler, "BillingForm.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(before, validStyleRedesign.replace("onSubmit={onSave}", "onSubmit={() => {}}"), "BillingForm.tsx").ok, false);
 
   // Dropping data-testid is blocked.
-  const noTestId = validStyleRedesign.replace(' data-testid="amount-input"', "");
-  assert.equal(verifyFunctionalInvariance(before, noTestId, "BillingForm.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(before, validStyleRedesign.replace(' data-testid="amount-input"', ""), "BillingForm.tsx").ok, false);
 
   // Mutating state initializer business logic is blocked.
-  const badState = validStyleRedesign.replace('useState("100")', 'useState("0")');
-  assert.equal(verifyFunctionalInvariance(before, badState, "BillingForm.tsx").ok, false);
+  assert.equal(verifyFunctionalInvariance(before, validStyleRedesign.replace('useState("100")', 'useState("0")'), "BillingForm.tsx").ok, false);
+
+  // Dropping a reactive condition inside cn(...) is blocked!
+  assert.equal(
+    verifyFunctionalInvariance(
+      before,
+      validStyleRedesign.replace('className={cn("bg-teal-700 px-5", amount === "" && "opacity-40")}', 'className="bg-teal-700 px-5"'),
+      "BillingForm.tsx",
+    ).ok,
+    false,
+  );
+
+  // Dropping a CSS module dynamic class binding is blocked!
+  assert.equal(
+    verifyFunctionalInvariance(
+      before,
+      validStyleRedesign.replace("className={styles.wrapper}", 'className="p-4"'),
+      "BillingForm.tsx",
+    ).ok,
+    false,
+  );
+
+  // Replacing a dynamic inline style template with a static value is blocked!
+  assert.equal(
+    verifyFunctionalInvariance(
+      before,
+      validStyleRedesign.replace("width: `${amount}%`", 'width: "50%"'),
+      "BillingForm.tsx",
+    ).ok,
+    false,
+  );
 });
+
+test("CSS custom property scanner skips comments/strings, handles closing-brace declarations, and rejects unsafe CSS values", () => {
+  const css = `
+/* --accent: #000000; */
+.note::after { content: "--accent: #111111;"; }
+:root {
+  --bg-canvas: #ffffff;
+  --accent: #3b82f6
+}
+`;
+  const props = extractCssCustomProperties(css);
+  assert.deepEqual(props.map((p) => [p.name, p.value]), [
+    ["--bg-canvas", "#ffffff"],
+    ["--accent", "#3b82f6"],
+  ]);
+
+  const patched = patchCssTokensSource(css, { "--accent": "#0f766e" });
+  assert.equal(patched.changed, true);
+  assert.equal(patched.changes.length, 1);
+  assert.match(patched.after, /\/\* --accent: #000000; \*\//u);
+  assert.match(patched.after, /content: "--accent: #111111;";/u);
+  assert.match(patched.after, /--accent: #0f766e\n\}/u);
+
+  // Unsafe CSS values (external loads, scripts, comment/block escapes) are refused.
+  assert.throws(() => patchCssTokensSource(css, { "--accent": "url(https://evil.test/a.png)" }), /invalid CSS value/u);
+  assert.throws(() => patchCssTokensSource(css, { "--accent": "red; background: url(x)" }), /invalid CSS value/u);
+  assert.throws(() => patchCssTokensSource(css, { "--accent": "red /* inject */" }), /invalid CSS value/u);
+  assert.throws(() => patchCssTokensSource(css, { "not-a-var": "#000" }), /invalid CSS custom property name/u);
+});
+
+test("Tier 2 JSX class patcher handles nested cn/clsx/object/conditional expressions and blocks unsafe class tokens", () => {
+  const src = `export function Card({ active, warn }) {
+  return (
+    <div className={cn(clsx("p-4 bg-blue-500", { "bg-blue-500": active }), warn ? "text-red-500" : "bg-blue-500")}>
+      <span>Hello</span>
+    </div>
+  );
+}
+`;
+  const res = patchJsxClassStrings(src, "Card.tsx", { "bg-blue-500": "bg-teal-700", "p-4": "" });
+  assert.equal(res.changed, true);
+  assert.equal(res.edits, 3);
+  assert.doesNotMatch(res.after, /bg-blue-500/u);
+  assert.match(res.after, /"bg-teal-700": active/u);
+  assert.match(res.after, /clsx\("bg-teal-700"/u);
+  assert.equal(res.invariance.ok, true);
+
+  assert.throws(() => patchJsxClassStrings(src, "Card.tsx", { "bg-blue-500": 'evil" onClick={pwn}' }), /invalid replacement class value/u);
+});
+
+test("workspace security rejects path traversal, overlapping projectsRoot, and symlinks", () => withTempWorkspace((root, _journal, projects) => {
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src", "ok.css"), ":root { --a: #111; }\n");
+
+  assert.throws(() => resolveSafeWorkspaceFile(root, "../outside.css"), /invalid-path|escapes/u);
+  assert.throws(() => resolveSafeWorkspaceFile(root, "/etc/passwd"), /invalid/u);
+  assert.throws(() => resolveSafeWorkspaceFile(root, "src\\ok.css"), /invalid/u);
+  assert.throws(() => resolveSafeWorkspaceFile(root, "C:ok.css"), /invalid/u);
+  assert.throws(() => assertWorkspaceRoot(projects, projects), /overlap/u);
+  assert.throws(() => assertWorkspaceRoot(join(projects, "nested"), projects), /does not exist|overlap/u);
+
+  // Dangling symlink refusal (skip only if OS denies unprivileged symlink creation).
+  const linkPath = join(root, "src", "dangling.css");
+  let linked = false;
+  try {
+    symlinkSync(join(root, "nonexistent-target.css"), linkPath);
+    linked = true;
+  } catch {
+    // Windows without Developer Mode may disallow symlink creation for non-admin users.
+  }
+  if (linked) {
+    assert.throws(() => resolveSafeWorkspaceFile(root, "src/dangling.css"), /symlink/u);
+  }
+}));
 
 test("3-Tier Redesign Engine plans, applies with SHA-256 guard, and rolls back multi-file CSS+JSX changes cleanly", () => withTempWorkspace((root, journalDir) => {
   mkdirSync(join(root, "src"), { recursive: true });
@@ -131,6 +257,9 @@ export function Hero({ onStart }) {
   assert.equal(plan.patches.find((p) => p.file === "src/tokens.css").tier, 1);
   assert.equal(plan.patches.find((p) => p.file === "src/Hero.tsx").tier, 2);
 
+  // Tampered planToken fails closed.
+  assert.throws(() => applyRedesignPlan(plan, { journalDir, expectedPlanToken: "0".repeat(64) }), /planToken does not match/u);
+
   // Apply cleanly with planToken binding.
   const applied = applyRedesignPlan(plan, { journalDir, expectedPlanToken: plan.planToken });
   assert.equal(applied.filesApplied.length, 2);
@@ -147,4 +276,194 @@ export function Hero({ onStart }) {
   assert.equal(rolled.restoredFiles.length, 2);
   assert.equal(readFileSync(cssPath, "utf8"), origCss);
   assert.equal(readFileSync(tsxPath, "utf8"), origTsx);
+}));
+
+test("Headless MCP redesign tools enforce workspace binding, dryRun, elicitation confirmation, and rollback", async () => withTempWorkspace(async (root, _journal, projectsRoot) => {
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "demo-app", dependencies: { react: "19.0.0" } }));
+  const origCss = ":root { --brand-primary: #2563eb; }\n";
+  const origTsx = `export function Banner({ onAction }) {
+  return (
+    <section className="p-4 bg-white">
+      <button data-testid="go" className="bg-blue-500 text-white" onClick={onAction}>Go</button>
+    </section>
+  );
+}
+`;
+  writeFileSync(join(root, "src", "theme.css"), origCss);
+  writeFileSync(join(root, "src", "Banner.tsx"), origTsx);
+
+  // 1. Without workspaceRoot bound, all redesign tools fail closed.
+  const unbound = new HeadlessEngine({ projectsRoot, write: () => {} });
+  try {
+    await unbound.receive({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test" } } });
+    await unbound.receive({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "create_project", arguments: { name: "p1" } } });
+    const res = await unbound.receive({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "inspect_codebase", arguments: {} } });
+    assert.equal(res.result.isError, true);
+    assert.match(res.result.content[0].text, /No codebase workspace is bound/u);
+  } finally {
+    unbound.close();
+  }
+
+  // 2. With workspaceRoot bound on a non-elicitation client: read/import/plan/dryRun work, apply is refused.
+  const noAsk = new HeadlessEngine({ projectsRoot, workspaceRoot: root, write: () => {} });
+  let planToken;
+  try {
+    await noAsk.receive({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "no-ask" } } });
+    await noAsk.receive({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "open_project", arguments: { name: "p1" } } });
+
+    const inspected = await noAsk.receive({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "inspect_codebase", arguments: {} } });
+    assert.notEqual(inspected.result.isError, true);
+    assert.equal(inspected.result.structuredContent.projectName, "demo-app");
+
+    const impCss = await noAsk.receive({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "import_from_codebase", arguments: { file: "src/theme.css" } } });
+    assert.notEqual(impCss.result.isError, true);
+    assert.equal(impCss.result.structuredContent.adds, 1);
+
+    const impTsx = await noAsk.receive({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "import_from_codebase", arguments: { file: "src/Banner.tsx" } } });
+    assert.notEqual(impTsx.result.isError, true);
+    assert.equal(impTsx.result.structuredContent.componentName, "Banner");
+
+    const planned = await noAsk.receive({
+      jsonrpc: "2.0",
+      id: 6,
+      method: "tools/call",
+      params: {
+        name: "plan_redesign",
+        arguments: {
+          cssTokenUpdates: { "--brand-primary": "#0f766e" },
+          jsxClassReplacements: { "bg-blue-500": "bg-teal-700" },
+        },
+      },
+    });
+    assert.notEqual(planned.result.isError, true);
+    planToken = planned.result.structuredContent.planToken;
+    assert.equal(planned.result.structuredContent.fileCount, 2);
+
+    // dryRun asks nothing and writes nothing.
+    const dry = await noAsk.receive({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: {
+        name: "apply_redesign",
+        arguments: {
+          dryRun: true,
+          action: "apply",
+          planToken,
+          cssTokenUpdates: { "--brand-primary": "#0f766e" },
+          jsxClassReplacements: { "bg-blue-500": "bg-teal-700" },
+        },
+      },
+    });
+    assert.notEqual(dry.result.isError, true);
+    assert.equal(dry.result.structuredContent.dryRun, true);
+    assert.equal(readFileSync(join(root, "src", "theme.css"), "utf8"), origCss);
+
+    // Real apply without elicitation is refused cleanly.
+    const refused = await noAsk.receive({
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      params: {
+        name: "apply_redesign",
+        arguments: {
+          action: "apply",
+          planToken,
+          cssTokenUpdates: { "--brand-primary": "#0f766e" },
+          jsxClassReplacements: { "bg-blue-500": "bg-teal-700" },
+        },
+      },
+    });
+    assert.equal(refused.result.isError, true);
+    assert.match(refused.result.content[0].text, /cannot ask them/u);
+    assert.equal(readFileSync(join(root, "src", "theme.css"), "utf8"), origCss);
+  } finally {
+    noAsk.close();
+  }
+
+  // 3. Elicitation-capable client approves apply and then rollback!
+  const prompts = [];
+  const withAsk = new HeadlessEngine({
+    projectsRoot,
+    workspaceRoot: root,
+    confirmationWaitMs: 5_000,
+    write: (msg) => {
+      prompts.push(msg);
+      if (msg?.method === "elicitation/create") {
+        queueMicrotask(() => {
+          withAsk.receive({ jsonrpc: "2.0", id: msg.id, result: { action: "accept", content: { approve: true } } });
+        });
+      }
+    },
+  });
+  try {
+    await withAsk.receive({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "interactive" } } });
+    await withAsk.receive({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "open_project", arguments: { name: "p1" } } });
+
+    const applied = await withAsk.receive({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "apply_redesign",
+        arguments: {
+          action: "apply",
+          planToken,
+          cssTokenUpdates: { "--brand-primary": "#0f766e" },
+          jsxClassReplacements: { "bg-blue-500": "bg-teal-700" },
+        },
+      },
+    });
+    assert.notEqual(applied.result.isError, true, applied.result.content[0].text);
+    const runId = applied.result.structuredContent.runId;
+    assert.match(runId, /^redesign-/u);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0].params.message, /Apply redesign to 2 files/u);
+    assert.match(readFileSync(join(root, "src", "theme.css"), "utf8"), /#0f766e/u);
+    assert.match(readFileSync(join(root, "src", "Banner.tsx"), "utf8"), /bg-teal-700/u);
+
+    const rolled = await withAsk.receive({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "apply_redesign", arguments: { action: "rollback", runId } },
+    });
+    assert.notEqual(rolled.result.isError, true, rolled.result.content[0].text);
+    assert.equal(readFileSync(join(root, "src", "theme.css"), "utf8"), origCss);
+    assert.equal(readFileSync(join(root, "src", "Banner.tsx"), "utf8"), origTsx);
+  } finally {
+    withAsk.close();
+  }
+}));
+
+test("CLI ninerr redesign inspect -> plan -> apply -> rollback works end to end", async () => withTempWorkspace(async (root, journalDir, scratchDir) => {
+  mkdirSync(join(root, "src"), { recursive: true });
+  const origCss = ":root { --surface-0: #ffffff; }\n";
+  writeFileSync(join(root, "src", "app.css"), origCss);
+  const tokensFile = join(scratchDir, "tokens.json");
+  const planFile = join(scratchDir, "plan.json");
+  writeFileSync(tokensFile, JSON.stringify({ "--surface-0": "#f8fafc" }));
+
+  let out = "";
+  let err = "";
+  const run = async (argv) => {
+    out = "";
+    err = "";
+    return runCliCommand("redesign", argv, { version: "0.0.0", stdout: (s) => { out += s; }, stderr: (s) => { err += s; } });
+  };
+
+  assert.equal(await run(["inspect", root, "--json"]), 0, err);
+  assert.equal(JSON.parse(out).counts.cssTokens, 1);
+
+  assert.equal(await run(["plan", root, "--tokens", tokensFile, "--out", planFile, "--json"]), 0, err);
+  const planSummary = JSON.parse(out);
+  assert.equal(planSummary.fileCount, 1);
+
+  assert.equal(await run(["apply", root, "--plan", planFile, "--expected-token", planSummary.planToken, "--journal", journalDir, "--json"]), 0, err);
+  const applied = JSON.parse(out);
+  assert.equal(readFileSync(join(root, "src", "app.css"), "utf8"), ":root { --surface-0: #f8fafc; }\n");
+
+  assert.equal(await run(["rollback", root, "--run", applied.runId, "--journal", journalDir, "--json"]), 0, err);
+  assert.equal(readFileSync(join(root, "src", "app.css"), "utf8"), origCss);
 }));

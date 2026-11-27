@@ -2,7 +2,7 @@
 // `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
 // Pure local execution, zero network.
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   NINERR_COMPONENT_CATEGORIES,
@@ -36,7 +36,9 @@ import {
 } from "@ninerr/vision";
 import { exportHtml } from "./code.ts";
 import { auditDesignSystem, planRegistryItemUpdate } from "./design-system-ops.ts";
-import { writeTrustedBytes } from "./trusted-file.ts";
+import { resolveProjectsFolder } from "./projects-folder.ts";
+import { analyzeCodebase, applyRedesignPlan, assertWorkspaceRoot, planRedesign, rollbackRedesign } from "./redesign.ts";
+import { writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
 
 export interface CliRunOptions {
   version: string;
@@ -44,12 +46,23 @@ export interface CliRunOptions {
   stderr?: (text: string) => void;
 }
 
-export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens", "preview", "critique", "audit", "improve"]);
-const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient", "vision", "dry-run", "reduced-motion"]);
+export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens", "preview", "critique", "audit", "improve", "redesign"]);
+const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient", "vision", "dry-run", "reduced-motion", "force"]);
 const MAX_CLI_FILE_BYTES = 2 * 1024 * 1024;
 
 function readBoundedTextFile(filePath: string, commandLabel: string): string {
-  const flags = constants.O_RDONLY | (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0);
+  try {
+    const pre = lstatSync(filePath);
+    if (pre.isSymbolicLink() || !pre.isFile()) {
+      throw new Error(`${commandLabel}: ${JSON.stringify(filePath)} must be a regular non-symlink file`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+  }
+  const flags =
+    constants.O_RDONLY |
+    (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0) |
+    (typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0);
   const fd = openSync(filePath, flags);
   try {
     const stat = fstatSync(fd);
@@ -657,6 +670,144 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       } finally {
         opened.close();
       }
+    }
+
+    if (command === "redesign") {
+      const sub = positionals[0];
+      if (!sub || sub === "help" || flags.help === true) {
+        out([
+          "Ninerr Existing-App Redesign CLI:",
+          "  ninerr redesign inspect <workspace> [--json]",
+          "  ninerr redesign plan <workspace> [--tokens <json-file>] [--classes <json-file>] [--files <a,b>] [--out <plan.json>] [--json]",
+          "  ninerr redesign apply <workspace> --plan <plan.json> [--expected-token <sha>] [--journal <dir>] [--json]",
+          "  ninerr redesign rollback <workspace> --run <runId> [--journal <dir>] [--force] [--json]",
+        ].join("\n") + "\n");
+        return 0;
+      }
+      const workspaceArg = positionals[1];
+      if (!workspaceArg) {
+        err(`ninerr redesign ${sub}: workspace folder path is required\n`);
+        return 2;
+      }
+      const workspaceRoot = assertWorkspaceRoot(workspaceArg);
+      const defaultJournalDir = () => (typeof flags.journal === "string" && flags.journal.trim() !== ""
+        ? resolve(flags.journal)
+        : join(resolveProjectsFolder().path, ".ninerr-redesign-journals"));
+
+      if (sub === "inspect") {
+        const analysis = analyzeCodebase(workspaceRoot);
+        if (asJson) {
+          out(`${JSON.stringify(analysis, null, 2)}\n`);
+        } else {
+          out(`Workspace: ${analysis.workspaceRoot}\n`);
+          out(`Project: ${analysis.projectName ?? "(unnamed)"}\n`);
+          out(`Frameworks: ${analysis.frameworks.join(", ")}\n`);
+          out(`Styling: ${analysis.styling.join(", ") || "none detected"}\n`);
+          out(`Files: ${analysis.counts.scannedFiles} scanned (${analysis.counts.cssFiles} CSS, ${analysis.counts.componentFiles} code, ${analysis.counts.routeFiles} routes)\n`);
+          out(`Contracts: ${analysis.counts.cssTokens} CSS tokens, ${analysis.counts.hooks} hooks, ${analysis.counts.handlers} handlers, ${analysis.counts.testIds} data-testid attrs\n`);
+        }
+        return 0;
+      }
+
+      if (sub === "plan") {
+        const readJsonObject = (flagName: string): Record<string, string> => {
+          const val = flags[flagName];
+          if (val === undefined) return {};
+          if (typeof val !== "string" || val.trim() === "") throw new Error(`--${flagName} requires a JSON file path`);
+          const parsed = JSON.parse(readBoundedTextFile(resolve(val), `ninerr redesign plan --${flagName}`));
+          if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error(`--${flagName} must point to a JSON object`);
+          }
+          return parsed as Record<string, string>;
+        };
+        const cssTokenUpdates = readJsonObject("tokens");
+        const jsxClassReplacements = readJsonObject("classes");
+        const files = typeof flags.files === "string" && flags.files.trim() !== ""
+          ? flags.files.split(",").map((s) => s.trim()).filter(Boolean)
+          : [];
+        if (Object.keys(cssTokenUpdates).length === 0 && Object.keys(jsxClassReplacements).length === 0) {
+          err("ninerr redesign plan: provide --tokens <json-file> and/or --classes <json-file>\n");
+          return 2;
+        }
+        const plan = planRedesign(workspaceRoot, { cssTokenUpdates, jsxClassReplacements, files });
+        let outFile: string | null = null;
+        if (typeof flags.out === "string" && flags.out.trim() !== "") {
+          const target = resolve(flags.out);
+          let targetStat = null;
+          try { targetStat = lstatSync(target); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (targetStat !== null && (targetStat.isSymbolicLink() || targetStat.isDirectory())) {
+            throw new Error(`--out ${JSON.stringify(flags.out)} must not be a symlink or directory`);
+          }
+          const parent = dirname(target);
+          let parentStat = null;
+          try { parentStat = lstatSync(parent); } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") throw e; }
+          if (parentStat !== null && parentStat.isSymbolicLink()) {
+            throw new Error(`--out parent directory must not be a symlink`);
+          }
+          mkdirSync(parent, { recursive: true, mode: 0o700 });
+          writeTrustedFile(target, `${JSON.stringify(plan, null, 2)}\n`);
+          outFile = target;
+        }
+        if (asJson) {
+          out(`${JSON.stringify({
+            planToken: plan.planToken,
+            workspaceRoot: plan.workspaceRoot,
+            ...(outFile ? { planFile: outFile } : {}),
+            fileCount: plan.patches.length,
+            files: plan.patches.map(({ file, tier, beforeSha256, afterSha256, summary }) => ({ file, tier, beforeSha256, afterSha256, summary })),
+          }, null, 2)}\n`);
+        } else {
+          out(`Plan token: ${plan.planToken}\n`);
+          out(`Files to patch: ${plan.patches.length}${outFile ? ` (written to ${outFile})` : ""}\n`);
+          for (const p of plan.patches) out(`  [tier ${p.tier}] ${p.file} — ${p.summary}\n`);
+        }
+        return 0;
+      }
+
+      if (sub === "apply") {
+        if (typeof flags.plan !== "string" || flags.plan.trim() === "") {
+          err("ninerr redesign apply: --plan <plan.json> is required\n");
+          return 2;
+        }
+        const plan = JSON.parse(readBoundedTextFile(resolve(flags.plan), "ninerr redesign apply --plan"));
+        if (!plan || typeof plan !== "object" || plan.workspaceRoot !== workspaceRoot) {
+          err("ninerr redesign apply: plan workspaceRoot does not match the specified workspace folder\n");
+          return 2;
+        }
+        const expectedPlanToken = typeof flags["expected-token"] === "string" ? flags["expected-token"] : undefined;
+        const applied = applyRedesignPlan(plan, { journalDir: defaultJournalDir(), ...(expectedPlanToken ? { expectedPlanToken } : {}) });
+        if (asJson) {
+          out(`${JSON.stringify(applied, null, 2)}\n`);
+        } else {
+          out(`Applied ${applied.filesApplied.length} file(s) — runId: ${applied.runId}\n`);
+          for (const f of applied.filesApplied) out(`  [tier ${f.tier}] ${f.file} — ${f.summary}\n`);
+          out(`Rollback journal: ${applied.journalPath}\n`);
+        }
+        return 0;
+      }
+
+      if (sub === "rollback") {
+        if (typeof flags.run !== "string" || flags.run.trim() === "") {
+          err("ninerr redesign rollback: --run <runId> is required\n");
+          return 2;
+        }
+        const rolled = rollbackRedesign({
+          workspaceRoot,
+          journalDir: defaultJournalDir(),
+          runId: flags.run,
+          force: flags.force === true,
+        });
+        if (asJson) {
+          out(`${JSON.stringify(rolled, null, 2)}\n`);
+        } else {
+          out(`Rolled back ${rolled.restoredFiles.length} file(s) from ${rolled.runId}:\n`);
+          for (const f of rolled.restoredFiles) out(`  restored ${f}\n`);
+        }
+        return 0;
+      }
+
+      err(`ninerr redesign: unknown subcommand ${JSON.stringify(sub)}\n`);
+      return 2;
     }
 
     err(`ninerr: unknown command ${JSON.stringify(command)}\n`);

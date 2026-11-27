@@ -14,4 +14,5 @@ export { HeadlessEngine, localAgentActor, runHeadless, type HeadlessOptions } fr
 export { EXTENDED_CLI_COMMANDS, runCliCommand, type CliRunOptions } from "./cli.ts";
 export { auditDesignSystem, compileBreakpointsStylesheet, generateHighContrastMode, planRegistryItemUpdate, planThemeMigration, type DesignSystemAuditFinding, type ThemeTokenInput } from "./design-system-ops.ts";
 export { CodebaseLinks, MAX_SCAN_DEPTH, MAX_SCAN_ENTRIES, MAX_SCAN_FILES, MAX_SOURCE_BYTES, assertFolder, bringIn, planWriteBack, readSourceFile, scanComponents, settleWriteBacks, writeBack, type WriteBackPlan } from "./codebase.ts";
+export { REDESIGN_LIMITS, analyzeCodebase, applyRedesignPlan, assertWorkspaceRoot, extractCssCustomProperties, patchCssTokensSource, patchJsxClassStrings, planRedesign, readBoundedWorkspaceFile, readRedesignJournal, resolveSafeWorkspaceFile, rollbackRedesign, verifyFunctionalInvariance, type PlannedFilePatch, type RedesignPlan } from "./redesign.ts";
 export { type CodeSource, type ImportJsxOptions } from "./code.ts";

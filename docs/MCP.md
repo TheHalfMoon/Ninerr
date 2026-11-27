@@ -16,7 +16,7 @@ Ninerr runs an MCP server so that an agent can read and edit the open design doc
 
 ## The headless engine (no editor needed)
 
-`node bin/ninerr.mjs mcp [--projects <folder>]` runs Ninerr as an MCP server on stdio, for an agent's own client to start. No editor, browser or desktop app, no account and no network is needed (`docs/HEADLESS.md`). The projects folder is `--projects`, or `NINERR_PROJECTS`, or "Ninerr Projects" in your home folder.
+`node bin/ninerr.mjs mcp [--projects <folder>] [--workspace <folder>]` runs Ninerr as an MCP server on stdio, for an agent's own client to start. No editor, browser or desktop app, no account and no network is needed (`docs/HEADLESS.md`). The projects folder is `--projects`, or `NINERR_PROJECTS`, or "Ninerr Projects" in your home folder. Optionally pass `--workspace <folder>` (or `NINERR_WORKSPACE`) to bind one local application codebase for offline inspection, component/token import, and human-confirmed redesign.
 
 - **Lifecycle tools,** which belong to the engine: `list_projects`, `create_project`, `open_project`, `save_project` and `close_project`. A project's name is its folder's name inside the projects folder, never a path. Opening holds the project's lock, as the editor does, so a project open in the editor or in another agent's engine is refused until it is released. Ending the client's session closes the project.
 - **Every document tool** below works the same as in the editor's server. It goes through the same single writer, authorization, revision checks, dry runs and history.
@@ -41,16 +41,16 @@ The server identifies itself as `ninerr` and tells the agent to call `guide` fir
 
 ## Tools
 
-`MCP_TOOL_NAMES` is the catalog: the 52 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
+`MCP_TOOL_NAMES` is the catalog: the 56 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
 
 | Class | Tools | Capability required |
 | --- | --- | --- |
-| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task`, `design_tokens`, `list_components`, `instance_layers`, `search_components`, `get_component`, `project_history`, `design_intelligence`, `audit_design_system`, `critique_design` | `read` |
-| write | `create_frame`, `create_layers`, `set_text`, `rename_layers`, `set_styles`, `set_attributes`, `set_layout`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance`, `undo_change`, `redo_change`, `import_source`, `export_design`, `set_design_brief`, `apply_motion`, `instantiate_component`, `migrate_theme`, `render_preview`, `improve_design` | `document-write` |
-| consequential | `delete_layers`, `delete_token` | `document-write` plus a confirmation |
+| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task`, `design_tokens`, `list_components`, `instance_layers`, `search_components`, `get_component`, `project_history`, `design_intelligence`, `audit_design_system`, `critique_design`, `inspect_codebase`, `plan_redesign` | `read` |
+| write | `create_frame`, `create_layers`, `set_text`, `rename_layers`, `set_styles`, `set_attributes`, `set_layout`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance`, `undo_change`, `redo_change`, `import_source`, `export_design`, `set_design_brief`, `apply_motion`, `instantiate_component`, `migrate_theme`, `render_preview`, `improve_design`, `import_from_codebase` | `document-write` |
+| consequential | `delete_layers`, `delete_token`, `apply_redesign` | `document-write` plus a confirmation |
 | unknown | any other name | denied without consulting a policy |
 
-So the 20 read-only tools need only `read`.
+So the 22 read-only tools need only `read`.
 
 - **Reading.**
   - `guide`: how Ninerr documents, layers and edits work; the server asks the agent to call it first.
@@ -65,6 +65,7 @@ So the 20 read-only tools need only `read`.
   - `instantiate_component`: instantiate any native Ninerr component (`ninerr:<id>`) into the open project in one atomic undoable change, either as editable layers or as a reusable `component-definition` (plus optional live `component-instance`).
   - `audit_design_system` and `migrate_theme`: `audit_design_system` inspects unused tokens, duplicate literal values, missing mode values, hardcoded layer matches, and cross-mode WCAG contrast; `migrate_theme` atomically migrates dual-mode semantic tokens (with `dryRun` preview), generates a WCAG AAA high-contrast mode, or configures responsive breakpoints and scoped `@media`/`@container` rules.
   - `render_preview`, `critique_design`, and `improve_design`: `render_preview` renders a layer inside a local 3-layer zero-egress Chromium/Edge browser across responsive viewports, writes PNG screenshots to `exports/previews/`, computes layout/contrast/overflow/target telemetry, and optionally computes pure-JS PNG pixel diffs; `critique_design` produces a unified report across static WCAG accessibility, Taste/Motion, Design System audit, and optional real-browser Vision telemetry; `improve_design` runs bounded in-memory non-regressing repairs and commits at most one collapsed undoable change.
+  - `inspect_codebase`, `import_from_codebase`, `plan_redesign`, and `apply_redesign`: operate strictly on the single local codebase bound by the person via `--workspace` (never arbitrary paths). `inspect_codebase` analyzes frameworks, styling systems, tokens, routes, and functional contracts offline; `import_from_codebase` imports a workspace component, CSS stylesheet, or HTML file into the open project in one undoable change; `plan_redesign` plans Tier 1 CSS token updates, Tier 2 JSX class replacements (`className`, `cn`, `clsx`, `twMerge`, `cva`), or Tier 3 visual patches gated by Whole-File AST Business-Logic & Functional-Contract Invariance without writing disk; `apply_redesign` is consequential and applies a `planToken`-bound plan (with atomic writes and owner-only rollback journal) or rolls back a previous run only with the person's explicit confirmation.
   - `search_design_references` and `get_design_reference`: the local reference pack the person has read into the open project. They return public references with their rights, never file bytes. They take no directory, URL or token, and with no pack read the answer says so; nothing is fetched instead.
 - **Dry runs and revisions** (ADR-0006, in part). Every write and consequential tool also takes:
   - `dryRun: true`, which checks the change as it would be made (the caller's access, the document rules, the stylesheet budget) and answers `{ dryRun: true, wouldChange, operations, revision }`. It makes nothing, and a dry-run delete asks the person nothing, so it does not check what only the person's approval would. A layer it would create has an id there that a real call does not reuse.
