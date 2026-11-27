@@ -61,10 +61,11 @@ for (const full of files) {
     }
     checked += 1;
   } catch (error) {
-    const stderr = error && typeof error === "object" && "stderr" in error && error.stderr
-      ? String(error.stderr)
-      : (error instanceof Error ? error.message : String(error));
-    failures.push(`${rel}:\n${stderr.trim()}`);
+    const rawStderr = error && typeof error === "object" && "stderr" in error && error.stderr
+      ? String(error.stderr).trim()
+      : "";
+    const detail = rawStderr || (error instanceof Error ? error.message : String(error));
+    failures.push(`${rel}:\n${detail}`);
   }
 }
 

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildEngine } from "../scripts/build-engine.mjs";
+import { buildEngine, workspaceImportsIn } from "../scripts/build-engine.mjs";
 
 // The Ninerr Engine package (docs/HEADLESS.md, increment 4): built with no TypeScript left in it,
 // installed the way a person installs it, and checked by its own `ninerr doctor`.
@@ -55,15 +55,32 @@ test("the engine package carries no TypeScript, every import in it resolves, and
   const files = filesUnder(out);
   assert.deepEqual(files.filter((file) => file.endsWith(".ts")), [], "no TypeScript");
   for (const file of ["LICENSE", "THIRD_PARTY_NOTICES.md", "SECURITY.md", "README.md"]) assert.ok(existsSync(join(out, file)), file);
-  // Every relative import in every module names a file that is there.
+  // Every relative import AND every @ninerr/* workspace import in every built module resolves.
   // Import and export statements, and dynamic imports: not text in data that only looks like one.
   const IMPORT = /^\s*(?:import|export)\b[^;\n]*?\bfrom\s*["'](\.{1,2}\/[^"'\n]+)["']|^\s*import\s*["'](\.{1,2}\/[^"'\n]+)["']|\bimport\(\s*["'](\.{1,2}\/[^"'\n]+)["']\s*\)/gmu;
-  for (const file of files.filter((path) => /\.(m?js)$/u.test(path))) {
-    for (const match of readFileSync(file, "utf8").matchAll(IMPORT)) {
+  for (const file of files.filter((path) => /\.(m?js|cjs)$/u.test(path))) {
+    const text = readFileSync(file, "utf8");
+    for (const match of text.matchAll(IMPORT)) {
       const specifier = match[1] ?? match[2] ?? match[3];
       assert.ok(existsSync(join(dirname(file), specifier)), `${file.slice(out.length)} imports ${specifier}`);
     }
+    for (const pkg of workspaceImportsIn(text)) {
+      assert.ok(existsSync(join(out, "node_modules", "@ninerr", pkg, "package.json")), `${file.slice(out.length)} imports @ninerr/${pkg}`);
+    }
   }
+  assert.deepEqual(
+    workspaceImportsIn([
+      'const quoteRe = /["\']/u;',
+      'import { a } from "@ninerr/alpha";',
+      'export { b } from "@ninerr/beta/subpath";',
+      'const c = await import("@ninerr/gamma/deep/mod.mjs");',
+      'const d = require("@ninerr/delta");',
+      '// moved from "@ninerr/ignored-line-comment"',
+      '/* copied from "@ninerr/ignored-block-comment" */',
+      'const doc = \'example: import x from "@ninerr/ignored-string"\';',
+    ].join("\n")),
+    ["alpha", "beta", "delta", "gamma"],
+  );
   for (const manifest of files.filter((path) => path.endsWith(`${"package.json"}`) && path !== join(out, "package.json"))) {
     const bundled = JSON.parse(readFileSync(manifest, "utf8"));
     assert.equal(bundled.dependencies, undefined, `${bundled.name} declares no dependencies of its own`);

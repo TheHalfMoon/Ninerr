@@ -5,8 +5,8 @@
 //
 //   node scripts/build-engine.mjs [--out <folder>] [--pack]
 //
-// Each workspace package but the desktop app is copied under the engine's own
-// node_modules/@ninerr/ as a bundled dependency, with its TypeScript stripped to JavaScript by
+// Only workspace packages reachable from bin/ninerr.mjs are copied under the engine's own
+// node_modules/@ninerr/ as bundled dependencies, with their TypeScript stripped to JavaScript by
 // Node.js itself (node:module stripTypeScriptTypes): Node.js runs no TypeScript from inside
 // node_modules, so an installed engine carries none. The third-party packages are dependencies
 // at the exact versions the lockfile has. --pack also writes the tarball with `npm pack`.
@@ -23,21 +23,113 @@ const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // app, browser studio-web UI, and unreferenced research/governance packages stay out.
 const LEFT_OUT = new Set(["desktop", "studio-web"]);
 const RELATIVE_TS = /((?:from|import)\s*\(?\s*)(["'])(\.{1,2}\/[^"'\n]+?)\.ts\2/gu;
-const WORKSPACE_IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|^\s*import\s+)["']@ninerr\/([a-z][a-z0-9-]*)["']/gmu;
+const WORKSPACE_IMPORT = /(?:\bfrom\s*|\b(?:import|require)\s*\(\s*|^\s*import\s+)(["'])@ninerr\/([a-z][a-z0-9-]*)(?:\/[^"'\n]*)?\1/gmu;
+
+const REGEX_BEFORE_CHAR = new Set(["", "=", "(", ",", ":", ";", "!", "&", "|", "?", "{", "}", "[", "+", "-", "*", "%", "<", ">", "^", "~"]);
+const REGEX_BEFORE_WORD = new Set(["return", "case", "throw", "in", "of", "typeof", "void", "delete", "new", "yield", "await"]);
+
+/** Replace JS line/block comments outside strings and regex literals so prose never matches imports. */
+function withoutComments(source) {
+  let out = "";
+  let i = 0;
+  let lastSig = "";
+  let lastWord = "";
+  const record = (ch) => {
+    if (/[A-Za-z0-9_$]/u.test(ch)) {
+      lastWord = /[A-Za-z0-9_$]/u.test(lastSig) ? `${lastWord}${ch}` : ch;
+      lastSig = ch;
+    } else if (!/\s/u.test(ch)) {
+      lastWord = "";
+      lastSig = ch;
+    }
+  };
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const start = i;
+      i += 1;
+      while (i < source.length) {
+        const cur = source[i];
+        i += 1;
+        if (cur === "\\" && i < source.length) {
+          i += 1;
+        } else if (cur === ch) {
+          break;
+        }
+      }
+      const literal = source.slice(start, i);
+      const keep = ch !== "`" && (literal.startsWith(`${ch}@ninerr/`) || literal.startsWith(`${ch}../packages/`));
+      out += keep ? literal : `${ch}${ch}`;
+      lastWord = "";
+      lastSig = ch;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < source.length && source[i] !== "\n") i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        if (source[i] === "\n") out += "\n";
+        i += 1;
+      }
+      i += 2;
+      continue;
+    }
+    if (ch === "/" && (REGEX_BEFORE_CHAR.has(lastSig) || REGEX_BEFORE_WORD.has(lastWord))) {
+      out += ch;
+      i += 1;
+      let inClass = false;
+      while (i < source.length && source[i] !== "\n") {
+        const cur = source[i];
+        out += cur;
+        i += 1;
+        if (cur === "\\" && i < source.length) {
+          out += source[i];
+          i += 1;
+        } else if (cur === "[") {
+          inClass = true;
+        } else if (cur === "]") {
+          inClass = false;
+        } else if (cur === "/" && !inClass) {
+          break;
+        }
+      }
+      lastWord = "";
+      lastSig = ")";
+      continue;
+    }
+    out += ch;
+    record(ch);
+    i += 1;
+  }
+  return out;
+}
+
+/** Workspace package names imported, re-exported, or required from `source`. */
+export function workspaceImportsIn(source) {
+  const names = new Set();
+  for (const [, , imported] of withoutComments(source).matchAll(WORKSPACE_IMPORT)) names.add(imported);
+  return [...names].sort();
+}
 
 /** Workspace packages reachable from `entry` (excluding desktop and browser UI). */
 export function engineReachablePackages(entry = join(ROOT, "bin", "ninerr.mjs")) {
   const found = new Set();
   const queue = [];
   const enqueue = (name) => {
-    if (LEFT_OUT.has(name) || found.has(name)) return;
+    if (LEFT_OUT.has(name)) fail(`engine cannot depend on excluded workspace package @ninerr/${name}`);
+    if (found.has(name)) return;
     if (!existsSync(join(ROOT, "packages", name, "package.json"))) fail(`unknown workspace package @ninerr/${name}`);
     found.add(name);
     queue.push(name);
   };
-  const entryText = readFileSync(entry, "utf8");
-  for (const [, name] of entryText.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)["']\.\.\/packages\/([a-z][a-z0-9-]*)\//gu)) enqueue(name);
-  for (const [, name] of entryText.matchAll(WORKSPACE_IMPORT)) enqueue(name);
+  const entryText = withoutComments(readFileSync(entry, "utf8"));
+  for (const [, , name] of entryText.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)(["'])\.\.\/packages\/([a-z][a-z0-9-]*)\/[^"'\n]*\1/gu)) enqueue(name);
+  for (const name of workspaceImportsIn(entryText)) enqueue(name);
   while (queue.length > 0) {
     const name = queue.pop();
     const pkgDir = join(ROOT, "packages", name);
@@ -48,7 +140,7 @@ export function engineReachablePackages(entry = join(ROOT, "bin", "ninerr.mjs"))
     for (const rel of filesUnder(pkgDir)) {
       if (!/\.(?:mjs|js|cjs|ts)$/u.test(rel)) continue;
       const text = readFileSync(join(pkgDir, rel), "utf8");
-      for (const [, imported] of text.matchAll(WORKSPACE_IMPORT)) enqueue(imported);
+      for (const imported of workspaceImportsIn(text)) enqueue(imported);
     }
   }
   return [...found].sort();
