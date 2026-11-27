@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, briefProblem, compileTokens, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setBreakpoints, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
@@ -14,7 +14,7 @@ import { StudioError } from "./errors.ts";
 import { ImportDesk } from "./imports.ts";
 import { planTokenCss } from "./token-import.ts";
 import { exportDtcgTokens, planDtcgTokens } from "./tokens-dtcg.ts";
-import { writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
+import { UntrustedFileError, readTrustedFile, writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
@@ -1963,11 +1963,19 @@ const TOOLS: Tool[] = [
       viewports: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", enum: Object.keys(STANDARD_VIEWPORTS) } },
       colorScheme: { type: "string", enum: ["light", "dark"] },
       reducedMotion: { type: "string", enum: ["no-preference", "reduce"] },
-      mode: { type: "string", minLength: 1, maxLength: 64 },
+      mode: { type: "string", minLength: 1, maxLength: 129 },
       compareTo: { type: "string", minLength: 1, maxLength: 64 },
       replace: { type: "boolean" },
     }, ["nodeId"]),
     run: async ({ session, dryRun }, given) => {
+      const lstatOrNull = (targetPath: string) => {
+        try {
+          return lstatSync(targetPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+          throw error;
+        }
+      };
       const args = onlyArguments(given, ["nodeId", "name", "viewports", "colorScheme", "reducedMotion", "mode", "compareTo", "replace"]);
       const node = nodeOf(session, args.nodeId);
       if (node.type === "design-system") throw new ToolError("cannot render a design-system node; choose a frame or element");
@@ -2004,126 +2012,169 @@ const TOOLS: Tool[] = [
       const reducedMotion = args.reducedMotion === "reduce" ? "reduce" : "no-preference";
       let modeOverride: string | undefined;
       if (args.mode !== undefined) {
-        if (typeof args.mode !== "string" || !/^[A-Za-z0-9_.-]{1,64}(?::[A-Za-z0-9_.-]{1,64})?$/u.test(args.mode)) {
+        if (typeof args.mode !== "string" || args.mode.length > 129 || !/^[A-Za-z0-9_.-]{1,64}(?::[A-Za-z0-9_.-]{1,64})?$/u.test(args.mode)) {
           throw new ToolError("mode must be a mode id or collection:mode token identifier");
         }
         if (args.mode.includes(":")) {
           modeOverride = args.mode;
         } else {
           const ds = designSystemOf(session.document as any);
-          const colId = ds?.props?.collections?.[0]?.id ?? "base";
+          const collections: any[] = ds?.props?.collections ?? [];
+          const owning = collections.find((c: any) => Array.isArray(c.modes) && c.modes.some((m: any) => m.id === args.mode));
+          const colId = owning?.id ?? collections[0]?.id ?? "base";
           modeOverride = `${colId}:${args.mode}`;
         }
       }
 
+      const realRoot = realpathSync(session.root);
       const exportsDir = join(session.root, "exports");
       const previewsDir = join(exportsDir, "previews");
       for (const dir of [exportsDir, previewsDir]) {
-        if (existsSync(dir)) {
-          const stat = lstatSync(dir);
-          if (stat.isSymbolicLink() || !stat.isDirectory()) {
-            throw new ToolError(`${dir} is not a real folder, so Ninerr will not write there`);
+        const st = lstatOrNull(dir);
+        if (st !== null && (st.isSymbolicLink() || !st.isDirectory())) {
+          throw new ToolError("the project's exports/previews folder is a link to somewhere else, so nothing was written");
+        }
+      }
+      const existingLower = new Set<string>();
+      const previewsStatBefore = lstatOrNull(previewsDir);
+      if (previewsStatBefore !== null) {
+        if (realpathSync(previewsDir) !== join(realRoot, "exports", "previews")) {
+          throw new ToolError("the project's exports/previews folder resolves outside the project, so nothing was written");
+        }
+        for (const entry of readdirSync(previewsDir)) existingLower.add(entry.toLowerCase());
+      }
+
+      const plannedPaths = viewports.map((vp) => join(previewsDir, `${baseName}-${vp}.png`));
+      const plannedDiffPaths: string[] = [];
+      if (typeof args.compareTo === "string") {
+        for (const vp of viewports) {
+          if (existingLower.has(`${args.compareTo}-${vp}.png`.toLowerCase())) {
+            plannedDiffPaths.push(join(previewsDir, `${baseName}-${vp}-diff.png`));
           }
         }
       }
-      const plannedPaths = viewports.map((vp) => join(previewsDir, `${baseName}-${vp}.png`));
-      const plannedDiffPaths = typeof args.compareTo === "string"
-        ? viewports.map((vp) => join(previewsDir, `${baseName}-${vp}-diff.png`))
-        : [];
       for (const p of [...plannedPaths, ...plannedDiffPaths]) {
-        if (existsSync(p)) {
-          const stat = lstatSync(p);
-          if (stat.isSymbolicLink() || !stat.isFile()) throw new ToolError(`refusing to overwrite non-regular file ${p}`);
-          if (args.replace !== true) throw new ToolError(`preview ${p} already exists; choose another name or pass replace: true`);
+        const st = lstatOrNull(p);
+        if (st !== null && (st.isSymbolicLink() || !st.isFile())) {
+          throw new ToolError(`refusing to overwrite non-regular file or link ${p}`);
+        }
+        const fileNameLower = p.slice(previewsDir.length + 1).toLowerCase();
+        if ((st !== null || existingLower.has(fileNameLower)) && args.replace !== true) {
+          throw new ToolError(`preview ${p} already exists; choose another name or pass replace: true`);
         }
       }
 
-      const browserPath = discoverBrowser();
+      let browserPath: string | null = null;
+      let browserError: string | null = null;
+      try {
+        browserPath = discoverBrowser();
+      } catch (error) {
+        browserError = error instanceof Error ? error.message : String(error);
+      }
       if (dryRun) {
         return {
           dryRun: true,
           nodeId: node.id,
           viewports,
-          wouldWrite: plannedPaths,
+          wouldWrite: [...plannedPaths, ...plannedDiffPaths],
           browserAvailable: browserPath !== null,
+          ...(browserError ? { browserNote: shownPlainly(browserError) } : {}),
           revision: session.revision,
         } as unknown as Json;
       }
       if (!browserPath) {
-        throw new ToolError("No local Chromium, Chrome, or Edge browser was found. Install Edge/Chrome/Chromium or set NINERR_BROWSER.");
+        throw new ToolError(shownPlainly(browserError ?? "No local Chromium, Chrome, or Edge browser was found. Install Edge/Chrome/Chromium or set NINERR_BROWSER."));
       }
 
       const { html } = exportHtml(session.document, node.id, { includeNodeIds: true, ...(modeOverride ? { modeOverride } : {}) });
-      const rendered = await renderAndInspect({
-        html,
-        viewports,
-        colorScheme,
-        contrast: modeOverride?.includes("high-contrast") ? "more" : "no-preference",
-        reducedMotion,
-        captureScreenshot: true,
-        fullPage: true,
-        browserPath,
-      });
+      let rendered;
+      try {
+        rendered = await renderAndInspect({
+          html,
+          viewports,
+          colorScheme,
+          contrast: modeOverride?.includes("high-contrast") ? "more" : "no-preference",
+          reducedMotion,
+          captureScreenshot: true,
+          fullPage: true,
+          browserPath,
+        });
+      } catch (error) {
+        throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+      }
 
-      mkdirSync(previewsDir, { recursive: true });
+      // Ensure session is still open before writing anything to disk.
+      const revisionNow = session.revision;
+
+      // Re-verify exports/ and exports/previews/ after async render to close TOCTOU / symlink escape.
+      mkdirSync(exportsDir, { recursive: true, mode: 0o700 });
+      mkdirSync(previewsDir, { recursive: true, mode: 0o700 });
+      for (const dir of [exportsDir, previewsDir]) {
+        const st = lstatOrNull(dir);
+        if (!st || st.isSymbolicLink() || !st.isDirectory()) {
+          throw new ToolError("the project's exports/previews folder is a link to somewhere else, so nothing was written");
+        }
+      }
       const realPreviewsDir = realpathSync(previewsDir);
-      const readRegularBytes = (filePath: string, maxBytes: number): Buffer | null => {
-        const flags = constants.O_RDONLY | (typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0);
-        let fd: number;
-        try {
-          fd = openSync(filePath, flags);
-        } catch {
-          return null;
-        }
-        try {
-          const st = fstatSync(fd);
-          if (!st.isFile() || st.size > maxBytes) return null;
-          const buf = Buffer.allocUnsafe(st.size);
-          let off = 0;
-          while (off < st.size) {
-            const n = readSync(fd, buf, off, st.size - off, off);
-            if (n === 0) break;
-            off += n;
+      if (realPreviewsDir !== join(realpathSync(session.root), "exports", "previews")) {
+        throw new ToolError("the project's exports/previews folder resolves outside the project, so nothing was written");
+      }
+
+      // Read any requested baseline PNGs BEFORE overwriting outPath (handles compareTo === baseName + replace: true).
+      const baselinesByVp = new Map<string, { path: string; bytes: Buffer }>();
+      if (typeof args.compareTo === "string") {
+        for (const cap of rendered.captures) {
+          const vpId = cap.viewport.id;
+          const baselinePath = join(realPreviewsDir, `${args.compareTo}-${vpId}.png`);
+          try {
+            const baselineBytes = readTrustedFile(baselinePath, 32 * 1024 * 1024);
+            if (baselineBytes !== null) baselinesByVp.set(vpId, { path: baselinePath, bytes: baselineBytes });
+          } catch (error) {
+            if (error instanceof UntrustedFileError) {
+              throw new ToolError(`baseline preview ${baselinePath} is not trusted: ${shownPlainly(error.message)}`);
+            }
+            throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
           }
-          return buf.subarray(0, off);
-        } finally {
-          closeSync(fd);
         }
-      };
+      }
 
       const results = [];
       for (const cap of rendered.captures) {
         const vpId = cap.viewport.id;
         const outPath = join(realPreviewsDir, `${baseName}-${vpId}.png`);
-        if (existsSync(outPath) && lstatSync(outPath).isSymbolicLink()) {
-          throw new ToolError(`refusing to write through symbolic link ${outPath}`);
+        const outStat = lstatOrNull(outPath);
+        if (outStat !== null && (outStat.isSymbolicLink() || !outStat.isFile())) {
+          throw new ToolError(`refusing to write through non-regular file or symbolic link ${outPath}`);
         }
         writeTrustedBytes(outPath, cap.pngBuffer);
 
         let diffSummary: Record<string, unknown> | null = null;
-        if (typeof args.compareTo === "string") {
-          const baselinePath = join(realPreviewsDir, `${args.compareTo}-${vpId}.png`);
-          const baselineBytes = readRegularBytes(baselinePath, 32 * 1024 * 1024);
-          if (baselineBytes !== null) {
-            const diff = diffPngBuffers(baselineBytes, cap.pngBuffer, { emitDiffImage: true });
-            let diffPath: string | null = null;
-            if (diff.diffPng) {
-              diffPath = join(realPreviewsDir, `${baseName}-${vpId}-diff.png`);
-              if (existsSync(diffPath) && lstatSync(diffPath).isSymbolicLink()) {
-                throw new ToolError(`refusing to write through symbolic link ${diffPath}`);
-              }
-              writeTrustedBytes(diffPath, diff.diffPng);
-            }
-            diffSummary = {
-              baselinePath,
-              diffPath,
-              diffPixels: diff.diffPixels,
-              totalPixels: diff.totalPixels,
-              diffPercent: diff.diffPercent,
-              dimensionMismatch: diff.dimensionMismatch,
-              changedRegion: diff.changedRegion,
-            };
+        const baseline = baselinesByVp.get(vpId);
+        if (baseline) {
+          let diff;
+          try {
+            diff = diffPngBuffers(baseline.bytes, cap.pngBuffer, { emitDiffImage: true });
+          } catch (error) {
+            throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
           }
+          let diffPath: string | null = null;
+          if (diff.diffPng) {
+            diffPath = join(realPreviewsDir, `${baseName}-${vpId}-diff.png`);
+            const diffStat = lstatOrNull(diffPath);
+            if (diffStat !== null && (diffStat.isSymbolicLink() || !diffStat.isFile())) {
+              throw new ToolError(`refusing to write through non-regular file or symbolic link ${diffPath}`);
+            }
+            writeTrustedBytes(diffPath, diff.diffPng);
+          }
+          diffSummary = {
+            baselinePath: baseline.path,
+            diffPath,
+            diffPixels: diff.diffPixels,
+            totalPixels: diff.totalPixels,
+            diffPercent: diff.diffPercent,
+            dimensionMismatch: diff.dimensionMismatch,
+            changedRegion: diff.changedRegion,
+          };
         }
 
         results.push({
@@ -2140,7 +2191,7 @@ const TOOLS: Tool[] = [
         emulation: rendered.emulation,
         egressBlocked: rendered.egress.totalBlocked,
         captures: results,
-        revision: session.revision,
+        revision: revisionNow,
       } as unknown as Json;
     },
   },
@@ -2188,20 +2239,32 @@ const TOOLS: Tool[] = [
         if (!targetId) {
           visionNote = "No renderable frame or element found in the document.";
         } else {
-          const browserPath = discoverBrowser();
+          let browserPath: string | null = null;
+          let browserErr: string | null = null;
+          try {
+            browserPath = discoverBrowser();
+          } catch (error) {
+            browserErr = error instanceof Error ? error.message : String(error);
+          }
           if (!browserPath) {
-            visionNote = "No local Chromium/Chrome/Edge browser found; static critique returned without live browser telemetry.";
+            visionNote = browserErr
+              ? `${shownPlainly(browserErr)}; static critique returned without live browser telemetry.`
+              : "No local Chromium/Chrome/Edge browser found; static critique returned without live browser telemetry.";
           } else {
             const { html } = exportHtml(document, targetId, { includeNodeIds: true });
-            const rendered = await renderAndInspect({
-              html,
-              viewports,
-              colorScheme: args.colorScheme === "dark" ? "dark" : "light",
-              captureScreenshot: false,
-              browserPath,
-            });
-            visionCaptures = rendered.captures;
-            visionUsed = true;
+            try {
+              const rendered = await renderAndInspect({
+                html,
+                viewports,
+                colorScheme: args.colorScheme === "dark" ? "dark" : "light",
+                captureScreenshot: false,
+                browserPath,
+              });
+              visionCaptures = rendered.captures;
+              visionUsed = true;
+            } catch (error) {
+              throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+            }
           }
         }
       }
@@ -2254,42 +2317,67 @@ const TOOLS: Tool[] = [
         if (!viewports.includes(vp)) viewports.push(vp);
       }
 
-      const browserPath = args.includeVision === true ? discoverBrowser() : null;
-      const maxIterations = typeof args.maxIterations === "number" ? args.maxIterations : 3;
-
-      const result = await improveDesignInMemory(session.document as any, {
-        maxIterations,
-        evaluate: async (candidateDoc: any) => {
-          const taste = evaluateTaste(candidateDoc, { rootId });
-          const systemAudit = auditDesignSystem(candidateDoc);
-          let visionCaptures: any[] = [];
-          if (args.includeVision === true && browserPath) {
-            const targetId = rootId ?? (candidateDoc.rootIds ?? []).find((id: string) => candidateDoc.nodes[id]?.type !== "design-system") ?? null;
-            if (targetId) {
-              const { html } = exportHtml(candidateDoc, targetId, { includeNodeIds: true });
-              const rendered = await renderAndInspect({
-                html,
-                viewports,
-                captureScreenshot: false,
-                browserPath,
-              });
-              visionCaptures = rendered.captures;
-            }
+      let browserPath: string | null = null;
+      let visionNote: string | null = null;
+      if (args.includeVision === true) {
+        try {
+          browserPath = discoverBrowser();
+          if (!browserPath) {
+            visionNote = "No local Chromium/Chrome/Edge browser found; ran static improvement without live browser telemetry.";
           }
-          return buildCritiqueReport({
-            document: candidateDoc,
-            rootId,
-            tasteFindings: taste.findings,
-            systemFindings: systemAudit.hasDesignSystem ? systemAudit.findings : [],
-            visionCaptures,
-          });
-        },
-      });
+        } catch (error) {
+          visionNote = `${shownPlainly(error instanceof Error ? error.message : String(error))}; ran static improvement without live browser telemetry.`;
+        }
+      }
+      const visionUsed = args.includeVision === true && browserPath !== null;
+      const maxIterations = typeof args.maxIterations === "number" ? args.maxIterations : 3;
+      const startRevision = session.revision;
+
+      let result;
+      try {
+        result = await improveDesignInMemory(session.document as any, {
+          maxIterations,
+          evaluate: async (candidateDoc: any) => {
+            const taste = evaluateTaste(candidateDoc, { rootId });
+            const systemAudit = auditDesignSystem(candidateDoc);
+            let visionCaptures: any[] = [];
+            if (visionUsed && browserPath) {
+              const targetId = rootId ?? (candidateDoc.rootIds ?? []).find((id: string) => candidateDoc.nodes[id]?.type !== "design-system") ?? null;
+              if (targetId) {
+                const { html } = exportHtml(candidateDoc, targetId, { includeNodeIds: true });
+                const rendered = await renderAndInspect({
+                  html,
+                  viewports,
+                  captureScreenshot: false,
+                  browserPath,
+                });
+                visionCaptures = rendered.captures;
+              }
+            }
+            return buildCritiqueReport({
+              document: candidateDoc,
+              rootId,
+              tasteFindings: taste.findings,
+              systemFindings: systemAudit.hasDesignSystem ? systemAudit.findings : [],
+              visionCaptures,
+            });
+          },
+        });
+      } catch (error) {
+        throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+      }
+
+      // Guard against concurrent edits landing while async improvement ran.
+      if (session.revision !== startRevision) {
+        throw new ToolError(`the document changed while improve_design was running (revision ${startRevision} -> ${session.revision}); run improve_design again`);
+      }
 
       if (result.operations.length === 0) {
         return {
           nodeId: rootId,
           improved: false,
+          visionUsed,
+          ...(visionNote ? { visionNote } : {}),
           iterationsRun: result.iterationsRun,
           baseline: result.baseline,
           final: result.final,
@@ -2302,6 +2390,8 @@ const TOOLS: Tool[] = [
       return {
         nodeId: rootId,
         improved: result.improved,
+        visionUsed,
+        ...(visionNote ? { visionNote } : {}),
         iterationsRun: result.iterationsRun,
         baseline: result.baseline,
         final: result.final,

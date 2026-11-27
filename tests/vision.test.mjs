@@ -214,3 +214,92 @@ test("unified Ninerr Critic and bounded in-memory improveDesign reduce defects c
   });
   assert.equal(remImp.operations[0].set.style.height, "2.5rem", "rem height is preserved");
 });
+
+test("PR 486 review regressions: PNG pixel-bomb & NaN threshold guards, IPv6 loopback proxy, dark-surface contrast inheritance, comment-safe CSS transition repair, and CLI validation", async () => {
+  // 1. Mismatched-dimension PNG diff bomb (16384x1 vs 1x16384 = 268M px > 25M limit) and NaN threshold rejected.
+  const wideStrip = encodePng({ width: 16_384, height: 1, data: new Uint8Array(16_384 * 4) });
+  const tallStrip = encodePng({ width: 1, height: 16_384, data: new Uint8Array(16_384 * 4) });
+  assert.throws(() => diffPngBuffers(wideStrip, tallStrip), /exceed pixel limit/u);
+  assert.throws(() => diffPngBuffers(wideStrip, wideStrip, { threshold: Number.NaN }), /finite/u);
+  assert.throws(() => encodePng({ width: 16_384, height: 16_384, data: new Uint8Array(0) }), /invalid PNG encode dimensions/u);
+
+  // 2. IPv6 loopback origin http://[::1]:8080 is accepted by containment proxy.
+  const { startStrictContainmentProxy } = await import("@ninerr/vision");
+  const ipv6Proxy = await startStrictContainmentProxy({ allowedOrigin: "http://[::1]:8080" });
+  try {
+    assert.equal(ipv6Proxy.allowedOrigin.host, "::1");
+  } finally {
+    await ipv6Proxy.close();
+  }
+
+  // 3. Dark-parent contrast inheritance picks #ffffff (never dark-on-dark), narrow width is fixed,
+  //    and CSS comments + transition: none are preserved while rewriting thrashing transitions.
+  const doc = applyTransaction(createDocument({ id: "doc-reg486", name: "Reg486" }), {
+    id: "tx-reg486",
+    baseRevision: 0,
+    actor: "test",
+    actorKind: "agent",
+    intent: "seed",
+    timestamp: "2026-11-27T00:00:00.000Z",
+    operations: [
+      {
+        type: "insert-node",
+        parentId: null,
+        index: 0,
+        node: {
+          id: "dark-shell",
+          type: "frame",
+          props: {
+            tag: "section",
+            style: { "background-color": "#0f172a" },
+            stylesheet: "/* example: transition: width 200ms */ .card { transition: width 400ms ease; } @media (prefers-reduced-motion: reduce) { .card { transition: none; } }",
+          },
+        },
+      },
+      {
+        type: "insert-node",
+        parentId: "dark-shell",
+        index: 0,
+        node: {
+          id: "dark-text",
+          type: "element",
+          props: { tag: "p", text: "Dim dark text", style: { color: "#1e293b" } },
+        },
+      },
+      {
+        type: "insert-node",
+        parentId: "dark-shell",
+        index: 1,
+        node: {
+          id: "narrow-btn",
+          type: "element",
+          props: { tag: "button", text: "X", style: { width: "16px", height: "16px" } },
+        },
+      },
+    ],
+  }).document;
+
+  const { evaluateTaste } = await import("@ninerr/design-intelligence");
+  const imp = await improveDesignInMemory(doc, {
+    maxIterations: 2,
+    evaluate: (cand) => buildCritiqueReport({ document: cand, tasteFindings: evaluateTaste(cand).findings }),
+  });
+  const textOp = imp.operations.find((op) => op.nodeId === "dark-text");
+  assert.equal(textOp?.set?.style?.color, "#ffffff", "dark-parent contrast repair chooses white ink, not dark-on-dark");
+  const btnOp = imp.operations.find((op) => op.nodeId === "narrow-btn");
+  assert.equal(btnOp?.set?.style?.width, undefined, "narrow <36px width is cleared");
+  assert.equal(btnOp?.set?.style?.["min-width"], "36px");
+  const sheetOp = imp.operations.find((op) => op.nodeId === "dark-shell");
+  assert.match(sheetOp?.set?.stylesheet ?? "", /^\/\* example: transition: width 200ms \*\//u, "CSS comment preserved verbatim");
+  assert.match(sheetOp?.set?.stylesheet ?? "", /transition:\s*none;/u, "reduced-motion transition: none preserved");
+  assert.match(sheetOp?.set?.stylesheet ?? "", /transition:\s*transform 150ms/u, "thrashing transition rewritten safely");
+
+  // 4. CLI --max-iterations without value exits 2.
+  const { runCliCommand } = await import("../packages/studio-host/src/cli.ts");
+  const badCode = await runCliCommand("improve", [".", "--max-iterations"], {
+    version: "0.1.0",
+    stdout: () => {},
+    stderr: () => {},
+  });
+  assert.equal(badCode, 2, "missing --max-iterations value exits 2");
+});

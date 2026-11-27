@@ -150,7 +150,12 @@ export function writeTrustedBytes(path: string, bytes: Uint8Array): void {
     temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
     const fd = openSync(temporary, "wx", 0o600);
     try {
-      writeSync(fd, buf);
+      let offset = 0;
+      while (offset < buf.length) {
+        const written = writeSync(fd, buf, offset, buf.length - offset);
+        if (written <= 0) throw new Error("short write while writing trusted file");
+        offset += written;
+      }
       fsyncSync(fd);
     } finally {
       closeSync(fd);

@@ -13,7 +13,8 @@ export const STANDARD_VIEWPORTS = Object.freeze({
 });
 
 // Self-contained browser evaluation script computing deterministic layout & contrast telemetry.
-function telemetryScriptFor(targetWidth, targetHeight) {
+function telemetryScriptFor(targetWidth, targetHeight, colorScheme = "light") {
+  const rootFallbackRgb = colorScheme === "dark" ? "[15, 23, 42, 1]" : "[255, 255, 255, 1]";
   return `(() => {
   const vw = Math.min(window.innerWidth || ${targetWidth}, ${targetWidth});
   const vh = Math.min(window.innerHeight || ${targetHeight}, ${targetHeight});
@@ -40,11 +41,13 @@ function telemetryScriptFor(targetWidth, targetHeight) {
     const chain = [];
     let cur = el;
     while (cur && cur.nodeType === 1) {
-      const c = parseRgba(getComputedStyle(cur).backgroundColor);
+      const cs = getComputedStyle(cur);
+      if (cs.backgroundImage && cs.backgroundImage !== "none") return null;
+      const c = parseRgba(cs.backgroundColor);
       if (c && c[3] > 0) chain.push(c);
       cur = cur.parentElement;
     }
-    let acc = [255, 255, 255, 1];
+    let acc = ${rootFallbackRgb};
     for (let i = chain.length - 1; i >= 0; i -= 1) acc = blend(chain[i], acc);
     return acc;
   }
@@ -195,6 +198,7 @@ export async function renderAndInspect({
   browserPath = undefined,
 } = {}) {
   if (!html && !url) throw new Error("renderAndInspect requires either html or url");
+  if (html && url) throw new Error("renderAndInspect accepts either html or url, not both");
   const resolvedViewports = viewports.map((vp) => {
     if (typeof vp === "string") {
       if (!Object.hasOwn(STANDARD_VIEWPORTS, vp)) throw new Error(`unknown viewport preset: ${vp}`);
@@ -206,7 +210,7 @@ export async function renderAndInspect({
     throw new Error("viewport must be a preset name or { width, height } within 200..3840 x 200..4096");
   });
 
-  return withContainedBrowser({ browserPath, allowedOrigin: url ? allowedOrigin : null }, async (session) => {
+  return withContainedBrowser({ browserPath, allowedOrigin: !html && url ? allowedOrigin : null }, async (session) => {
     const features = [
       { name: "prefers-color-scheme", value: colorScheme },
       { name: "prefers-contrast", value: contrast },
@@ -239,9 +243,12 @@ export async function renderAndInspect({
       }
 
       const evalRes = await session.send("Runtime.evaluate", {
-        expression: telemetryScriptFor(vp.width, vp.height),
+        expression: telemetryScriptFor(vp.width, vp.height, colorScheme),
         returnByValue: true,
       });
+      if (evalRes.exceptionDetails) {
+        throw new Error(`Vision telemetry evaluation failed: ${evalRes.exceptionDetails.text ?? "script error"}`);
+      }
       const telemetry = evalRes.result?.value ?? null;
 
       let pngBuffer = null;
@@ -252,9 +259,16 @@ export async function renderAndInspect({
             expression: `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.max(0, r.left), y: Math.max(0, r.top), width: Math.max(1, r.width), height: Math.max(1, r.height), scale: 1 }; })()`,
             returnByValue: true,
           });
-          if (boxRes.result?.value) clip = boxRes.result.value;
+          if (boxRes.exceptionDetails) {
+            throw new Error(`invalid selector ${JSON.stringify(selector)}: ${boxRes.exceptionDetails.text ?? "querySelector failed"}`);
+          }
+          if (!boxRes.result?.value) {
+            throw new Error(`selector ${JSON.stringify(selector)} matched no element`);
+          }
+          clip = boxRes.result.value;
         } else if (fullPage) {
-          const docHeight = Math.min(16_000, Math.max(vp.height, telemetry?.documentSize?.scrollHeight ?? vp.height));
+          const maxHeightForPixelCap = Math.max(vp.height, Math.floor(25_000_000 / vp.width));
+          const docHeight = Math.min(16_000, maxHeightForPixelCap, Math.max(vp.height, telemetry?.documentSize?.scrollHeight ?? vp.height));
           clip = { x: 0, y: 0, width: vp.width, height: docHeight, scale: 1 };
         }
         const shot = await session.send("Page.captureScreenshot", {

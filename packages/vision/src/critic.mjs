@@ -15,27 +15,48 @@ import { visionTelemetryFindings } from "./telemetry.mjs";
 
 const SEVERITY_RANK = Object.freeze({ error: 0, warning: 1, info: 2 });
 const PX_VALUE = /^(\d+(?:\.\d+)?)px$/iu;
+const MAX_STYLESHEET_BYTES = 2 * 1024 * 1024;
+const UNSAFE_STYLE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const LAYOUT_THRASHING_PROPS = new Set([
+  "all", "width", "height", "min-width", "min-height", "max-width", "max-height",
+  "top", "left", "right", "bottom",
+  "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+  "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+  "border-width", "font-size", "line-height",
+]);
 
 function compareCodeUnits(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function toNeutralTree(document, nodeId) {
+function isPlainRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function toNeutralTree(document, nodeId, visited = new Set(), depth = 0) {
+  if (depth > 128 || typeof nodeId !== "string" || visited.has(nodeId) || !Object.hasOwn(document.nodes ?? {}, nodeId)) return null;
   const node = document.nodes[nodeId];
   if (!node || node.type === "design-system") return null;
-  const styleObj = node.props?.style && typeof node.props.style === "object" ? node.props.style : null;
+  visited.add(nodeId);
+  const styleObj = isPlainRecord(node.props?.style) ? node.props.style : null;
   const style = styleObj
-    ? Object.entries(styleObj).map(([k, v]) => `${k}: ${v}`).join("; ")
+    ? Object.entries(styleObj)
+      .filter(([k, v]) => typeof k === "string" && typeof v === "string")
+      .map(([k, v]) => `${k}: ${v}`)
+      .join("; ")
     : undefined;
   const children = [];
-  for (const cid of node.children ?? []) {
-    const child = toNeutralTree(document, cid);
+  for (const cid of Array.isArray(node.children) ? node.children : []) {
+    const child = toNeutralTree(document, cid, visited, depth + 1);
     if (child) children.push(child);
   }
+  const rawTag = node.props?.tag;
+  const tag = typeof rawTag === "string" && rawTag.trim() !== "" ? rawTag.trim() : (node.type === "text" ? "p" : "div");
+  const attributes = isPlainRecord(node.props?.attributes) ? node.props.attributes : {};
   return {
     id: node.id,
-    tag: node.props?.tag ?? (node.type === "text" ? "p" : "div"),
-    attributes: node.props?.attributes && typeof node.props.attributes === "object" ? node.props.attributes : {},
+    tag,
+    attributes,
     ...(typeof node.props?.text === "string" ? { text: node.props.text } : {}),
     ...(style ? { style } : {}),
     children,
@@ -143,6 +164,31 @@ function chooseAccessibleForeground(bgRgb) {
   return contrastRatio(darkInk, bgRgb) >= contrastRatio(whiteInk, bgRgb) ? "#0f172a" : "#ffffff";
 }
 
+function resolveInheritedBackground(document, nodeId, localStyle) {
+  const tryStyle = (st) => {
+    if (!isPlainRecord(st)) return null;
+    for (const k of ["background-color", "backgroundColor", "background"]) {
+      if (Object.hasOwn(st, k) && typeof st[k] === "string") {
+        const parsed = parseOpaqueColor(st[k]);
+        if (parsed) return parsed;
+      }
+    }
+    return null;
+  };
+  const direct = tryStyle(localStyle);
+  if (direct) return direct;
+  const visited = new Set([nodeId]);
+  let cur = document.nodes?.[nodeId]?.parentId ?? null;
+  while (typeof cur === "string" && !visited.has(cur) && Object.hasOwn(document.nodes ?? {}, cur)) {
+    visited.add(cur);
+    const parent = document.nodes[cur];
+    const parsed = tryStyle(parent?.props?.style);
+    if (parsed) return parsed;
+    cur = parent?.parentId ?? null;
+  }
+  return [255, 255, 255];
+}
+
 function snapPxTo4(value) {
   if (typeof value !== "string") return value;
   return value.replace(/\b(\d+(?:\.\d+)?)px\b/giu, (match, numStr) => {
@@ -152,21 +198,107 @@ function snapPxTo4(value) {
   });
 }
 
+function containsLayoutThrashProp(value) {
+  const lower = value.trim().toLowerCase();
+  if (lower === "" || lower === "none" || lower === "0s" || lower === "0ms") return false;
+  for (const part of lower.split(",")) {
+    for (const tok of part.trim().split(/\s+/u)) {
+      if (LAYOUT_THRASHING_PROPS.has(tok)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Safely rewrite non-composited `transition` / `transition-property` declarations in a CSS
+ * stylesheet while preserving comments, quoted strings, selectors, and `transition: none`.
+ */
+function rewriteThrashingTransitions(css) {
+  let out = "";
+  let i = 0;
+  let changed = false;
+  while (i < css.length) {
+    // Preserve CSS comments verbatim.
+    if (css[i] === "/" && css[i + 1] === "*") {
+      const end = css.indexOf("*/", i + 2);
+      if (end < 0) return { css, changed: false };
+      out += css.slice(i, end + 2);
+      i = end + 2;
+      continue;
+    }
+    // Preserve quoted strings verbatim.
+    if (css[i] === "\"" || css[i] === "'") {
+      const q = css[i];
+      let j = i + 1;
+      while (j < css.length) {
+        if (css[j] === "\\" && j + 1 < css.length) { j += 2; continue; }
+        if (css[j] === q) { j += 1; break; }
+        j += 1;
+      }
+      out += css.slice(i, j);
+      i = j;
+      continue;
+    }
+    // Match `transition:` or `transition-property:` at a property-name boundary.
+    const prev = i > 0 ? css[i - 1] : "";
+    if (!/[\w-]/u.test(prev)) {
+      const rest = css.slice(i);
+      const propMatch = /^(transition(?:-property)?)\s*:/iu.exec(rest);
+      if (propMatch) {
+        const propName = propMatch[1].toLowerCase();
+        let valEnd = i + propMatch[0].length;
+        let quote = null;
+        while (valEnd < css.length) {
+          const ch = css[valEnd];
+          if (quote !== null) {
+            if (ch === "\\" && valEnd + 1 < css.length) { valEnd += 2; continue; }
+            if (ch === quote) quote = null;
+            valEnd += 1;
+            continue;
+          }
+          if (ch === "\"" || ch === "'") { quote = ch; valEnd += 1; continue; }
+          if (ch === "/" && css[valEnd + 1] === "*") {
+            const cEnd = css.indexOf("*/", valEnd + 2);
+            if (cEnd < 0) return { css, changed: false };
+            valEnd = cEnd + 2;
+            continue;
+          }
+          if (ch === ";" || ch === "}" || ch === "{") break;
+          valEnd += 1;
+        }
+        const declVal = css.slice(i + propMatch[0].length, valEnd);
+        if (css[valEnd] !== "{" && containsLayoutThrashProp(declVal)) {
+          out += propName === "transition-property"
+            ? "transition-property: transform, opacity"
+            : "transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), opacity 150ms cubic-bezier(0.23, 1, 0.32, 1)";
+          changed = true;
+          i = valEnd;
+          continue;
+        }
+      }
+    }
+    out += css[i];
+    i += 1;
+  }
+  return { css: out, changed };
+}
+
 /**
  * Generate safe, deterministic repair operations for high-confidence defects in `report`.
  */
 function proposeDeterministicFixes(document, report) {
   const patchesByNode = new Map();
   const patchFor = (nodeId) => {
-    if (!Object.hasOwn(document.nodes, nodeId)) return null;
+    if (typeof nodeId !== "string" || !Object.hasOwn(document.nodes ?? {}, nodeId)) return null;
     const node = document.nodes[nodeId];
-    if (node.type === "design-system" || node.type === "component-instance" || node.type === "component-definition" || isCodePart(node)) return null;
+    if (!node || node.type === "design-system" || node.type === "component-instance" || node.type === "component-definition" || isCodePart(node)) return null;
     let entry = patchesByNode.get(nodeId);
     if (!entry) {
       entry = {
-        style: { ...(node.props?.style && typeof node.props.style === "object" ? node.props.style : {}) },
+        node,
+        style: { ...(isPlainRecord(node.props?.style) ? node.props.style : {}) },
         styleChanged: false,
-        attributes: { ...(node.props?.attributes && typeof node.props.attributes === "object" ? node.props.attributes : {}) },
+        attributes: { ...(isPlainRecord(node.props?.attributes) ? node.props.attributes : {}) },
         attributesChanged: false,
         stylesheet: typeof node.props?.stylesheet === "string" ? node.props.stylesheet : null,
         stylesheetChanged: false,
@@ -177,82 +309,108 @@ function proposeDeterministicFixes(document, report) {
     return entry;
   };
 
+  const setStyle = (patch, key, value) => {
+    if (UNSAFE_STYLE_KEYS.has(key)) return false;
+    if (Object.hasOwn(patch.style, key) && patch.style[key] === value) return false;
+    patch.style[key] = value;
+    patch.styleChanged = true;
+    return true;
+  };
+  const delStyle = (patch, key) => {
+    if (UNSAFE_STYLE_KEYS.has(key) || !Object.hasOwn(patch.style, key)) return false;
+    delete patch.style[key];
+    patch.styleChanged = true;
+    return true;
+  };
+
   for (const finding of report.findings) {
     if (!finding.nodeId) continue;
     const patch = patchFor(finding.nodeId);
     if (!patch) continue;
 
     if (finding.ruleId === "taste:color-low-contrast" || finding.ruleId === "a11y:text-contrast" || finding.ruleId === "vision:rendered-low-contrast") {
-      const rawBg = finding.evidence?.background ?? finding.evidence?.effectiveBackground ?? patch.style["background-color"] ?? patch.style.backgroundColor ?? patch.style.background;
-      const bgRgb = parseOpaqueColor(String(rawBg ?? "")) ?? [255, 255, 255];
+      const explicitBg = finding.evidence?.background ?? finding.evidence?.effectiveBackground;
+      const bgRgb = (typeof explicitBg === "string" ? parseOpaqueColor(explicitBg) : null)
+        ?? resolveInheritedBackground(document, finding.nodeId, patch.style);
       const nextColor = chooseAccessibleForeground(bgRgb);
-      if (patch.style.color !== nextColor) {
-        patch.style.color = nextColor;
-        patch.styleChanged = true;
+      if (setStyle(patch, "color", nextColor)) {
         patch.reasons.push(`improved contrast on ${finding.nodeId} to ${nextColor}`);
       }
     } else if (finding.ruleId === "taste:interactive-target-size" || finding.ruleId === "vision:target-below-24px") {
-      patch.style["min-height"] = "36px";
-      patch.style["min-width"] = "36px";
-      delete patch.style.minHeight;
-      delete patch.style.minWidth;
-      if (typeof patch.style.height === "string" && PX_VALUE.test(patch.style.height) && parseFloat(patch.style.height) < 36) delete patch.style.height;
-      patch.styleChanged = true;
-      patch.reasons.push(`raised target size on ${finding.nodeId} to >=36px`);
+      let mutated = false;
+      if (setStyle(patch, "min-height", "36px")) mutated = true;
+      if (setStyle(patch, "min-width", "36px")) mutated = true;
+      if (delStyle(patch, "minHeight")) mutated = true;
+      if (delStyle(patch, "minWidth")) mutated = true;
+      if (Object.hasOwn(patch.style, "height") && typeof patch.style.height === "string" && PX_VALUE.test(patch.style.height) && parseFloat(patch.style.height) < 36) {
+        if (delStyle(patch, "height")) mutated = true;
+      }
+      if (Object.hasOwn(patch.style, "width") && typeof patch.style.width === "string" && PX_VALUE.test(patch.style.width) && parseFloat(patch.style.width) < 36) {
+        if (delStyle(patch, "width")) mutated = true;
+      }
+      if (mutated) patch.reasons.push(`raised target size on ${finding.nodeId} to >=36px`);
     } else if (finding.ruleId === "taste:mobile-touch-target" || finding.ruleId === "vision:mobile-target-below-44px") {
-      patch.style["min-height"] = "44px";
-      delete patch.style.minHeight;
-      if (typeof patch.style.height === "string" && PX_VALUE.test(patch.style.height) && parseFloat(patch.style.height) < 44) delete patch.style.height;
-      patch.styleChanged = true;
-      patch.reasons.push(`raised mobile touch target on ${finding.nodeId} to >=44px`);
+      let mutated = false;
+      if (setStyle(patch, "min-height", "44px")) mutated = true;
+      if (setStyle(patch, "min-width", "44px")) mutated = true;
+      if (delStyle(patch, "minHeight")) mutated = true;
+      if (delStyle(patch, "minWidth")) mutated = true;
+      if (Object.hasOwn(patch.style, "height") && typeof patch.style.height === "string" && PX_VALUE.test(patch.style.height) && parseFloat(patch.style.height) < 44) {
+        if (delStyle(patch, "height")) mutated = true;
+      }
+      if (Object.hasOwn(patch.style, "width") && typeof patch.style.width === "string" && PX_VALUE.test(patch.style.width) && parseFloat(patch.style.width) < 44) {
+        if (delStyle(patch, "width")) mutated = true;
+      }
+      if (mutated) patch.reasons.push(`raised mobile touch target on ${finding.nodeId} to >=44px`);
     } else if (finding.ruleId === "vision:horizontal-overflow") {
-      patch.style["max-width"] = "100%";
-      patch.style["box-sizing"] = "border-box";
-      delete patch.style.maxWidth;
-      delete patch.style.boxSizing;
-      if (typeof patch.style.width === "string" && PX_VALUE.test(patch.style.width) && parseFloat(patch.style.width) > 320) patch.style.width = "100%";
-      patch.styleChanged = true;
-      patch.reasons.push(`constrained horizontal overflow on ${finding.nodeId}`);
+      let mutated = false;
+      if (setStyle(patch, "max-width", "100%")) mutated = true;
+      if (setStyle(patch, "box-sizing", "border-box")) mutated = true;
+      if (delStyle(patch, "maxWidth")) mutated = true;
+      if (delStyle(patch, "boxSizing")) mutated = true;
+      if (Object.hasOwn(patch.style, "width") && typeof patch.style.width === "string" && PX_VALUE.test(patch.style.width) && parseFloat(patch.style.width) > 320) {
+        if (setStyle(patch, "width", "100%")) mutated = true;
+      }
+      if (mutated) patch.reasons.push(`constrained horizontal overflow on ${finding.nodeId}`);
     } else if (finding.ruleId === "taste:body-tight-leading") {
-      patch.style["line-height"] = "1.55";
-      delete patch.style.lineHeight;
-      patch.styleChanged = true;
-      patch.reasons.push(`improved body line-height on ${finding.nodeId} to 1.55`);
+      const m1 = setStyle(patch, "line-height", "1.55");
+      const m2 = delStyle(patch, "lineHeight");
+      if (m1 || m2) patch.reasons.push(`improved body line-height on ${finding.nodeId} to 1.55`);
     } else if (finding.ruleId === "taste:display-loose-leading") {
-      patch.style["line-height"] = "1.12";
-      delete patch.style.lineHeight;
-      patch.styleChanged = true;
-      patch.reasons.push(`tightened display line-height on ${finding.nodeId} to 1.12`);
+      const m1 = setStyle(patch, "line-height", "1.12");
+      const m2 = delStyle(patch, "lineHeight");
+      if (m1 || m2) patch.reasons.push(`tightened display line-height on ${finding.nodeId} to 1.12`);
     } else if (finding.ruleId === "taste:spacing-off-grid") {
       const prop = finding.evidence?.property;
-      if (typeof prop === "string" && typeof patch.style[prop] === "string") {
+      if (typeof prop === "string" && !UNSAFE_STYLE_KEYS.has(prop) && Object.hasOwn(patch.style, prop) && typeof patch.style[prop] === "string") {
         const snapped = snapPxTo4(patch.style[prop]);
-        if (snapped !== patch.style[prop]) {
-          patch.style[prop] = snapped;
-          patch.styleChanged = true;
+        if (setStyle(patch, prop, snapped)) {
           patch.reasons.push(`snapped ${prop} on ${finding.nodeId} to 4px grid (${snapped})`);
         }
       }
     } else if (finding.ruleId === "taste:anti-slop-heavy-shadow") {
-      patch.style["box-shadow"] = "var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.06))";
-      delete patch.style.boxShadow;
-      patch.styleChanged = true;
-      patch.reasons.push(`replaced heavy drop shadow on ${finding.nodeId} with subtle elevation`);
+      const m1 = setStyle(patch, "box-shadow", "var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.06))");
+      const m2 = delStyle(patch, "boxShadow");
+      if (m1 || m2) patch.reasons.push(`replaced heavy drop shadow on ${finding.nodeId} with subtle elevation`);
     } else if (finding.ruleId === "motion:gpu-composited-only" && typeof patch.stylesheet === "string") {
-      const updated = patch.stylesheet.replace(/(?<![\w-])transition\s*:\s*[^;{}]+/giu, "transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1), opacity 150ms cubic-bezier(0.23, 1, 0.32, 1)");
-      if (updated !== patch.stylesheet) {
+      const { css: updated, changed } = rewriteThrashingTransitions(patch.stylesheet);
+      if (changed && Buffer.byteLength(updated, "utf8") <= MAX_STYLESHEET_BYTES) {
         patch.stylesheet = updated;
         patch.stylesheetChanged = true;
         patch.reasons.push(`restricted transitions on ${finding.nodeId} to compositor-only properties`);
       }
     } else if (finding.ruleId === "motion:missing-reduced-motion" && typeof patch.stylesheet === "string") {
       if (!/@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)/iu.test(patch.stylesheet)) {
-        patch.stylesheet = `${patch.stylesheet.trimEnd()}\n@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }`;
-        patch.stylesheetChanged = true;
-        patch.reasons.push(`added prefers-reduced-motion fallback to ${finding.nodeId}`);
+        const candidate = `${patch.stylesheet.trimEnd()}\n@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }`;
+        if (Buffer.byteLength(candidate, "utf8") <= MAX_STYLESHEET_BYTES) {
+          patch.stylesheet = candidate;
+          patch.stylesheetChanged = true;
+          patch.reasons.push(`added prefers-reduced-motion fallback to ${finding.nodeId}`);
+        }
       }
     } else if (finding.ruleId === "a11y:image-alt") {
-      if (!Object.hasOwn(patch.attributes, "alt")) {
+      const tag = typeof patch.node.props?.tag === "string" ? patch.node.props.tag.toLowerCase() : "";
+      if (tag === "img" && !Object.hasOwn(patch.attributes, "alt")) {
         patch.attributes.alt = "";
         patch.attributesChanged = true;
         patch.reasons.push(`added decorative alt="" attribute on ${finding.nodeId}`);

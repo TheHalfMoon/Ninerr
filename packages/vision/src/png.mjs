@@ -53,6 +53,8 @@ export function decodePng(buffer) {
   const idatChunks = [];
   let totalIdatBytes = 0;
 
+  let seenIhdr = false;
+  let seenIend = false;
   while (offset + 12 <= buffer.length) {
     const length = buffer.readUInt32BE(offset);
     const type = buffer.toString("ascii", offset + 4, offset + 8);
@@ -64,29 +66,35 @@ export function decodePng(buffer) {
     if (expectedCrc !== actualCrc) throw new Error(`PNG CRC mismatch on chunk ${type}`);
     const data = buffer.subarray(dataStart, dataEnd);
     if (type === "IHDR") {
-      if (length !== 13) throw new Error("invalid PNG IHDR length");
+      if (seenIhdr || offset !== 8 || length !== 13) throw new Error("invalid PNG IHDR chunk");
+      seenIhdr = true;
       width = data.readUInt32BE(0);
       height = data.readUInt32BE(4);
       bitDepth = data[8];
       colorType = data[9];
+      const compression = data[10];
+      const filterMethod = data[11];
       interlace = data[12];
       if (width === 0 || height === 0 || width > 16_384 || height > 16_384 || width * height > MAX_PNG_PIXELS) {
         throw new Error("PNG dimensions out of bounds");
       }
-      if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6) || interlace !== 0) {
-        throw new Error(`unsupported PNG format (depth=${bitDepth}, colorType=${colorType}, interlace=${interlace})`);
+      if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6) || compression !== 0 || filterMethod !== 0 || interlace !== 0) {
+        throw new Error(`unsupported PNG format (depth=${bitDepth}, colorType=${colorType}, compression=${compression}, filter=${filterMethod}, interlace=${interlace})`);
       }
     } else if (type === "IDAT") {
+      if (!seenIhdr) throw new Error("PNG IDAT before IHDR");
       totalIdatBytes += length;
       if (totalIdatBytes > MAX_PNG_BYTES) throw new Error("PNG IDAT exceeds size limit");
       idatChunks.push(data);
     } else if (type === "IEND") {
+      if (length !== 0) throw new Error("invalid PNG IEND length");
+      seenIend = true;
       break;
     }
     offset = dataEnd + 4;
   }
 
-  if (width === 0 || height === 0 || idatChunks.length === 0) throw new Error("incomplete PNG image");
+  if (!seenIhdr || !seenIend || width === 0 || height === 0 || idatChunks.length === 0) throw new Error("incomplete PNG image");
   const channels = colorType === 6 ? 4 : 3;
   const stride = width * channels;
   const expectedRawBytes = height * (stride + 1);
@@ -138,7 +146,7 @@ function pngChunk(type, data) {
 
 /** Encode an RGBA Uint8Array (length = width * height * 4) into a valid PNG Buffer. */
 export function encodePng({ width, height, data }) {
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || width > 16_384 || height > 16_384 || width * height > MAX_PNG_PIXELS) {
     throw new Error("invalid PNG encode dimensions");
   }
   if (data.length !== width * height * 4) {
@@ -173,10 +181,16 @@ export function encodePng({ width, height, data }) {
  * Compare two PNG Buffers pixel-by-pixel and emit a visual diff PNG highlighting changed pixels.
  */
 export function diffPngBuffers(beforeBuffer, afterBuffer, { threshold = 24, emitDiffImage = true } = {}) {
+  if (!Number.isFinite(threshold) || threshold < 0) {
+    throw new Error("diffPngBuffers threshold must be a finite non-negative number");
+  }
   const before = decodePng(beforeBuffer);
   const after = decodePng(afterBuffer);
   const width = Math.max(before.width, after.width);
   const height = Math.max(before.height, after.height);
+  if (width * height > MAX_PNG_PIXELS) {
+    throw new Error(`PNG diff dimensions (${width}x${height}) exceed pixel limit of ${MAX_PNG_PIXELS}`);
+  }
   const dimensionMismatch = before.width !== after.width || before.height !== after.height;
   const diffRgba = emitDiffImage ? new Uint8Array(width * height * 4) : null;
 

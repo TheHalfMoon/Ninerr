@@ -1,7 +1,7 @@
 // Extended Ninerr CLI subcommands dispatched from bin/ninerr.mjs (`ninerr design ...`,
 // `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
 // Pure local execution, zero network.
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -444,6 +444,14 @@ export async function runCliCommand(command: string, args: string[], options: Cl
     }
 
     if (command === "preview" || command === "critique" || command === "audit" || command === "improve") {
+      const lstatOrNull = (targetPath: string) => {
+        try {
+          return lstatSync(targetPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+          throw error;
+        }
+      };
       const projectDir = positionals[0];
       if (!projectDir || projectDir === "help" || flags.help === true) {
         out(visionHelp());
@@ -453,11 +461,14 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       if (flags.viewports === true) { err(`ninerr ${command}: --viewports requires a comma-separated viewport list\n`); return 2; }
       if (flags.out === true) { err(`ninerr ${command}: --out requires a directory path\n`); return 2; }
       if (flags.scheme === true) { err(`ninerr ${command}: --scheme requires light or dark\n`); return 2; }
+      if (flags["max-iterations"] === true) { err(`ninerr ${command}: --max-iterations requires an integer from 1 to 5\n`); return 2; }
 
       const validVps = Object.keys(STANDARD_VIEWPORTS);
-      const rawVps = typeof flags.viewports === "string"
-        ? flags.viewports.split(",").map((s) => s.trim()).filter(Boolean)
-        : ["mobile", "desktop"];
+      const rawVps = [...new Set(
+        typeof flags.viewports === "string"
+          ? flags.viewports.split(",").map((s) => s.trim()).filter(Boolean)
+          : ["mobile", "desktop"],
+      )];
       if (rawVps.length === 0 || rawVps.some((v) => !validVps.includes(v))) {
         err(`ninerr ${command}: invalid viewports; valid ids: ${validVps.join(", ")}\n`);
         return 2;
@@ -465,6 +476,11 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       const scheme = typeof flags.scheme === "string" ? flags.scheme : "light";
       if (scheme !== "light" && scheme !== "dark") {
         err(`ninerr ${command}: --scheme must be light or dark\n`);
+        return 2;
+      }
+      const maxIterations = typeof flags["max-iterations"] === "string" ? Number(flags["max-iterations"]) : 3;
+      if (command === "improve" && (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 5)) {
+        err("ninerr improve: --max-iterations must be an integer from 1 to 5\n");
         return 2;
       }
 
@@ -484,7 +500,33 @@ export async function runCliCommand(command: string, args: string[], options: Cl
             err("ninerr preview: project has no renderable frame or element\n");
             return 2;
           }
-          const browserPath = discoverBrowser();
+          // Validate output directory BEFORE launching Chromium.
+          const isDefaultOut = typeof flags.out !== "string";
+          const exportsDir = join(resolvedProject, "exports");
+          const outDir = resolve(isDefaultOut ? join(exportsDir, "previews") : (flags.out as string));
+          if (isDefaultOut) {
+            for (const dir of [exportsDir, outDir]) {
+              const st = lstatOrNull(dir);
+              if (st !== null && (st.isSymbolicLink() || !st.isDirectory())) {
+                err(`ninerr preview: ${dir} is a link or not a directory\n`);
+                return 2;
+              }
+            }
+          } else {
+            const st = lstatOrNull(outDir);
+            if (st !== null && (st.isSymbolicLink() || !st.isDirectory())) {
+              err(`ninerr preview: ${outDir} is not a real directory\n`);
+              return 2;
+            }
+          }
+
+          let browserPath: string | null = null;
+          try {
+            browserPath = discoverBrowser();
+          } catch (error) {
+            err(`ninerr preview: ${error instanceof Error ? error.message : String(error)}\n`);
+            return 1;
+          }
           if (!browserPath) {
             err("ninerr preview: no local Chromium, Chrome, or Edge browser found (set NINERR_BROWSER)\n");
             return 1;
@@ -499,17 +541,35 @@ export async function runCliCommand(command: string, args: string[], options: Cl
             fullPage: true,
             browserPath,
           });
-          const outDir = resolve(typeof flags.out === "string" ? flags.out : join(resolvedProject, "exports", "previews"));
-          if (existsSync(outDir) && (lstatSync(outDir).isSymbolicLink() || !lstatSync(outDir).isDirectory())) {
-            err(`ninerr preview: ${outDir} is not a real directory\n`);
-            return 2;
+
+          if (isDefaultOut) mkdirSync(exportsDir, { recursive: true, mode: 0o700 });
+          mkdirSync(outDir, { recursive: true, mode: 0o700 });
+          if (isDefaultOut) {
+            for (const dir of [exportsDir, outDir]) {
+              const st = lstatOrNull(dir);
+              if (!st || st.isSymbolicLink() || !st.isDirectory()) {
+                err(`ninerr preview: ${dir} is a link or not a directory\n`);
+                return 2;
+              }
+            }
+            if (realpathSync(outDir) !== join(realpathSync(resolvedProject), "exports", "previews")) {
+              err("ninerr preview: default exports/previews resolves outside the project\n");
+              return 2;
+            }
+          } else {
+            const st = lstatOrNull(outDir);
+            if (!st || st.isSymbolicLink() || !st.isDirectory()) {
+              err(`ninerr preview: ${outDir} is not a real directory\n`);
+              return 2;
+            }
           }
-          mkdirSync(outDir, { recursive: true });
+          const realOutDir = realpathSync(outDir);
           const files = [];
           for (const cap of rendered.captures) {
-            const p = join(outDir, `preview-${cap.viewport.id}.png`);
-            if (existsSync(p) && lstatSync(p).isSymbolicLink()) {
-              err(`ninerr preview: refusing to overwrite symbolic link ${p}\n`);
+            const p = join(realOutDir, `preview-${cap.viewport.id}.png`);
+            const st = lstatOrNull(p);
+            if (st !== null && (st.isSymbolicLink() || !st.isFile())) {
+              err(`ninerr preview: refusing to overwrite symbolic link or non-regular file ${p}\n`);
               return 2;
             }
             writeTrustedBytes(p, cap.pngBuffer);
@@ -523,16 +583,31 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           return 0;
         }
 
-        const evaluateDoc = async (candidate: any, useVision: boolean) => {
+        let visionBrowser: string | null = null;
+        let visionNote: string | null = null;
+        if (flags.vision === true) {
+          try {
+            visionBrowser = discoverBrowser();
+            if (!visionBrowser) {
+              visionNote = "No local Chromium/Chrome/Edge browser found; continuing with static analysis only.";
+              err(`ninerr ${command}: warning: ${visionNote}\n`);
+            }
+          } catch (error) {
+            visionNote = `${error instanceof Error ? error.message : String(error)}; continuing with static analysis only.`;
+            err(`ninerr ${command}: warning: ${visionNote}\n`);
+          }
+        }
+        const visionUsed = flags.vision === true && visionBrowser !== null;
+
+        const evaluateDoc = async (candidate: any) => {
           const taste = evaluateTaste(candidate, { rootId: explicitNode });
           const sys = auditDesignSystem(candidate);
           let captures: any[] = [];
-          if (useVision) {
+          if (visionUsed && visionBrowser) {
             const renderTarget = explicitNode ?? (candidate.rootIds ?? []).find((id: string) => candidate.nodes[id]?.type !== "design-system") ?? null;
-            const bp = discoverBrowser();
-            if (renderTarget && bp) {
+            if (renderTarget) {
               const { html } = exportHtml(candidate, renderTarget, { includeNodeIds: true });
-              const res = await renderAndInspect({ html, viewports: rawVps, colorScheme: scheme, captureScreenshot: false, browserPath: bp });
+              const res = await renderAndInspect({ html, viewports: rawVps, colorScheme: scheme, captureScreenshot: false, browserPath: visionBrowser });
               captures = res.captures;
             }
           }
@@ -546,9 +621,9 @@ export async function runCliCommand(command: string, args: string[], options: Cl
         };
 
         if (command === "critique" || command === "audit") {
-          const report = await evaluateDoc(doc, flags.vision === true);
+          const report = await evaluateDoc(doc);
           if (asJson) {
-            out(`${JSON.stringify(report, null, 2)}\n`);
+            out(`${JSON.stringify({ visionUsed, ...(visionNote ? { visionNote } : {}), ...report }, null, 2)}\n`);
           } else {
             out(`Findings: ${report.summary.total} (errors: ${report.summary.errors}, warnings: ${report.summary.warnings}, info: ${report.summary.info}, score: ${report.summary.defectScore})\n`);
             for (const f of report.findings) out(`${f.severity.toUpperCase().padEnd(8)} [${f.kind}] ${f.ruleId}: ${f.message}\n`);
@@ -556,14 +631,9 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           return report.summary.errors > 0 ? 1 : 0;
         }
 
-        const maxIterations = typeof flags["max-iterations"] === "string" ? Number(flags["max-iterations"]) : 3;
-        if (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 5) {
-          err("ninerr improve: --max-iterations must be an integer from 1 to 5\n");
-          return 2;
-        }
         const improved = await improveDesignInMemory(doc, {
           maxIterations,
-          evaluate: (candidate) => evaluateDoc(candidate, flags.vision === true),
+          evaluate: (candidate) => evaluateDoc(candidate),
         });
         let committedRevision: number | null = null;
         if (flags["dry-run"] !== true && improved.operations.length > 0) {
@@ -579,7 +649,7 @@ export async function runCliCommand(command: string, args: string[], options: Cl
           committedRevision = result.revision;
         }
         if (asJson) {
-          out(`${JSON.stringify({ ...improved, dryRun: flags["dry-run"] === true, committedRevision }, null, 2)}\n`);
+          out(`${JSON.stringify({ ...improved, visionUsed, ...(visionNote ? { visionNote } : {}), dryRun: flags["dry-run"] === true, committedRevision }, null, 2)}\n`);
         } else {
           out(`Score: ${improved.baseline.defectScore} -> ${improved.final.defectScore} (${improved.iterationsRun} pass(es), ${improved.operations.length} node update(s)${flags["dry-run"] === true ? ", dry-run" : ""})\n`);
         }

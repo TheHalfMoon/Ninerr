@@ -330,7 +330,12 @@ export function exportHtml(
   const root = design.root;
   if (stylesheet !== null && owner) root.props = { ...root.props, "data-ninerr-page": "" };
   if (typeof options.modeOverride === "string" && /^[A-Za-z0-9_.-]{1,64}:[A-Za-z0-9_.-]{1,64}$/u.test(options.modeOverride)) {
-    root.props = { ...root.props, "data-ninerr-mode": options.modeOverride };
+    const overrideCol = options.modeOverride.slice(0, options.modeOverride.indexOf(":"));
+    const existingModes = typeof root.props["data-ninerr-mode"] === "string"
+      ? root.props["data-ninerr-mode"].split(/\s+/u).filter((entry) => entry !== "" && !entry.startsWith(`${overrideCol}:`))
+      : [];
+    existingModes.push(options.modeOverride);
+    root.props = { ...root.props, "data-ninerr-mode": existingModes.sort().join(" ") };
   }
   // The modes the layer is drawn in on the canvas, set on it or on a layer above it.
   if (root.props["data-ninerr-mode"] === undefined && typeof nodeId === "string") {

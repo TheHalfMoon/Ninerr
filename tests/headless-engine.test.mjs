@@ -964,7 +964,9 @@ test("an agent critiques, auto-improves atomically, and renders contained multi-
   assert.equal(imp.revision, revBefore + 1, "all multi-pass repairs collapsed into 1 atomic revision");
 
   if (hasBrowser) {
-    // 6. Render AFTER improvement with pure-JS PNG pixel diff against "before"!
+    // 6. dryRun with compareTo includes diff PNG in wouldWrite; live afterRender diffs cleanly!
+    const dryCompare = (await agent.call("render_preview", { dryRun: true, nodeId: pageId, name: "after", viewports: ["mobile", "desktop"], compareTo: "before" })).structuredContent;
+    assert.equal(dryCompare.wouldWrite.length, 4, "dryRun with compareTo lists both preview and diff PNG paths");
     const afterRender = await agent.call("render_preview", { nodeId: pageId, name: "after", viewports: ["mobile", "desktop"], compareTo: "before" });
     assert.equal(afterRender.isError, undefined, text(afterRender));
     const mobileAfter = afterRender.structuredContent.captures[0];
