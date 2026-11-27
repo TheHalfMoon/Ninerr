@@ -524,6 +524,16 @@ test("an agent authors a multi-section semantic page with create_layers, imports
   assert.equal(badDtcg.structuredContent.adds, 0);
   assert.equal(badDtcg.structuredContent.skipped, 3);
 
+  // Verify #64 label sanitization: BiDi-smuggled DTCG $description is refused.
+  const smuggledDesc = await agent.call("import_source", {
+    format: "tokens-json",
+    name: "smuggled.json",
+    source: JSON.stringify({
+      brand: { $type: "color", $value: "#111111", $description: "Safe\u202egnp.exe" },
+    }),
+  });
+  assert.equal(smuggledDesc.isError, true, "BiDi-smuggled DTCG $description refused");
+
   // 3. export_design: tsx, tokens-css, tokens-json (no nodeId required for tokens) + lossless round-trip + __proto__ safety.
   const tsxOut = (await agent.call("export_design", { nodeId: pageId, format: "tsx", name: "PricingView" })).structuredContent;
   assert.ok(tsxOut.path.endsWith("PricingView.tsx"));

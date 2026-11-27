@@ -27,7 +27,17 @@ const DTCG_TYPE_MAP: Readonly<Record<string, string>> = Object.freeze({
 });
 
 const ALIAS_PATTERN = /\{([A-Za-z0-9_.-]+)\}/gu;
+const HIDDEN_TEXT = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u{34f}\u{115f}\u{1160}\u{2800}\u{3164}\u{ffa0}]/u;
+const JOINERS = /[\u{200c}\u{200d}]/gu;
+const LINE_BREAKS = /[\t\n\r]/gu;
+const SELECTOR_SMUGGLING = /(?<![\p{Extended_Pictographic}0-9#*])[\u{fe0e}\u{fe0f}]|[\u{fe00}-\u{fe0d}]|(?<!\p{Ideographic})[\u{e0100}-\u{e01ef}]/u;
 const cleanFileName = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, " ").trim().slice(0, 200);
+
+function hasHiddenDescriptionText(value: string): boolean {
+  if (!value.isWellFormed()) return true;
+  const body = value.replace(JOINERS, "").replace(LINE_BREAKS, "");
+  return HIDDEN_TEXT.test(body) || SELECTOR_SMUGGLING.test(value);
+}
 
 function slugPath(segments: string[]): string {
   return segments
@@ -168,7 +178,8 @@ export function parseDtcgTokens(jsonText: string): ParsedDtcg {
       }
       const mappedType = mapDtcgType(ownType);
       if (ownType !== null && mappedType === null) {
-        kept.push({ name: `--${key}`, value: String(ownType), reason: `unsupported DTCG $type ${ownType}` });
+        const safeType = cleanFileName(ownType).slice(0, 64) || "(unsupported)";
+        kept.push({ name: `--${key}`, value: safeType, reason: `unsupported DTCG $type ${safeType}` });
         return;
       }
       const primary = serializeDtcgValue(node.$value, collectionPrefixes);
@@ -190,10 +201,15 @@ export function parseDtcgTokens(jsonText: string): ParsedDtcg {
         skipped += 1;
         return;
       }
-      // Clear any earlier bucket on slug collision so stale mode values never leak across tokens.
+      if (typeof node.$description === "string" && hasHiddenDescriptionText(node.$description)) {
+        throw new StudioError(422, "token-json-refused", `token --${key} description holds hidden or reordering characters`);
+      }
+      // Clear any earlier bucket and metadata on slug collision so stale values never leak across tokens.
       delete theme[key];
       delete light[key];
       delete dark[key];
+      delete types[key];
+      delete descriptions[key];
       if (hasDark && darkRaw !== null) {
         light[key] = primary;
         dark[key] = darkRaw;

@@ -1527,11 +1527,11 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       edit: (operations, intent, provenance) => {
         if (operations.length === 0) throw new ToolError("nothing to change");
         if (dryRun === true) {
-          const preview = session.preview(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName, ...(provenance ? { provenance } : {}) }, "mcp");
+          const preview = session.preview(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp");
           // Nothing is made: the result says so, and what the change would touch.
           throw new DryRun({ dryRun: true, wouldChange: preview.affectedNodeIds, operations: preview.operations, revision: preview.revision, intent });
         }
-        const event = session.edit(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName, ...(provenance ? { provenance } : {}) }, "mcp");
+        const event = session.edit(actor, { baseRevision: baseRevision ?? session.revision, operations, intent, tool: toolName }, "mcp", provenance);
         return { revision: event.revision, transactionId: event.transactionId, affectedNodeIds: event.affectedNodeIds };
       },
     }, args);
