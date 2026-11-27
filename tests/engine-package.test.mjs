@@ -71,6 +71,10 @@ test("the engine package carries no TypeScript, every import in it resolves, and
   assert.deepEqual(
     workspaceImportsIn([
       'const quoteRe = /["\']/u;',
+      'const html = `<!doctype html>${css === "" ? "" : `<style>${css}</style>`}</head>`;',
+      'const tick = `${x.replace("`", "\'")} ${(await import("@ninerr/epsilon")).x}`;',
+      'function f(x) { const a = 1\nreturn /["\']/u.test(x); }',
+      'import/*c*/"@ninerr/zeta";',
       'import { a } from "@ninerr/alpha";',
       'export { b } from "@ninerr/beta/subpath";',
       'const c = await import("@ninerr/gamma/deep/mod.mjs");',
@@ -79,8 +83,10 @@ test("the engine package carries no TypeScript, every import in it resolves, and
       '/* copied from "@ninerr/ignored-block-comment" */',
       'const doc = \'example: import x from "@ninerr/ignored-string"\';',
     ].join("\n")),
-    ["alpha", "beta", "delta", "gamma"],
+    ["alpha", "beta", "delta", "epsilon", "gamma", "zeta"],
   );
+  const codeTs = readFileSync(join(ROOT, "packages", "studio-host", "src", "code.ts"), "utf8");
+  assert.ok(workspaceImportsIn(`${codeTs}\nimport { __s } from "@ninerr/sentinel-check";\n`).includes("sentinel-check"));
   for (const manifest of files.filter((path) => path.endsWith(`${"package.json"}`) && path !== join(out, "package.json"))) {
     const bundled = JSON.parse(readFileSync(manifest, "utf8"));
     assert.equal(bundled.dependencies, undefined, `${bundled.name} declares no dependencies of its own`);

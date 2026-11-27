@@ -16,6 +16,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parse as parseModule } from "@babel/parser";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // Only workspace packages actually reachable from bin/ninerr.mjs (through @ninerr/* imports
@@ -23,96 +24,61 @@ const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 // app, browser studio-web UI, and unreferenced research/governance packages stay out.
 const LEFT_OUT = new Set(["desktop", "studio-web"]);
 const RELATIVE_TS = /((?:from|import)\s*\(?\s*)(["'])(\.{1,2}\/[^"'\n]+?)\.ts\2/gu;
-const WORKSPACE_IMPORT = /(?:\bfrom\s*|\b(?:import|require)\s*\(\s*|^\s*import\s+)(["'])@ninerr\/([a-z][a-z0-9-]*)(?:\/[^"'\n]*)?\1/gmu;
+const WORKSPACE_SPECIFIER = /^@ninerr\/([a-z][a-z0-9-]*)(?:\/|$)/u;
+const ENTRY_PACKAGE_SPECIFIER = /^\.\.\/packages\/([a-z][a-z0-9-]*)\//u;
+const AST_SKIP_KEYS = new Set(["loc", "start", "end", "extra", "leadingComments", "trailingComments", "innerComments", "tokens", "comments"]);
 
-const REGEX_BEFORE_CHAR = new Set(["", "=", "(", ",", ":", ";", "!", "&", "|", "?", "{", "}", "[", "+", "-", "*", "%", "<", ">", "^", "~"]);
-const REGEX_BEFORE_WORD = new Set(["return", "case", "throw", "in", "of", "typeof", "void", "delete", "new", "yield", "await"]);
-
-/** Replace JS line/block comments outside strings and regex literals so prose never matches imports. */
-function withoutComments(source) {
-  let out = "";
-  let i = 0;
-  let lastSig = "";
-  let lastWord = "";
-  const record = (ch) => {
-    if (/[A-Za-z0-9_$]/u.test(ch)) {
-      lastWord = /[A-Za-z0-9_$]/u.test(lastSig) ? `${lastWord}${ch}` : ch;
-      lastSig = ch;
-    } else if (!/\s/u.test(ch)) {
-      lastWord = "";
-      lastSig = ch;
-    }
-  };
-  while (i < source.length) {
-    const ch = source[i];
-    const next = source[i + 1];
-    if (ch === "'" || ch === '"' || ch === "`") {
-      const start = i;
-      i += 1;
-      while (i < source.length) {
-        const cur = source[i];
-        i += 1;
-        if (cur === "\\" && i < source.length) {
-          i += 1;
-        } else if (cur === ch) {
-          break;
-        }
-      }
-      const literal = source.slice(start, i);
-      const keep = ch !== "`" && (literal.startsWith(`${ch}@ninerr/`) || literal.startsWith(`${ch}../packages/`));
-      out += keep ? literal : `${ch}${ch}`;
-      lastWord = "";
-      lastSig = ch;
-      continue;
-    }
-    if (ch === "/" && next === "/") {
-      i += 2;
-      while (i < source.length && source[i] !== "\n") i += 1;
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      i += 2;
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
-        if (source[i] === "\n") out += "\n";
-        i += 1;
-      }
-      i += 2;
-      continue;
-    }
-    if (ch === "/" && (REGEX_BEFORE_CHAR.has(lastSig) || REGEX_BEFORE_WORD.has(lastWord))) {
-      out += ch;
-      i += 1;
-      let inClass = false;
-      while (i < source.length && source[i] !== "\n") {
-        const cur = source[i];
-        out += cur;
-        i += 1;
-        if (cur === "\\" && i < source.length) {
-          out += source[i];
-          i += 1;
-        } else if (cur === "[") {
-          inClass = true;
-        } else if (cur === "]") {
-          inClass = false;
-        } else if (cur === "/" && !inClass) {
-          break;
-        }
-      }
-      lastWord = "";
-      lastSig = ")";
-      continue;
-    }
-    out += ch;
-    record(ch);
-    i += 1;
+function stringSpecifier(node) {
+  if (!node) return null;
+  if (node.type === "StringLiteral") return node.value;
+  if (node.type === "TemplateLiteral" && node.expressions.length === 0 && node.quasis.length === 1) {
+    return node.quasis[0].value.cooked ?? null;
   }
-  return out;
+  return null;
+}
+
+/** All runtime module specifiers imported, re-exported, or required from `source`. */
+export function moduleSpecifiersIn(source) {
+  const ast = parseModule(source, { sourceType: "unambiguous", plugins: ["typescript", "jsx"], allowReturnOutsideFunction: true });
+  const specifiers = new Set();
+  const stack = [ast.program];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    if (node.type === "ImportDeclaration" && node.importKind !== "type" && typeof node.source?.value === "string") {
+      specifiers.add(node.source.value);
+    } else if ((node.type === "ExportNamedDeclaration" || node.type === "ExportAllDeclaration") && node.exportKind !== "type" && typeof node.source?.value === "string") {
+      specifiers.add(node.source.value);
+    } else if (node.type === "ImportExpression") {
+      const value = stringSpecifier(node.source);
+      if (value !== null) specifiers.add(value);
+    } else if (node.type === "CallExpression") {
+      if (node.callee?.type === "Import" || (node.callee?.type === "Identifier" && node.callee.name === "require")) {
+        const value = stringSpecifier(node.arguments?.[0]);
+        if (value !== null) specifiers.add(value);
+      }
+    }
+    for (const key of Object.keys(node)) {
+      if (AST_SKIP_KEYS.has(key)) continue;
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const item of child) if (item && typeof item === "object" && typeof item.type === "string") stack.push(item);
+      } else if (child && typeof child === "object" && typeof child.type === "string") {
+        stack.push(child);
+      }
+    }
+  }
+  return [...specifiers].sort();
 }
 
 /** Workspace package names imported, re-exported, or required from `source`. */
 export function workspaceImportsIn(source) {
+  if (!source.includes("@ninerr/") && !source.includes("\\u") && !source.includes("\\x")) return [];
   const names = new Set();
-  for (const [, , imported] of withoutComments(source).matchAll(WORKSPACE_IMPORT)) names.add(imported);
+  for (const specifier of moduleSpecifiersIn(source)) {
+    const match = WORKSPACE_SPECIFIER.exec(specifier);
+    if (match) names.add(match[1]);
+  }
   return [...names].sort();
 }
 
@@ -127,9 +93,13 @@ export function engineReachablePackages(entry = join(ROOT, "bin", "ninerr.mjs"))
     found.add(name);
     queue.push(name);
   };
-  const entryText = withoutComments(readFileSync(entry, "utf8"));
-  for (const [, , name] of entryText.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)(["'])\.\.\/packages\/([a-z][a-z0-9-]*)\/[^"'\n]*\1/gu)) enqueue(name);
-  for (const name of workspaceImportsIn(entryText)) enqueue(name);
+  const entryText = readFileSync(entry, "utf8");
+  for (const specifier of moduleSpecifiersIn(entryText)) {
+    const local = ENTRY_PACKAGE_SPECIFIER.exec(specifier);
+    if (local) enqueue(local[1]);
+    const ws = WORKSPACE_SPECIFIER.exec(specifier);
+    if (ws) enqueue(ws[1]);
+  }
   while (queue.length > 0) {
     const name = queue.pop();
     const pkgDir = join(ROOT, "packages", name);
