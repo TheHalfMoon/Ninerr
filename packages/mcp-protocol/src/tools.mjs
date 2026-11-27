@@ -67,6 +67,11 @@ const CLASSES = Object.freeze({
   render_preview: "write",
   critique_design: "read",
   improve_design: "write",
+  // Existing-application codebase inspection, import, AST-verified redesign planning, and human-confirmed apply/rollback.
+  inspect_codebase: "read",
+  import_from_codebase: "write",
+  plan_redesign: "read",
+  apply_redesign: "consequential",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

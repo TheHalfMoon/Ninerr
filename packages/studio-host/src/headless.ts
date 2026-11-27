@@ -8,6 +8,7 @@ import { StudioError } from "./errors.ts";
 import { prepareProjectsFolder } from "./projects-folder.ts";
 import { ConfirmationBroker, handleMcpMessage, type McpContext, type PendingConfirmation } from "./mcp.ts";
 import { ReferenceCatalog } from "./reference-catalog.ts";
+import { assertWorkspaceRoot } from "./redesign.ts";
 import { StudioSession, assertProjectName, type StudioActor } from "./session.ts";
 
 // Ninerr's headless engine: an MCP server on stdio that needs no editor, browser or desktop
@@ -34,6 +35,8 @@ type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 export interface HeadlessOptions {
   projectsRoot: string;
+  /** Optional local codebase folder explicitly bound by the person when launching Ninerr MCP. */
+  workspaceRoot?: string;
   input: Readable;
   output: Writable;
   now?: () => string;
@@ -72,6 +75,7 @@ export function localAgentActor(clientName: unknown): StudioActor {
 
 export class HeadlessEngine {
   readonly #projectsRoot: string;
+  readonly #workspaceRoot: string | null;
   readonly #now: () => string;
   readonly #write: (message: unknown) => void;
   readonly #references = new ReferenceCatalog();
@@ -88,8 +92,9 @@ export class HeadlessEngine {
   readonly #asked = new Set<string>();
   readonly #answers = new Map<string | number, (message: any) => void>();
 
-  constructor(options: { projectsRoot: string; now?: () => string; write: (message: unknown) => void; confirmationWaitMs?: number; idleCloseMs?: number }) {
+  constructor(options: { projectsRoot: string; workspaceRoot?: string; now?: () => string; write: (message: unknown) => void; confirmationWaitMs?: number; idleCloseMs?: number }) {
     this.#projectsRoot = options.projectsRoot;
+    this.#workspaceRoot = options.workspaceRoot !== undefined ? assertWorkspaceRoot(options.workspaceRoot, options.projectsRoot) : null;
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#write = options.write;
     this.#waitMs = options.confirmationWaitMs ?? HEADLESS_CONFIRMATION_WAIT_MS;
@@ -159,7 +164,15 @@ export class HeadlessEngine {
       now: this.#now,
       lastRead: this.#lastRead,
       confirmationWaitMs: this.#waitMs,
-      confirmationUnavailable: () => (this.#canAsk ? null : "Deleting needs the person's approval, and this MCP client cannot ask them (it does not support MCP elicitation), so the change was not made. Ask the person to approve the deletion in a client that can ask, or to make it themselves."),
+      workspaceRoot: () => this.#workspaceRoot,
+      redesignJournalDir: () => join(this.#projectsRoot, ".ninerr-redesign-journals"),
+      confirmationUnavailable: (toolName?: string) => {
+        if (this.#canAsk) return null;
+        if (toolName === "apply_redesign") {
+          return "Applying a redesign to your codebase needs the person's approval, and this MCP client cannot ask them (it does not support MCP elicitation), so no workspace files were changed. Run `ninerr redesign apply` from your terminal, or approve the change in a client that supports MCP elicitation.";
+        }
+        return "Deleting needs the person's approval, and this MCP client cannot ask them (it does not support MCP elicitation), so the change was not made. Ask the person to approve the deletion in a client that can ask, or to make it themselves.";
+      },
     };
   }
 
@@ -268,7 +281,7 @@ export async function runHeadless(options: HeadlessOptions): Promise<void> {
     options.output.write(`${JSON.stringify(message)}\n`);
   };
   prepareProjectsFolder(options.projectsRoot);
-  const engine = new HeadlessEngine({ projectsRoot: options.projectsRoot, write, ...(options.now ? { now: options.now } : {}), ...(options.confirmationWaitMs ? { confirmationWaitMs: options.confirmationWaitMs } : {}), ...(options.idleCloseMs ? { idleCloseMs: options.idleCloseMs } : {}) });
+  const engine = new HeadlessEngine({ projectsRoot: options.projectsRoot, ...(options.workspaceRoot !== undefined ? { workspaceRoot: options.workspaceRoot } : {}), write, ...(options.now ? { now: options.now } : {}), ...(options.confirmationWaitMs ? { confirmationWaitMs: options.confirmationWaitMs } : {}), ...(options.idleCloseMs ? { idleCloseMs: options.idleCloseMs } : {}) });
   const lines = createInterface({ input: options.input, crlfDelay: Infinity });
   const inflight = new Set<Promise<void>>();
   try {

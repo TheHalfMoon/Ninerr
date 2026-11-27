@@ -118,7 +118,7 @@ export function schemaVersionFor(nodes) {
 }
 
 // Functions that load or read something from outside the value: never in a token.
-const LOADING_FUNCTION = /(?:^|[^\w-])(?:url|src|image-set|-webkit-image-set|image|cross-fade|element|paint|expression|attr|env)\s*\(/iu;
+const LOADING_FUNCTION = /(?:^|[^\w-])(?:url|src|image-set|-webkit-image-set|image|cross-fade|-webkit-cross-fade|element|-moz-element|-webkit-canvas|-moz-image-rect|paint|expression|attr|env)\s*\(/iu;
 
 /**
  * Why a value cannot be a token's, or null. A token value becomes one declaration in a compiled
@@ -133,7 +133,7 @@ export function cssValueProblem(value) {
   if (LOADING_FUNCTION.test(value)) return "it loads or reads something from outside the value";
   // Whatever the renderer's stylesheet check refuses, so one value never blanks the whole sheet.
   if (/javascript:|vbscript:|behavior\s*:|-moz-binding/iu.test(value)) return "it holds a scheme or binding a stylesheet never may";
-  let depth = 0;
+  const brackets = [];
   let quote = null;
   for (const character of value) {
     if (quote !== null) {
@@ -141,14 +141,14 @@ export function cssValueProblem(value) {
       continue;
     }
     if (character === '"' || character === "'") quote = character;
-    else if (character === "(") depth += 1;
-    else if (character === ")") {
-      depth -= 1;
-      if (depth < 0) return "its brackets do not balance";
+    else if (character === "(" || character === "[") brackets.push(character);
+    else if (character === ")" || character === "]") {
+      const expected = character === ")" ? "(" : "[";
+      if (brackets.pop() !== expected) return "its brackets do not balance";
     }
   }
   if (quote !== null) return "it has a string that does not close";
-  if (depth !== 0) return "its brackets do not balance";
+  if (brackets.length !== 0) return "its brackets do not balance";
   return null;
 }
 

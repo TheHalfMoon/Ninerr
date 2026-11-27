@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { MCPAuthorizationError, MCPContractError, assertMCPToolSurface, classifyTool, mcpArgumentsSha256, requireMCPToolCall } from "@ninerr/mcp-protocol";
 import { TOKEN_NAME, TOKEN_TYPES, tokenReferences, addMode, briefProblem, compileTokens, deleteToken, designSystemOf, designSystemProblem, isCodePart, newDesignSystemProps, renameToken, setBreakpoints, setToken, textLayerOf, tokenUses } from "@ninerr/document-model";
 import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
@@ -15,6 +15,7 @@ import { ImportDesk } from "./imports.ts";
 import { planTokenCss } from "./token-import.ts";
 import { exportDtcgTokens, planDtcgTokens } from "./tokens-dtcg.ts";
 import { UntrustedFileError, readTrustedFile, writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
+import { REDESIGN_LIMITS, analyzeCodebase, applyRedesignPlan, planRedesign, readBoundedWorkspaceFile, rollbackRedesign, validateRollbackTargets } from "./redesign.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
@@ -71,6 +72,10 @@ interface ToolContext {
   edit: (operations: unknown[], intent: string, provenance?: Record<string, unknown>) => Json;
   /** The call is a dry run: a tool that does not change the document through `edit` must not act. */
   dryRun: boolean;
+  /** Optional human-authorized local codebase folder bound when launching Ninerr MCP. */
+  workspaceRoot: string | null;
+  /** Owner-only directory where redesign rollback journals are written. */
+  redesignJournalDir: string | null;
 }
 
 /** Tool arguments are the schema's and nothing else: no directory, URL, tenant or token gets through. */
@@ -111,6 +116,7 @@ const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   instantiate_component: ["label", "title", "description"],
   migrate_theme: ["tokens[].name", "tokens[].description", "breakpoints[].name"],
   render_preview: ["name"],
+  import_from_codebase: ["name"],
 });
 const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
 
@@ -391,6 +397,7 @@ const TOOLS: Tool[] = [
         "Design systems: audit_design_system inspects token coverage, duplicates, unused tokens, hardcoded literal matches, and cross-mode WCAG contrast; migrate_theme atomically migrates light and dark semantic tokens, generates a WCAG AAA high-contrast mode, or configures responsive breakpoints and scoped responsive rules.",
         "Design intelligence: design_intelligence reads domain archetypes, plans multi-direction aesthetic tokens, runs brief-aware taste critique, inspects motion presets, checks motion frequency or CSS linting, and lists or renders official Ninerr skills. set_design_brief stores the structured product brief on the design system (optionally seeding a planned direction's tokens), and apply_motion attaches reduced-motion-safe keyframes and transitions to a layer stylesheet along with motion tokens.",
         "Visual assurance and critique: render_preview renders a layer inside a local zero-egress browser across responsive viewports (saving PNG screenshots and optional pixel diffs to exports/previews); critique_design returns a unified deterministic and heuristic critique across accessibility, taste, design systems, and optional live browser telemetry; improve_design runs bounded in-memory non-regressing repairs and commits at most one atomic undoable change.",
+        "Existing-app redesign: when the person starts Ninerr MCP with a bound workspace folder, inspect_codebase analyzes its framework, styling, tokens and functional contracts offline; import_from_codebase brings a workspace component, stylesheet or HTML file into the open project in one change; plan_redesign computes a SHA-256 planToken for CSS token updates, JSX class replacements or AST-invariance-verified patches without touching disk; apply_redesign applies a verified plan or rolls back a previous run only with the person's explicit approval.",
       ].join("\n"),
     }),
   },
@@ -2400,7 +2407,282 @@ const TOOLS: Tool[] = [
       } as unknown as Json;
     },
   },
+  {
+    name: "inspect_codebase",
+    title: "Inspect bound codebase",
+    description: "Analyze the human-bound local codebase workspace offline (never executes target code): detects frameworks, styling systems, routes, components, CSS custom properties, and functional contract counts (hooks, event handlers, test ids).",
+    inputSchema: object({}),
+    run: ({ workspaceRoot }, args) => {
+      onlyArguments(args, []);
+      const root = requireBoundWorkspace(workspaceRoot);
+      const report = analyzeCodebase(root);
+      return {
+        workspaceName: basename(root),
+        projectName: report.projectName,
+        frameworks: report.frameworks,
+        styling: report.styling,
+        counts: report.counts,
+        cssFiles: report.cssFiles,
+        routeFiles: report.routeFiles,
+        components: report.components,
+        tokens: report.tokens,
+      } as unknown as Json;
+    },
+  },
+  {
+    name: "import_from_codebase",
+    title: "Import file from bound codebase",
+    description: "Import a component (.tsx/.jsx/.js/.mjs), CSS token stylesheet (.css), or HTML file from the human-bound codebase workspace into the open Ninerr project in one atomic undoable change.",
+    inputSchema: object({
+      file: { type: "string", minLength: 1, maxLength: 512, description: "Relative forward-slash path inside the bound workspace." },
+      component: { type: "string", minLength: 1, maxLength: 128, description: "Optional exported component name when importing a JSX/TSX file with multiple exports." },
+      name: { type: "string", maxLength: 120, description: "Optional layer or import label." },
+    }, ["file"]),
+    run: ({ session, actor, now, edit, workspaceRoot }, args) => {
+      onlyArguments(args, ["file", "component", "name"]);
+      const root = requireBoundWorkspace(workspaceRoot);
+      if (typeof args.file !== "string" || args.file.trim() === "") throw new ToolError("file must be a relative path inside the bound workspace");
+      if (args.component !== undefined && (typeof args.component !== "string" || args.component.trim() === "")) throw new ToolError("component must be a non-empty string");
+      if (args.name !== undefined && (typeof args.name !== "string" || args.name.length > 120)) throw new ToolError("name must be a string of at most 120 characters");
+      const read = readBoundedWorkspaceFile(root, args.file);
+      const ext = extname(read.file).toLowerCase();
+      if (ext === ".css") {
+        const planned = planTokenCss(session.document, { css: read.content, fileName: typeof args.name === "string" && args.name.trim() !== "" ? args.name.trim() : read.file });
+        if (planned.plan.problem !== null) throw new ToolError(`tokens refused: ${planned.plan.problem}`);
+        const refused = planned.plan.tokens
+          .filter((token: any) => token.status === "refused")
+          .map((token: any) => ({ name: token.name, reason: token.reason ?? "refused" }));
+        const conflicts = planned.plan.tokens
+          .filter((token: any) => token.status === "conflict")
+          .map((token: any) => ({ name: token.name, reason: token.reason ?? "conflict" }));
+        if (planned.operations.length === 0) {
+          return { file: read.file, format: "tokens-css", adds: 0, skipped: planned.plan.skipped, kept: planned.plan.kept, refused, conflicts, revision: session.revision } as unknown as Json;
+        }
+        return {
+          file: read.file,
+          format: "tokens-css",
+          adds: planned.plan.adds,
+          skipped: planned.plan.skipped,
+          kept: planned.plan.kept,
+          refused,
+          conflicts,
+          ...(edit(planned.operations, `Import ${planned.plan.adds} token${planned.plan.adds === 1 ? "" : "s"} from ${read.file}`) as object),
+        } as unknown as Json;
+      }
+      if (ext === ".tsx" || ext === ".jsx" || ext === ".js" || ext === ".mjs") {
+        const imported = importJsx(read.content, { ...(typeof args.component === "string" ? { component: args.component } : {}) });
+        const intent = typeof args.name === "string" && args.name.trim() !== "" ? `Import ${args.name.trim()}` : `Import ${imported.componentName} from ${read.file}`;
+        return {
+          file: read.file,
+          format: "jsx",
+          frameId: imported.frameId,
+          componentName: imported.componentName,
+          layers: imported.layers,
+          layersWithStyleLeftOut: imported.layersWithStyleLeftOut,
+          layersWithStyleOutOfOrder: imported.layersWithStyleOutOfOrder,
+          ...(edit(imported.operations, intent) as object),
+        } as unknown as Json;
+      }
+      if (ext === ".html") {
+        const desk = new ImportDesk();
+        const summaryReport = desk.prepare({ html: read.content, name: typeof args.name === "string" && args.name.trim() !== "" ? args.name.trim() : basename(read.file) }, actor.actorId, now());
+        if (!summaryReport.commitReady) {
+          throw new ToolError(`HTML import refused: ${summaryReport.blockingReasons.join("; ")}`);
+        }
+        const change = desk.change(summaryReport.proposalId, session.document);
+        return {
+          file: read.file,
+          format: "html",
+          frameId: change.frameId,
+          layers: summaryReport.counts.nodes,
+          accessibilityFindings: summaryReport.accessibilityFindings,
+          security: summaryReport.security,
+          notes: summaryReport.notes,
+          ...(edit(change.operations, change.intent, change.provenance) as object),
+        } as unknown as Json;
+      }
+      throw new ToolError(`unsupported codebase file extension ${JSON.stringify(ext)}: import .tsx, .jsx, .js, .mjs, .css or .html`);
+    },
+  },
+  {
+    name: "plan_redesign",
+    title: "Plan existing-app redesign",
+    description: "Plan Tier 1 CSS token updates, Tier 2 JSX class replacements, or Tier 3 structural visual patches in the bound workspace without writing any files. Every JSX/TSX patch is verified by Ninerr's Whole-File AST Business-Logic & Functional-Contract Invariance Gate, returning a SHA-256 planToken.",
+    inputSchema: object({
+      cssTokenUpdates: { type: "object", additionalProperties: { type: "string", maxLength: 512 }, maxProperties: REDESIGN_LIMITS.maxTokenUpdates },
+      jsxClassReplacements: { type: "object", additionalProperties: { type: "string", maxLength: 512 }, maxProperties: REDESIGN_LIMITS.maxClassReplacements },
+      files: { type: "array", maxItems: REDESIGN_LIMITS.maxPatchFiles * 4, items: { type: "string", minLength: 1, maxLength: 512 } },
+      explicitPatches: {
+        type: "array",
+        maxItems: REDESIGN_LIMITS.maxPatchFiles,
+        items: object({
+          file: { type: "string", minLength: 1, maxLength: 512 },
+          afterContent: { type: "string", maxLength: REDESIGN_LIMITS.maxFileBytes },
+          summary: { type: "string", maxLength: 200 },
+        }, ["file", "afterContent"]),
+      },
+    }),
+    run: ({ workspaceRoot }, args) => {
+      onlyArguments(args, ["cssTokenUpdates", "jsxClassReplacements", "files", "explicitPatches"]);
+      const root = requireBoundWorkspace(workspaceRoot);
+      const parsed = parseRedesignPlanInput(args);
+      const plan = planRedesign(root, parsed);
+      return {
+        workspaceName: basename(root),
+        planToken: plan.planToken,
+        fileCount: plan.patches.length,
+        files: plan.patches.map(({ file, tier, beforeSha256, afterSha256, summary }) => ({
+          file,
+          tier,
+          beforeSha256,
+          afterSha256,
+          summary,
+        })),
+      } as unknown as Json;
+    },
+  },
+  {
+    name: "apply_redesign",
+    title: "Apply or roll back redesign",
+    description: "Apply a verified redesign plan (bound to its SHA-256 planToken with atomic writes and owner-only rollback journal) or roll back a previous redesign run in the human-bound workspace. Requires the person's explicit approval.",
+    inputSchema: object({
+      action: { type: "string", enum: ["apply", "rollback"] },
+      planToken: { type: "string", minLength: 64, maxLength: 64 },
+      cssTokenUpdates: { type: "object", additionalProperties: { type: "string", maxLength: 512 }, maxProperties: REDESIGN_LIMITS.maxTokenUpdates },
+      jsxClassReplacements: { type: "object", additionalProperties: { type: "string", maxLength: 512 }, maxProperties: REDESIGN_LIMITS.maxClassReplacements },
+      files: { type: "array", maxItems: REDESIGN_LIMITS.maxPatchFiles * 4, items: { type: "string", minLength: 1, maxLength: 512 } },
+      explicitPatches: {
+        type: "array",
+        maxItems: REDESIGN_LIMITS.maxPatchFiles,
+        items: object({
+          file: { type: "string", minLength: 1, maxLength: 512 },
+          afterContent: { type: "string", maxLength: REDESIGN_LIMITS.maxFileBytes },
+          summary: { type: "string", maxLength: 200 },
+        }, ["file", "afterContent"]),
+      },
+      runId: { type: "string", minLength: 10, maxLength: 64 },
+      force: { type: "boolean" },
+    }, ["action"]),
+    run: ({ dryRun, workspaceRoot, redesignJournalDir }, args) => {
+      onlyArguments(args, ["action", "planToken", "cssTokenUpdates", "jsxClassReplacements", "files", "explicitPatches", "runId", "force"]);
+      const root = requireBoundWorkspace(workspaceRoot);
+      const journalDir = requireRedesignJournalDir(redesignJournalDir);
+      if (args.action === "apply") {
+        if (typeof args.planToken !== "string" || !/^[a-f0-9]{64}$/u.test(args.planToken)) {
+          throw new ToolError("apply requires planToken (64-character SHA-256 hex from plan_redesign)");
+        }
+        const parsed = parseRedesignPlanInput(args);
+        const plan = planRedesign(root, parsed);
+        if (plan.patches.length === 0) throw new ToolError("redesign plan contains no file changes");
+        if (plan.planToken !== args.planToken) {
+          throw new ToolError("planToken does not match the current workspace files; run plan_redesign again");
+        }
+        if (dryRun) {
+          return {
+            dryRun: true,
+            action: "apply",
+            workspaceName: basename(root),
+            planToken: plan.planToken,
+            wouldChangeFiles: plan.patches.map(({ file, tier, summary }) => ({ file, tier, summary })),
+          } as unknown as Json;
+        }
+        const applied = applyRedesignPlan(plan, { journalDir, expectedPlanToken: args.planToken });
+        return {
+          action: "apply",
+          workspaceName: basename(root),
+          runId: applied.runId,
+          planToken: applied.planToken,
+          filesApplied: applied.filesApplied,
+        } as unknown as Json;
+      }
+      if (args.action === "rollback") {
+        if (typeof args.runId !== "string" || args.runId.trim() === "") {
+          throw new ToolError("rollback requires runId");
+        }
+        if (args.force !== undefined && typeof args.force !== "boolean") {
+          throw new ToolError("force is true or false");
+        }
+        if (dryRun) {
+          const { targets } = validateRollbackTargets({ workspaceRoot: root, journalDir, runId: args.runId, force: args.force === true });
+          return {
+            dryRun: true,
+            action: "rollback",
+            workspaceName: basename(root),
+            runId: args.runId,
+            wouldRestoreFiles: targets.map((t) => t.file),
+          } as unknown as Json;
+        }
+        const rolled = rollbackRedesign({ workspaceRoot: root, journalDir, runId: args.runId, force: args.force === true });
+        return {
+          action: "rollback",
+          workspaceName: basename(root),
+          runId: rolled.runId,
+          restoredFiles: rolled.restoredFiles,
+        } as unknown as Json;
+      }
+      throw new ToolError("action must be \"apply\" or \"rollback\"");
+    },
+  },
 ];
+
+function requireBoundWorkspace(workspaceRoot: string | null): string {
+  if (typeof workspaceRoot !== "string" || workspaceRoot.trim() === "") {
+    throw new ToolError("No codebase workspace is bound. Restart Ninerr MCP with --workspace <folder> (or set NINERR_WORKSPACE) to inspect or redesign a local codebase.");
+  }
+  return workspaceRoot;
+}
+
+function requireRedesignJournalDir(journalDir: string | null): string {
+  if (typeof journalDir !== "string" || journalDir.trim() === "") {
+    throw new ToolError("Redesign journaling is not configured in this session.");
+  }
+  return journalDir;
+}
+
+function parseRedesignPlanInput(args: Record<string, any>) {
+  const isStringRecord = (val: unknown, label: string, maxKeys: number): Record<string, string> => {
+    if (val === undefined) return {};
+    if (val === null || typeof val !== "object" || Array.isArray(val)) throw new ToolError(`${label} must be an object mapping strings to strings`);
+    const entries = Object.entries(val);
+    if (entries.length > maxKeys) throw new ToolError(`${label} may contain at most ${maxKeys} entries`);
+    const out: Record<string, string> = Object.create(null);
+    for (const [k, v] of entries) {
+      if (typeof v !== "string") throw new ToolError(`${label}[${JSON.stringify(k.slice(0, 40))}] must be a string`);
+      out[k] = v;
+    }
+    return out;
+  };
+  const cssTokenUpdates = isStringRecord(args.cssTokenUpdates, "cssTokenUpdates", REDESIGN_LIMITS.maxTokenUpdates);
+  const jsxClassReplacements = isStringRecord(args.jsxClassReplacements, "jsxClassReplacements", REDESIGN_LIMITS.maxClassReplacements);
+  let files: string[] = [];
+  if (args.files !== undefined) {
+    if (!Array.isArray(args.files) || args.files.length > REDESIGN_LIMITS.maxPatchFiles * 4 || args.files.some((f) => typeof f !== "string" || f.trim() === "")) {
+      throw new ToolError(`files must be a list of up to ${REDESIGN_LIMITS.maxPatchFiles * 4} relative file paths`);
+    }
+    files = args.files;
+  }
+  let explicitPatches: Array<{ file: string; afterContent: string; summary?: string }> = [];
+  if (args.explicitPatches !== undefined) {
+    if (!Array.isArray(args.explicitPatches) || args.explicitPatches.length > REDESIGN_LIMITS.maxPatchFiles) {
+      throw new ToolError(`explicitPatches must be a list of up to ${REDESIGN_LIMITS.maxPatchFiles} patches`);
+    }
+    explicitPatches = args.explicitPatches.map((item, idx) => {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) throw new ToolError(`explicitPatches[${idx}] must be an object`);
+      onlyArguments(item, ["file", "afterContent", "summary"]);
+      if (typeof item.file !== "string" || typeof item.afterContent !== "string") {
+        throw new ToolError(`explicitPatches[${idx}] requires file and afterContent strings`);
+      }
+      if (item.summary !== undefined && typeof item.summary !== "string") {
+        throw new ToolError(`explicitPatches[${idx}].summary must be a string`);
+      }
+      return { file: item.file, afterContent: item.afterContent, ...(item.summary !== undefined ? { summary: item.summary } : {}) };
+    });
+  }
+  if (Object.keys(cssTokenUpdates).length === 0 && Object.keys(jsxClassReplacements).length === 0 && explicitPatches.length === 0) {
+    throw new ToolError("provide at least one of cssTokenUpdates, jsxClassReplacements or explicitPatches");
+  }
+  return { cssTokenUpdates, jsxClassReplacements, files, explicitPatches };
+}
 
 const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
 // The definitions the server announces must satisfy the MCP contract validators and be exactly
@@ -2491,20 +2773,22 @@ export class ConfirmationBroker {
   }
 
   /**
-   * Ask the person, reusing an identical open request. Resolves with their decision (an
-   * approval carries its time), "timeout", or "busy" when too many requests are waiting:
-   * at most 20 in all, 5 per agent, and 4 calls waiting on one request.
+   * Ask the person, reusing an identical open request (unless `singleWaiter` is set for
+   * non-idempotent tools like `apply_redesign`). Resolves with their decision (an approval
+   * carries its time), "timeout", or "busy" when too many requests are waiting: at most 20 in
+   * all, 5 per agent, and 4 calls waiting on one request (1 when `singleWaiter` is true).
    */
-  request(input: Omit<PendingConfirmation, "id" | "requestedAt"> & { subjectSha256?: string }, at: string, waitMs: number): Promise<Decision> {
+  request(input: Omit<PendingConfirmation, "id" | "requestedAt"> & { subjectSha256?: string; singleWaiter?: boolean }, at: string, waitMs: number): Promise<Decision> {
     this.#prune();
-    let item = [...this.#items.values()].find((candidate) => candidate.decision === "pending" && candidate.agentId === input.agentId && candidate.toolName === input.toolName && candidate.documentId === input.documentId && candidate.argumentsSha256 === input.argumentsSha256 && candidate.subjectSha256 === input.subjectSha256);
+    const { singleWaiter, ...entryInput } = input;
+    let item = [...this.#items.values()].find((candidate) => candidate.decision === "pending" && candidate.agentId === entryInput.agentId && candidate.toolName === entryInput.toolName && candidate.documentId === entryInput.documentId && candidate.argumentsSha256 === entryInput.argumentsSha256 && candidate.subjectSha256 === entryInput.subjectSha256);
     if (item === undefined) {
       const pending = this.pending();
-      if (pending.length >= 20 || pending.filter((other) => other.agentId === input.agentId).length >= 5) return Promise.resolve({ outcome: "busy" });
-      item = { ...input, id: `confirm-${randomUUID()}`, requestedAt: at, expires: Date.now() + CONFIRMATION_TTL_MS, decision: "pending", waiters: [] };
+      if (pending.length >= 20 || pending.filter((other) => other.agentId === entryInput.agentId).length >= 5) return Promise.resolve({ outcome: "busy" });
+      item = { ...entryInput, id: `confirm-${randomUUID()}`, requestedAt: at, expires: Date.now() + CONFIRMATION_TTL_MS, decision: "pending", waiters: [] };
       this.#items.set(item.id, item);
       this.#notify(this.pending());
-    } else if (item.waiters.length >= 4) {
+    } else if ((singleWaiter === true && item.waiters.length >= 1) || item.waiters.length >= 4) {
       return Promise.resolve({ outcome: "busy" });
     }
     const target = item;
@@ -2587,7 +2871,11 @@ export interface McpContext {
    * The headless engine says so when its client cannot ask (no MCP elicitation): the call is then
    * refused, never approved without the person.
    */
-  confirmationUnavailable?: () => string | null;
+  confirmationUnavailable?: (toolName?: string) => string | null;
+  /** Optional human-bound local codebase folder (headless `--workspace` / `NINERR_WORKSPACE`). */
+  workspaceRoot?: () => string | null;
+  /** Optional owner-only directory for redesign rollback journals. */
+  redesignJournalDir?: () => string | null;
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
@@ -2700,6 +2988,8 @@ async function callTool(context: McpContext, actor: StudioActor, params: any) {
       dryRun: dryRun === true,
       selection: context.selection,
       references: context.references,
+      workspaceRoot: context.workspaceRoot?.() ?? null,
+      redesignJournalDir: context.redesignJournalDir?.() ?? null,
       edit: (operations, intent, provenance) => {
         if (operations.length === 0) throw new ToolError("nothing to change");
         if (dryRun === true) {
@@ -2752,12 +3042,88 @@ function tokenSubject(document: any, name: unknown) {
 /** The person's confirmation for this exact call, or the message to return instead. */
 async function confirm(context: McpContext, session: StudioSession, actor: StudioActor, toolName: string, args: unknown, at: string) {
   const argumentsSha256 = mcpArgumentsSha256(args);
-  const subjectOf = () => (toolName === "delete_token" ? createHash("sha256").update(JSON.stringify(tokenSubject(session.document, (args as any)?.name))).digest("hex") : undefined);
+  let redesignSummary: string | null = null;
+  let redesignSubjectOf: (() => string) | null = null;
+
+  if (toolName === "apply_redesign") {
+    const root = context.workspaceRoot?.() ?? null;
+    const journalDir = context.redesignJournalDir?.() ?? null;
+    if (typeof root !== "string" || root.trim() === "") {
+      return "No codebase workspace is bound. Restart Ninerr MCP with --workspace <folder> (or set NINERR_WORKSPACE) to redesign a local codebase.";
+    }
+    if (typeof journalDir !== "string" || journalDir.trim() === "") {
+      return "Redesign journaling is not configured in this session.";
+    }
+    // Check elicitation availability before touching workspace/journal files.
+    const unavailableEarly = context.confirmationUnavailable?.(toolName) ?? null;
+    if (unavailableEarly !== null) return unavailableEarly;
+    try {
+      const given = onlyArguments(args, ["action", "planToken", "cssTokenUpdates", "jsxClassReplacements", "files", "explicitPatches", "runId", "force"]);
+      if (given.action === "apply") {
+        if (typeof given.planToken !== "string" || !/^[a-f0-9]{64}$/u.test(given.planToken)) {
+          return "apply requires planToken (64-character SHA-256 hex from plan_redesign)";
+        }
+        const parsed = parseRedesignPlanInput(given);
+        const plan = planRedesign(root, parsed);
+        if (plan.patches.length === 0) return "redesign plan contains no file changes";
+        if (plan.planToken !== given.planToken) {
+          return "planToken does not match the current workspace files; run plan_redesign again";
+        }
+        redesignSubjectOf = () => {
+          try {
+            return planRedesign(root, parsed).planToken;
+          } catch {
+            return "";
+          }
+        };
+        const tierCounts = [1, 2, 3].map((t) => plan.patches.filter((p) => p.tier === t).length);
+        const tierBreakdown = `T1:${tierCounts[0]}/T2:${tierCounts[1]}/T3:${tierCounts[2]}`;
+        const tier3Files = plan.patches.filter((p) => p.tier === 3).map((p) => `${p.file} [tier 3]`);
+        const otherFiles = plan.patches.filter((p) => p.tier !== 3);
+        const listed = [
+          ...tier3Files,
+          ...otherFiles.slice(0, 5).map((p) => `${p.file} [tier ${p.tier}]`),
+        ];
+        const omitted = otherFiles.length > 5 ? `, … (+${otherFiles.length - 5} tier 1/2)` : "";
+        redesignSummary = `Apply redesign to ${plan.patches.length} file${plan.patches.length === 1 ? "" : "s"} (${tierBreakdown}) in ${basename(root)} (plan ${plan.planToken.slice(0, 12)}): ${listed.join(", ")}${omitted}`;
+      } else if (given.action === "rollback") {
+        if (typeof given.runId !== "string" || given.runId.trim() === "") return "rollback requires runId";
+        if (given.force !== undefined && typeof given.force !== "boolean") return "force is true or false";
+        const initial = validateRollbackTargets({ workspaceRoot: root, journalDir, runId: given.runId, force: given.force === true });
+        const digestTargets = () => {
+          try {
+            const check = validateRollbackTargets({ workspaceRoot: root, journalDir, runId: given.runId as string, force: given.force === true });
+            return createHash("sha256").update(JSON.stringify({
+              workspaceRoot: check.rootReal,
+              journalSha256: check.journalSha256,
+              runId: given.runId,
+              force: given.force === true,
+              files: check.targets.map((t) => ({ file: t.file, sha: t.preRollback.missing ? null : t.preRollback.sha256 })),
+            })).digest("hex");
+          } catch {
+            return "";
+          }
+        };
+        redesignSubjectOf = digestTargets;
+        redesignSummary = `Roll back redesign run ${given.runId} in ${basename(root)} (${initial.targets.length} file${initial.targets.length === 1 ? "" : "s"}: ${initial.targets.slice(0, 8).map((t) => t.file).join(", ")}${initial.targets.length > 8 ? ", …" : ""})${given.force === true ? " [force overwrite]" : ""}`;
+      } else {
+        return "action must be \"apply\" or \"rollback\"";
+      }
+    } catch (error) {
+      return error instanceof ToolError || error instanceof StudioError ? error.message : "Invalid apply_redesign arguments.";
+    }
+  }
+
+  const subjectOf = () => {
+    if (toolName === "delete_token") return createHash("sha256").update(JSON.stringify(tokenSubject(session.document, (args as any)?.name))).digest("hex");
+    if (redesignSubjectOf !== null) return redesignSubjectOf();
+    return undefined;
+  };
   const subjectSha256 = subjectOf();
   const key = { agentId: actor.actorId, toolName, documentId: session.documentId, argumentsSha256, subjectSha256 };
   const approvedAt = context.confirmations.takeApproval(key);
   if (approvedAt !== null) return { documentId: session.documentId, toolName, argumentsSha256, actorId: actor.ownerActorId!, confirmedAt: approvedAt };
-  const unavailable = context.confirmationUnavailable?.() ?? null;
+  const unavailable = context.confirmationUnavailable?.(toolName) ?? null;
   if (unavailable !== null) return unavailable;
   const ids = Array.isArray((args as any)?.nodeIds) ? [...new Set((args as any).nodeIds.filter((id: unknown) => typeof id === "string"))] as string[] : [];
   const document = session.document as any;
@@ -2792,10 +3158,20 @@ async function confirm(context: McpContext, session: StudioSession, actor: Studi
     const aliased = aliases.length === 0 ? "" : `, aliased by ${aliases.slice(0, 5).join(", ")}${aliases.length > 5 ? ", …" : ""}`;
     return `Delete token ${shown}, used by ${values} value${values === 1 ? "" : "s"} on ${uses.length} layer${uses.length === 1 ? "" : "s"}${aliased}, ${by}`;
   };
-  const summary = shownPlainly(toolName === "delete_token" ? tokenSummary() : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`);
-  const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
-  // What was approved must still be what runs: a token changed while the call waited is asked about again.
-  if (decision.outcome === "approved" && subjectOf() !== subjectSha256) return "What this would delete changed while it waited for the person; call again to ask them about it as it is now.";
+  const summary = shownPlainly(
+    redesignSummary !== null
+      ? redesignSummary
+      : toolName === "delete_token"
+        ? tokenSummary()
+        : `${toolName === "delete_layers" ? "Delete" : toolName} ${ids.length} layer${ids.length === 1 ? "" : "s"}: ${ids.slice(0, 5).map(describeNode).join(", ")}${ids.length > 5 ? ", …" : ""}`,
+  );
+  const decision = await context.confirmations.request({ ...key, agentName: actor.displayName, summary, ...(toolName === "apply_redesign" ? { singleWaiter: true } : {}) }, at, context.confirmationWaitMs ?? CONFIRMATION_WAIT_MS);
+  // What was approved must still be what runs: a token or workspace file changed while the call waited is asked about again.
+  if (decision.outcome === "approved" && subjectOf() !== subjectSha256) {
+    return toolName === "apply_redesign"
+      ? "The workspace files changed while waiting for the person's approval; run plan_redesign again."
+      : "What this would delete changed while it waited for the person; call again to ask them about it as it is now.";
+  }
   // A switch to another project drops the request: say so, rather than that the person declined.
   if (decision.outcome === "denied") return context.session() === session ? "The person declined this change." : "The open project changed while the call was waiting.";
   if (decision.outcome === "busy") return "Too many changes are already waiting for the person's approval. Wait for them to decide, then call again.";

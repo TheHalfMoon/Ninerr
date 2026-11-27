@@ -17,7 +17,7 @@ import { createInterface } from "node:readline";
 import * as studioHost from "../packages/studio-host/src/index.ts";
 const { prepareProjectsFolder, resolveProjectsFolder, runHeadless } = studioHost;
 
-const USAGE = "usage: ninerr mcp [--projects <folder>] | ninerr doctor [--projects <folder>] | ninerr design <plan|archetypes|archetype|skills> | ninerr motion <presets|compile|lint|react|frequency> | ninerr components <list|show> | ninerr tokens <audit|merge> | ninerr <preview|critique|audit|improve> <project-folder> | ninerr --version";
+const USAGE = "usage: ninerr mcp [--projects <folder>] [--workspace <folder>] | ninerr doctor [--projects <folder>] | ninerr design <plan|archetypes|archetype|skills> | ninerr motion <presets|compile|lint|react|frequency> | ninerr components <list|show> | ninerr tokens <audit|merge> | ninerr <preview|critique|audit|improve> <project-folder> | ninerr redesign <inspect|plan|apply|rollback> <workspace> | ninerr --version";
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 function fail(message) {
@@ -39,8 +39,10 @@ if (Array.isArray(studioHost.EXTENDED_CLI_COMMANDS) && studioHost.EXTENDED_CLI_C
 } else {
   if (command !== "mcp" && command !== "doctor") fail(command === undefined ? "name a command" : `unknown command ${JSON.stringify(command)}`);
   let projects;
+  let workspace;
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === "--projects" && args[index + 1] !== undefined && !args[index + 1].startsWith("--")) projects = args[++index];
+    else if (command === "mcp" && args[index] === "--workspace" && args[index + 1] !== undefined && !args[index + 1].startsWith("--")) workspace = args[++index];
     else fail(`unknown option ${JSON.stringify(args[index])}`);
   }
   const { path: projectsRoot, note: folderNote } = resolveProjectsFolder(projects);
@@ -55,14 +57,23 @@ if (Array.isArray(studioHost.EXTENDED_CLI_COMMANDS) && studioHost.EXTENDED_CLI_C
     } catch (error) {
       fail(`cannot use the projects folder ${projectsRoot}: ${error instanceof Error ? error.message : String(error)}`);
     }
-    process.stderr.write(`ninerr: headless engine on stdio, projects folder ${projectsRoot}\n`);
+    const rawWorkspace = workspace ?? (typeof process.env.NINERR_WORKSPACE === "string" && process.env.NINERR_WORKSPACE.trim() !== "" ? process.env.NINERR_WORKSPACE.trim() : undefined);
+    let workspaceRoot;
+    if (rawWorkspace !== undefined) {
+      try {
+        workspaceRoot = studioHost.assertWorkspaceRoot(rawWorkspace, projectsRoot);
+      } catch (error) {
+        fail(`cannot use the workspace folder ${rawWorkspace}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    process.stderr.write(`ninerr: headless engine on stdio, projects folder ${projectsRoot}${workspaceRoot ? `, workspace ${workspaceRoot}` : ""}\n`);
     // A client that goes away closes stdin, which ends the engine and closes the open project.
     // A stopped client (a signal) or a closed stdout ends it the same way.
     const stop = () => process.stdin.destroy();
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
     process.stdout.on("error", stop);
-    await runHeadless({ projectsRoot, input: process.stdin, output: process.stdout });
+    await runHeadless({ projectsRoot, ...(workspaceRoot !== undefined ? { workspaceRoot } : {}), input: process.stdin, output: process.stdout });
   }
 }
 
