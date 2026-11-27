@@ -148,3 +148,7 @@ The clean-machine desktop install and the editor's screen-reader pass (#376) are
 2. Run the same client sessions on macOS and Linux.
 3. When the founder names the candidate: qualify it as the open blockers say.
 4. After v0.1.0: validation and accessibility reports as engine tools, PNG previews where a local browser exists, and code-to-design from a connected codebase over MCP.
+
+## Non-UI engineering preflight (2026-11-16)
+
+Windows preflight on main at `a515fdadb9ce9754b6943ec91c754677c5b18d30`: clean dependency install, 17 targeted release/doctor tests, and deterministic offline smoke passed. See `docs/evidence/V0_1_0_WINDOWS_NON_UI_PREFLIGHT_2026-11-16.md`. This is not final-candidate P10 qualification or human Desktop/UI acceptance.
