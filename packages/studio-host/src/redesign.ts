@@ -651,6 +651,35 @@ function collectUnsafeStylingOccurrences(ast: any): Map<string, number> {
   const counts = new Map<string, number>();
   const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
 
+  const staticFragment = (expr: any, depth = 0): string | null => {
+    if (!expr || typeof expr !== "object" || depth > 8) return null;
+    if (expr.type === "StringLiteral") return expr.value;
+    if (expr.type === "NumericLiteral") return String(expr.value);
+    if (expr.type === "BooleanLiteral") return String(expr.value);
+    if (expr.type === "NullLiteral") return "null";
+    if (expr.type === "UnaryExpression" && (expr.operator === "-" || expr.operator === "+") && expr.argument?.type === "NumericLiteral") {
+      return `${expr.operator}${expr.argument.value}`;
+    }
+    if (expr.type === "ParenthesizedExpression" || expr.type === "TSAsExpression" || expr.type === "TSSatisfiesExpression") {
+      return staticFragment(expr.expression, depth + 1);
+    }
+    if (expr.type === "TemplateLiteral") {
+      let joined = "";
+      const quasis = expr.quasis ?? [];
+      const exprs = expr.expressions ?? [];
+      for (let i = 0; i < quasis.length; i += 1) {
+        joined += String(quasis[i]?.value?.cooked ?? quasis[i]?.value?.raw ?? "");
+        if (i < exprs.length) {
+          const part = staticFragment(exprs[i], depth + 1);
+          if (part === null) return null;
+          joined += part;
+        }
+      }
+      return joined;
+    }
+    return null;
+  };
+
   const inspectStylingValue = (node: any, isStyleAttr: boolean) => {
     const stack: any[] = [node];
     while (stack.length > 0) {
@@ -661,6 +690,31 @@ function collectUnsafeStylingOccurrences(ast: any): Map<string, number> {
           bump(`unsafe:${cur.value}`);
         } else if (isStyleAttr && cssValueProblem(cur.value) !== null) {
           bump(`invalid-style:${cur.value}`);
+        }
+        continue;
+      }
+      if (cur.type === "TemplateLiteral") {
+        let folded = "";
+        let allStatic = true;
+        const quasis = cur.quasis ?? [];
+        const exprs = cur.expressions ?? [];
+        for (let i = 0; i < quasis.length; i += 1) {
+          folded += String(quasis[i]?.value?.cooked ?? quasis[i]?.value?.raw ?? "");
+          if (i < exprs.length) {
+            const part = staticFragment(exprs[i], 0);
+            if (part !== null) {
+              folded += part;
+            } else {
+              allStatic = false;
+              folded += " __dyn__ ";
+              stack.push(exprs[i]);
+            }
+          }
+        }
+        if (UNSAFE_STYLING_PATTERN.test(folded)) {
+          bump(`unsafe-tpl:${folded}`);
+        } else if (isStyleAttr && allStatic && cssValueProblem(folded) !== null) {
+          bump(`invalid-style:${folded}`);
         }
         continue;
       }

@@ -628,4 +628,21 @@ test("PR 487 review regressions: Tier 3 allowlist, .git/node_modules block, CSS/
     ).ok,
     false,
   );
+  // R3b: Split static TemplateLiteral url() evasion is also blocked!
+  assert.equal(
+    verifyFunctionalInvariance(
+      'export const A = () => <div className="p-4" />;',
+      'export const A = () => <div className="p-4" style={{ backgroundImage: `u${"r"}l(https://evil.test/x)` }} />;',
+      "A.tsx",
+    ).ok,
+    false,
+  );
+  assert.equal(
+    verifyFunctionalInvariance(
+      'export const A = () => <div className="p-4" />;',
+      'export const A = () => <div className={`bg-[u${"r"}l(https://evil.test/x)]`} />;',
+      "A.tsx",
+    ).ok,
+    false,
+  );
 }));
