@@ -135,14 +135,14 @@ function readTrustedWindows(path: string, maxBytes: number): Buffer | null {
 const HARD_LINK = "it has another name elsewhere (a hard link)";
 
 /**
- * Replace the trusted file at `path` with `text`, private to this user from the moment it
+ * Replace the trusted file at `path` with raw `bytes`, private to this user from the moment it
  * exists: written to a new file beside it and renamed into place, durable before the rename.
  */
-export function writeTrustedFile(path: string, text: string): void {
-  const bytes = Buffer.from(text, "utf8");
+export function writeTrustedBytes(path: string, bytes: Uint8Array): void {
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   // On Windows the replacement is renamed into place through its own handle (#349).
   if (process.platform === "win32") {
-    replacePrivately(path, bytes);
+    replacePrivately(path, buf);
     return;
   }
   let temporary: string | null = null;
@@ -150,7 +150,12 @@ export function writeTrustedFile(path: string, text: string): void {
     temporary = `${path}.${randomBytes(8).toString("hex")}.tmp`;
     const fd = openSync(temporary, "wx", 0o600);
     try {
-      writeSync(fd, bytes);
+      let offset = 0;
+      while (offset < buf.length) {
+        const written = writeSync(fd, buf, offset, buf.length - offset);
+        if (written <= 0) throw new Error("short write while writing trusted file");
+        offset += written;
+      }
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -162,4 +167,12 @@ export function writeTrustedFile(path: string, text: string): void {
   } finally {
     if (temporary !== null) rmSync(temporary, { force: true });
   }
+}
+
+/**
+ * Replace the trusted file at `path` with `text`, private to this user from the moment it
+ * exists: written to a new file beside it and renamed into place, durable before the rename.
+ */
+export function writeTrustedFile(path: string, text: string): void {
+  writeTrustedBytes(path, Buffer.from(text, "utf8"));
 }

@@ -63,6 +63,10 @@ const CLASSES = Object.freeze({
   instantiate_component: "write",
   audit_design_system: "read",
   migrate_theme: "write",
+  // Real-browser rendering, visual pixel diff, unified Ninerr Critic, and bounded in-memory improvement.
+  render_preview: "write",
+  critique_design: "read",
+  improve_design: "write",
 });
 
 export const MCP_TOOL_NAMES = Object.freeze(Object.keys(CLASSES));

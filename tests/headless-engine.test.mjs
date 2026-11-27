@@ -889,3 +889,103 @@ test("an agent searches and instantiates native Ninerr components, audits the de
   await agent.call("close_project");
   await agent.stop();
 }));
+
+test("an agent critiques, auto-improves atomically, and renders contained multi-viewport previews with PNG pixel diff via MCP and CLI", () => withProjects(async (projects) => {
+  const { discoverBrowser } = await import("@ninerr/vision");
+  const { runCliCommand } = await import("../packages/studio-host/src/cli.ts");
+  const agent = engine(projects);
+  await agent.initialize("VisionAgent");
+  await agent.call("create_project", { name: "visual" });
+
+  // 1. Author a page with intentional deterministic defects (low contrast, tiny button, off-grid spacing, unsafe transition).
+  const created = (await agent.call("create_layers", {
+    nodes: [
+      {
+        tempId: "page",
+        type: "frame",
+        tag: "main",
+        name: "AuditPage",
+        style: { "background-color": "#ffffff", padding: "13px", "box-shadow": "0 20px 60px rgba(0, 0, 0, 0.45)" },
+      },
+      {
+        parentId: "page",
+        type: "element",
+        tag: "p",
+        name: "FaintCopy",
+        text: "Low contrast paragraph",
+        style: { color: "#cccccc", "background-color": "#ffffff", "font-size": "15px" },
+      },
+      {
+        parentId: "page",
+        type: "element",
+        tag: "button",
+        name: "TinyBtn",
+        text: "Go",
+        style: { height: "16px", width: "40px" },
+      },
+    ],
+  })).structuredContent;
+  const pageId = created.created[0].nodeId;
+
+  // 2. Unified critique_design catches deterministic defects + heuristics; rejects extra args.
+  assert.equal((await agent.call("critique_design", { extra: 1 })).isError, true);
+  const beforeCritique = (await agent.call("critique_design", { nodeId: pageId })).structuredContent;
+  assert.ok(beforeCritique.summary.deterministicDefects >= 2, "catches contrast + tiny target defects");
+  assert.ok(beforeCritique.summary.defectScore > 0);
+
+  // 3. Dry-run preview checks paths & browser availability without writing files.
+  const dryPreview = (await agent.call("render_preview", { dryRun: true, nodeId: pageId, name: "before", viewports: ["mobile", "desktop"] })).structuredContent;
+  assert.equal(dryPreview.dryRun, true);
+  assert.equal(dryPreview.wouldWrite.length, 2);
+  assert.equal(existsSync(dryPreview.wouldWrite[0]), false, "dryRun writes no PNGs");
+
+  const hasBrowser = discoverBrowser() !== null;
+  if (hasBrowser) {
+    // 4. Live zero-egress multi-viewport render BEFORE improvement.
+    const beforeRender = await agent.call("render_preview", { nodeId: pageId, name: "before", viewports: ["mobile", "desktop"] });
+    assert.equal(beforeRender.isError, undefined, text(beforeRender));
+    assert.equal(beforeRender.structuredContent.captures.length, 2);
+    assert.ok(existsSync(beforeRender.structuredContent.captures[0].path), "mobile PNG written");
+    assert.ok(beforeRender.structuredContent.captures[0].telemetry.lowContrast.length >= 1, "real browser detected low contrast");
+    // Overwriting without replace: true is refused.
+    assert.equal((await agent.call("render_preview", { nodeId: pageId, name: "before", viewports: ["mobile"] })).isError, true);
+  }
+
+  // 5. improve_design dryRun previews cleanly, then real improve_design commits ONE atomic transaction!
+  const revBefore = (await agent.call("project_info")).structuredContent.revision;
+  const dryImp = (await agent.call("improve_design", { dryRun: true, nodeId: pageId, maxIterations: 3 })).structuredContent;
+  assert.equal(dryImp.dryRun, true);
+  assert.ok(dryImp.operations >= 2, "dryRun reports collapsed repair operations");
+  assert.equal((await agent.call("project_info")).structuredContent.revision, revBefore, "dryRun improve changed nothing");
+
+  const imp = (await agent.call("improve_design", { nodeId: pageId, maxIterations: 3 })).structuredContent;
+  assert.equal(imp.improved, true);
+  assert.ok(imp.final.defectScore < imp.baseline.defectScore, `score reduced ${imp.baseline.defectScore} -> ${imp.final.defectScore}`);
+  assert.equal(imp.revision, revBefore + 1, "all multi-pass repairs collapsed into 1 atomic revision");
+
+  if (hasBrowser) {
+    // 6. dryRun with compareTo includes diff PNG in wouldWrite; live afterRender diffs cleanly!
+    const dryCompare = (await agent.call("render_preview", { dryRun: true, nodeId: pageId, name: "after", viewports: ["mobile", "desktop"], compareTo: "before" })).structuredContent;
+    assert.equal(dryCompare.wouldWrite.length, 4, "dryRun with compareTo lists both preview and diff PNG paths");
+    const afterRender = await agent.call("render_preview", { nodeId: pageId, name: "after", viewports: ["mobile", "desktop"], compareTo: "before" });
+    assert.equal(afterRender.isError, undefined, text(afterRender));
+    const mobileAfter = afterRender.structuredContent.captures[0];
+    assert.ok(mobileAfter.diff && mobileAfter.diff.diffPixels > 0, "visual pixel diff confirms rendered change");
+    assert.ok(existsSync(mobileAfter.diff.diffPath), "diff PNG written via trusted binary writer");
+    assert.equal(mobileAfter.telemetry.lowContrast.length, 0, "real browser confirms 0 low-contrast text after improvement");
+  }
+
+  await agent.call("close_project");
+  await agent.stop();
+
+  // 7. Verify CLI critique/audit/improve on the persisted project folder.
+  const projDir = join(projects, "visual");
+  let critiqueOut = "";
+  const critiqueCode = await runCliCommand("critique", [projDir, "--json"], {
+    version: "0.1.0",
+    stdout: (s) => { critiqueOut += s; },
+    stderr: () => {},
+  });
+  assert.equal(critiqueCode, 0, "improved project exits 0 on CLI critique");
+  assert.equal(JSON.parse(critiqueOut).summary.errors, 0);
+}));

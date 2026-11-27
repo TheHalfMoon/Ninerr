@@ -7,13 +7,14 @@ import { planElement, styleDeclarationProblem } from "@ninerr/renderer";
 import { LAYOUT_MODES, componentsFor, componentsOf, createComponent, detachInstance, drawsComponent, insertInstance, instanceLayers, overrideFor, resetInstance, setInstanceOverride, setLayout } from "@ninerr/canvas";
 import { NINERR_COMPONENT_CATEGORIES, RECORD_SOURCES, UI_COMPONENT_SOURCES, buildComponentOperations, getNinerrComponent, loadComponentRecords, searchComponents, searchNinerrComponents } from "@ninerr/component-sources";
 import { ARCHETYPE_IDS, DOMAIN_ARCHETYPES, MOTION_PRESETS, MOTION_PRESET_IDS, MOTION_TOKENS, compileMotionReact, compileMotionStylesheet, evaluateMotionFrequency, evaluateTaste, getDomainArchetype, getSkill, lintMotionCss, listSkills, planDesignDirections, renderSkillMarkdown } from "@ninerr/design-intelligence";
+import { STANDARD_VIEWPORTS, buildCritiqueReport, diffPngBuffers, discoverBrowser, improveDesignInMemory, renderAndInspect } from "@ninerr/vision";
 import { exportHtml, exportJsx, exportTailwind, importJsx } from "./code.ts";
 import { auditDesignSystem, compileBreakpointsStylesheet, generateHighContrastMode, planThemeMigration } from "./design-system-ops.ts";
 import { StudioError } from "./errors.ts";
 import { ImportDesk } from "./imports.ts";
 import { planTokenCss } from "./token-import.ts";
 import { exportDtcgTokens, planDtcgTokens } from "./tokens-dtcg.ts";
-import { writeTrustedFile } from "./trusted-file.ts";
+import { UntrustedFileError, readTrustedFile, writeTrustedBytes, writeTrustedFile } from "./trusted-file.ts";
 import type { ReferenceCatalog } from "./reference-catalog.ts";
 import type { StudioActor, StudioSession } from "./session.ts";
 
@@ -109,6 +110,7 @@ const LABELS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   export_design: ["name"],
   instantiate_component: ["label", "title", "description"],
   migrate_theme: ["tokens[].name", "tokens[].description", "breakpoints[].name"],
+  render_preview: ["name"],
 });
 const LABEL_LIKE = new Set(["name", "names", "title", "label", "description", "collection", "options", "default", "to", "token"]);
 
@@ -388,6 +390,7 @@ const TOOLS: Tool[] = [
         "Library components: search_components finds native editable Ninerr components (source: \"ninerr\", 41 components across 8 categories) as well as pinned component source records (Meta Astryx) by name or purpose; get_component gives one's exact props, variants, accessibility criteria, limitations, import path and provenance. instantiate_component places any native Ninerr component into the project in one atomic undoable change (as editable layers or as a reusable component definition and instance).",
         "Design systems: audit_design_system inspects token coverage, duplicates, unused tokens, hardcoded literal matches, and cross-mode WCAG contrast; migrate_theme atomically migrates light and dark semantic tokens, generates a WCAG AAA high-contrast mode, or configures responsive breakpoints and scoped responsive rules.",
         "Design intelligence: design_intelligence reads domain archetypes, plans multi-direction aesthetic tokens, runs brief-aware taste critique, inspects motion presets, checks motion frequency or CSS linting, and lists or renders official Ninerr skills. set_design_brief stores the structured product brief on the design system (optionally seeding a planned direction's tokens), and apply_motion attaches reduced-motion-safe keyframes and transitions to a layer stylesheet along with motion tokens.",
+        "Visual assurance and critique: render_preview renders a layer inside a local zero-egress browser across responsive viewports (saving PNG screenshots and optional pixel diffs to exports/previews); critique_design returns a unified deterministic and heuristic critique across accessibility, taste, design systems, and optional live browser telemetry; improve_design runs bounded in-memory non-regressing repairs and commits at most one atomic undoable change.",
       ].join("\n"),
     }),
   },
@@ -1950,6 +1953,453 @@ const TOOLS: Tool[] = [
       throw new ToolError(`unsupported migrate_theme action ${JSON.stringify(shownPlainly(String(action).slice(0, 64)))}`);
     },
   },
+  {
+    name: "render_preview",
+    title: "Render multi-viewport visual preview",
+    description: "Render a layer in a local 3-layer zero-egress Chromium/Edge browser across responsive viewports (mobile, tablet, desktop, etc.), writing PNG screenshots to the project's exports/previews folder, returning real computed DOM contrast/overflow/clipping/target telemetry, and optionally pixel-diffing against a prior preview.",
+    inputSchema: object({
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      name: { type: "string", minLength: 1, maxLength: 64 },
+      viewports: { type: "array", minItems: 1, maxItems: 5, items: { type: "string", enum: Object.keys(STANDARD_VIEWPORTS) } },
+      colorScheme: { type: "string", enum: ["light", "dark"] },
+      reducedMotion: { type: "string", enum: ["no-preference", "reduce"] },
+      mode: { type: "string", minLength: 1, maxLength: 129 },
+      compareTo: { type: "string", minLength: 1, maxLength: 64 },
+      replace: { type: "boolean" },
+    }, ["nodeId"]),
+    run: async ({ session, dryRun }, given) => {
+      const lstatOrNull = (targetPath: string) => {
+        try {
+          return lstatSync(targetPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+          throw error;
+        }
+      };
+      const args = onlyArguments(given, ["nodeId", "name", "viewports", "colorScheme", "reducedMotion", "mode", "compareTo", "replace"]);
+      const node = nodeOf(session, args.nodeId);
+      if (node.type === "design-system") throw new ToolError("cannot render a design-system node; choose a frame or element");
+
+      const baseName = typeof args.name === "string" && args.name !== "" ? args.name : "preview";
+      if (!EXPORT_NAME.test(baseName)) {
+        throw new ToolError("name must be 1-64 letters, digits, dashes or underscores, starting with a letter or digit");
+      }
+      if (args.compareTo !== undefined && (typeof args.compareTo !== "string" || !EXPORT_NAME.test(args.compareTo))) {
+        throw new ToolError("compareTo must be a valid preview name (1-64 letters, digits, dashes or underscores)");
+      }
+      if (args.replace !== undefined && typeof args.replace !== "boolean") {
+        throw new ToolError("replace must be a boolean");
+      }
+      const validViewports = Object.keys(STANDARD_VIEWPORTS);
+      const requestedViewports = args.viewports === undefined ? ["mobile", "desktop"] : args.viewports;
+      if (!Array.isArray(requestedViewports) || requestedViewports.length === 0 || requestedViewports.length > 5) {
+        throw new ToolError("viewports must contain 1 to 5 standard viewport ids");
+      }
+      const viewports: string[] = [];
+      for (const vp of requestedViewports) {
+        if (typeof vp !== "string" || !validViewports.includes(vp)) {
+          throw new ToolError(`unknown viewport ${JSON.stringify(shownPlainly(String(vp).slice(0, 40)))}; valid: ${validViewports.join(", ")}`);
+        }
+        if (!viewports.includes(vp)) viewports.push(vp);
+      }
+      if (args.colorScheme !== undefined && args.colorScheme !== "light" && args.colorScheme !== "dark") {
+        throw new ToolError("colorScheme must be \"light\" or \"dark\"");
+      }
+      if (args.reducedMotion !== undefined && args.reducedMotion !== "no-preference" && args.reducedMotion !== "reduce") {
+        throw new ToolError("reducedMotion must be \"no-preference\" or \"reduce\"");
+      }
+      const colorScheme = args.colorScheme === "dark" ? "dark" : "light";
+      const reducedMotion = args.reducedMotion === "reduce" ? "reduce" : "no-preference";
+      let modeOverride: string | undefined;
+      if (args.mode !== undefined) {
+        if (typeof args.mode !== "string" || args.mode.length > 129 || !/^[A-Za-z0-9_.-]{1,64}(?::[A-Za-z0-9_.-]{1,64})?$/u.test(args.mode)) {
+          throw new ToolError("mode must be a mode id or collection:mode token identifier");
+        }
+        if (args.mode.includes(":")) {
+          modeOverride = args.mode;
+        } else {
+          const ds = designSystemOf(session.document as any);
+          const collections: any[] = ds?.props?.collections ?? [];
+          const owning = collections.find((c: any) => Array.isArray(c.modes) && c.modes.some((m: any) => m.id === args.mode));
+          const colId = owning?.id ?? collections[0]?.id ?? "base";
+          modeOverride = `${colId}:${args.mode}`;
+        }
+      }
+
+      const realRoot = realpathSync(session.root);
+      const exportsDir = join(session.root, "exports");
+      const previewsDir = join(exportsDir, "previews");
+      for (const dir of [exportsDir, previewsDir]) {
+        const st = lstatOrNull(dir);
+        if (st !== null && (st.isSymbolicLink() || !st.isDirectory())) {
+          throw new ToolError("the project's exports/previews folder is a link to somewhere else, so nothing was written");
+        }
+      }
+      const existingLower = new Set<string>();
+      const previewsStatBefore = lstatOrNull(previewsDir);
+      if (previewsStatBefore !== null) {
+        if (realpathSync(previewsDir) !== join(realRoot, "exports", "previews")) {
+          throw new ToolError("the project's exports/previews folder resolves outside the project, so nothing was written");
+        }
+        for (const entry of readdirSync(previewsDir)) existingLower.add(entry.toLowerCase());
+      }
+
+      const plannedPaths = viewports.map((vp) => join(previewsDir, `${baseName}-${vp}.png`));
+      const plannedDiffPaths: string[] = [];
+      if (typeof args.compareTo === "string") {
+        for (const vp of viewports) {
+          if (existingLower.has(`${args.compareTo}-${vp}.png`.toLowerCase())) {
+            plannedDiffPaths.push(join(previewsDir, `${baseName}-${vp}-diff.png`));
+          }
+        }
+      }
+      for (const p of [...plannedPaths, ...plannedDiffPaths]) {
+        const st = lstatOrNull(p);
+        if (st !== null && (st.isSymbolicLink() || !st.isFile())) {
+          throw new ToolError(`refusing to overwrite non-regular file or link ${p}`);
+        }
+        const fileNameLower = p.slice(previewsDir.length + 1).toLowerCase();
+        if ((st !== null || existingLower.has(fileNameLower)) && args.replace !== true) {
+          throw new ToolError(`preview ${p} already exists; choose another name or pass replace: true`);
+        }
+      }
+
+      let browserPath: string | null = null;
+      let browserError: string | null = null;
+      try {
+        browserPath = discoverBrowser();
+      } catch (error) {
+        browserError = error instanceof Error ? error.message : String(error);
+      }
+      if (dryRun) {
+        return {
+          dryRun: true,
+          nodeId: node.id,
+          viewports,
+          wouldWrite: [...plannedPaths, ...plannedDiffPaths],
+          browserAvailable: browserPath !== null,
+          ...(browserError ? { browserNote: shownPlainly(browserError) } : {}),
+          revision: session.revision,
+        } as unknown as Json;
+      }
+      if (!browserPath) {
+        throw new ToolError(shownPlainly(browserError ?? "No local Chromium, Chrome, or Edge browser was found. Install Edge/Chrome/Chromium or set NINERR_BROWSER."));
+      }
+
+      const { html } = exportHtml(session.document, node.id, { includeNodeIds: true, ...(modeOverride ? { modeOverride } : {}) });
+      let rendered;
+      try {
+        rendered = await renderAndInspect({
+          html,
+          viewports,
+          colorScheme,
+          contrast: modeOverride?.includes("high-contrast") ? "more" : "no-preference",
+          reducedMotion,
+          captureScreenshot: true,
+          fullPage: true,
+          browserPath,
+        });
+      } catch (error) {
+        throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+      }
+
+      // Ensure session is still open before writing anything to disk.
+      const revisionNow = session.revision;
+
+      // Re-verify exports/ and exports/previews/ after async render to close TOCTOU / symlink escape.
+      mkdirSync(exportsDir, { recursive: true, mode: 0o700 });
+      mkdirSync(previewsDir, { recursive: true, mode: 0o700 });
+      for (const dir of [exportsDir, previewsDir]) {
+        const st = lstatOrNull(dir);
+        if (!st || st.isSymbolicLink() || !st.isDirectory()) {
+          throw new ToolError("the project's exports/previews folder is a link to somewhere else, so nothing was written");
+        }
+      }
+      const realPreviewsDir = realpathSync(previewsDir);
+      if (realPreviewsDir !== join(realpathSync(session.root), "exports", "previews")) {
+        throw new ToolError("the project's exports/previews folder resolves outside the project, so nothing was written");
+      }
+
+      // Read any requested baseline PNGs BEFORE overwriting outPath (handles compareTo === baseName + replace: true).
+      const baselinesByVp = new Map<string, { path: string; bytes: Buffer }>();
+      if (typeof args.compareTo === "string") {
+        for (const cap of rendered.captures) {
+          const vpId = cap.viewport.id;
+          const baselinePath = join(realPreviewsDir, `${args.compareTo}-${vpId}.png`);
+          try {
+            const baselineBytes = readTrustedFile(baselinePath, 32 * 1024 * 1024);
+            if (baselineBytes !== null) baselinesByVp.set(vpId, { path: baselinePath, bytes: baselineBytes });
+          } catch (error) {
+            if (error instanceof UntrustedFileError) {
+              throw new ToolError(`baseline preview ${baselinePath} is not trusted: ${shownPlainly(error.message)}`);
+            }
+            throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+          }
+        }
+      }
+
+      const results = [];
+      for (const cap of rendered.captures) {
+        const vpId = cap.viewport.id;
+        const outPath = join(realPreviewsDir, `${baseName}-${vpId}.png`);
+        const outStat = lstatOrNull(outPath);
+        if (outStat !== null && (outStat.isSymbolicLink() || !outStat.isFile())) {
+          throw new ToolError(`refusing to write through non-regular file or symbolic link ${outPath}`);
+        }
+        writeTrustedBytes(outPath, cap.pngBuffer);
+
+        let diffSummary: Record<string, unknown> | null = null;
+        const baseline = baselinesByVp.get(vpId);
+        if (baseline) {
+          let diff;
+          try {
+            diff = diffPngBuffers(baseline.bytes, cap.pngBuffer, { emitDiffImage: true });
+          } catch (error) {
+            throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+          }
+          let diffPath: string | null = null;
+          if (diff.diffPng) {
+            diffPath = join(realPreviewsDir, `${baseName}-${vpId}-diff.png`);
+            const diffStat = lstatOrNull(diffPath);
+            if (diffStat !== null && (diffStat.isSymbolicLink() || !diffStat.isFile())) {
+              throw new ToolError(`refusing to write through non-regular file or symbolic link ${diffPath}`);
+            }
+            writeTrustedBytes(diffPath, diff.diffPng);
+          }
+          diffSummary = {
+            baselinePath: baseline.path,
+            diffPath,
+            diffPixels: diff.diffPixels,
+            totalPixels: diff.totalPixels,
+            diffPercent: diff.diffPercent,
+            dimensionMismatch: diff.dimensionMismatch,
+            changedRegion: diff.changedRegion,
+          };
+        }
+
+        results.push({
+          viewport: cap.viewport,
+          path: outPath,
+          bytes: cap.bytes,
+          telemetry: cap.telemetry,
+          ...(diffSummary ? { diff: diffSummary } : {}),
+        });
+      }
+
+      return {
+        nodeId: node.id,
+        emulation: rendered.emulation,
+        egressBlocked: rendered.egress.totalBlocked,
+        captures: results,
+        revision: revisionNow,
+      } as unknown as Json;
+    },
+  },
+  {
+    name: "critique_design",
+    title: "Unified Ninerr Critic",
+    description: "Read-only unified design critique combining static WCAG accessibility, brief-aware Ninerr Taste and Motion rules, Design System health audit, and optional real-browser Vision telemetry (overflow, clipping, computed contrast, overlap, touch targets) strictly classified into deterministic defects, heuristic observations, and subjective suggestions.",
+    inputSchema: object({
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      includeVision: { type: "boolean" },
+      viewports: { type: "array", minItems: 1, maxItems: 3, items: { type: "string", enum: Object.keys(STANDARD_VIEWPORTS) } },
+      colorScheme: { type: "string", enum: ["light", "dark"] },
+    }),
+    run: async ({ session }, given) => {
+      const args = onlyArguments(given, ["nodeId", "includeVision", "viewports", "colorScheme"]);
+      const rootId = args.nodeId === undefined ? null : nodeOf(session, args.nodeId).id;
+      if (args.includeVision !== undefined && typeof args.includeVision !== "boolean") {
+        throw new ToolError("includeVision must be a boolean");
+      }
+      if (args.colorScheme !== undefined && args.colorScheme !== "light" && args.colorScheme !== "dark") {
+        throw new ToolError("colorScheme must be \"light\" or \"dark\"");
+      }
+      const validViewports = Object.keys(STANDARD_VIEWPORTS);
+      const requestedViewports = args.viewports === undefined ? ["mobile", "desktop"] : args.viewports;
+      if (!Array.isArray(requestedViewports) || requestedViewports.length === 0 || requestedViewports.length > 3) {
+        throw new ToolError("viewports must contain 1 to 3 standard viewport ids");
+      }
+      const viewports: string[] = [];
+      for (const vp of requestedViewports) {
+        if (typeof vp !== "string" || !validViewports.includes(vp)) {
+          throw new ToolError(`unknown viewport ${JSON.stringify(shownPlainly(String(vp).slice(0, 40)))}`);
+        }
+        if (!viewports.includes(vp)) viewports.push(vp);
+      }
+
+      const document = session.document as any;
+      const taste = evaluateTaste(document, { rootId });
+      const systemAudit = auditDesignSystem(document);
+      let visionCaptures: any[] = [];
+      let visionUsed = false;
+      let visionNote: string | null = null;
+
+      if (args.includeVision === true) {
+        const targetId = rootId ?? (document.rootIds ?? []).find((id: string) => document.nodes[id]?.type !== "design-system") ?? null;
+        if (!targetId) {
+          visionNote = "No renderable frame or element found in the document.";
+        } else {
+          let browserPath: string | null = null;
+          let browserErr: string | null = null;
+          try {
+            browserPath = discoverBrowser();
+          } catch (error) {
+            browserErr = error instanceof Error ? error.message : String(error);
+          }
+          if (!browserPath) {
+            visionNote = browserErr
+              ? `${shownPlainly(browserErr)}; static critique returned without live browser telemetry.`
+              : "No local Chromium/Chrome/Edge browser found; static critique returned without live browser telemetry.";
+          } else {
+            const { html } = exportHtml(document, targetId, { includeNodeIds: true });
+            try {
+              const rendered = await renderAndInspect({
+                html,
+                viewports,
+                colorScheme: args.colorScheme === "dark" ? "dark" : "light",
+                captureScreenshot: false,
+                browserPath,
+              });
+              visionCaptures = rendered.captures;
+              visionUsed = true;
+            } catch (error) {
+              throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+            }
+          }
+        }
+      }
+
+      const report = buildCritiqueReport({
+        document,
+        rootId,
+        tasteFindings: taste.findings,
+        systemFindings: systemAudit.hasDesignSystem ? systemAudit.findings : [],
+        visionCaptures,
+      });
+
+      return {
+        nodeId: rootId,
+        visionUsed,
+        ...(visionNote ? { visionNote } : {}),
+        ...report,
+      } as unknown as Json;
+    },
+  },
+  {
+    name: "improve_design",
+    title: "Bounded iterative design improvement",
+    description: "Run bounded in-memory non-regressing deterministic repairs (contrast, touch targets, overflow, spacing grid, line-height, heavy shadows, GPU-safe motion, reduced-motion, missing alt) across up to 5 passes and commit at most one collapsed atomic undoable transaction. Supports dryRun preview.",
+    inputSchema: object({
+      nodeId: { type: "string", minLength: 1, maxLength: 128 },
+      maxIterations: { type: "integer", minimum: 1, maximum: 5 },
+      includeVision: { type: "boolean" },
+      viewports: { type: "array", minItems: 1, maxItems: 2, items: { type: "string", enum: Object.keys(STANDARD_VIEWPORTS) } },
+    }),
+    run: async ({ session, edit, dryRun }, given) => {
+      const args = onlyArguments(given, ["nodeId", "maxIterations", "includeVision", "viewports"]);
+      const rootId = args.nodeId === undefined ? null : nodeOf(session, args.nodeId).id;
+      if (args.maxIterations !== undefined && (!Number.isInteger(args.maxIterations) || (args.maxIterations as number) < 1 || (args.maxIterations as number) > 5)) {
+        throw new ToolError("maxIterations must be a whole number from 1 to 5");
+      }
+      if (args.includeVision !== undefined && typeof args.includeVision !== "boolean") {
+        throw new ToolError("includeVision must be a boolean");
+      }
+      const validViewports = Object.keys(STANDARD_VIEWPORTS);
+      const requestedViewports = args.viewports === undefined ? ["mobile", "desktop"] : args.viewports;
+      if (!Array.isArray(requestedViewports) || requestedViewports.length === 0 || requestedViewports.length > 2) {
+        throw new ToolError("viewports must contain 1 to 2 standard viewport ids");
+      }
+      const viewports: string[] = [];
+      for (const vp of requestedViewports) {
+        if (typeof vp !== "string" || !validViewports.includes(vp)) {
+          throw new ToolError(`unknown viewport ${JSON.stringify(shownPlainly(String(vp).slice(0, 40)))}`);
+        }
+        if (!viewports.includes(vp)) viewports.push(vp);
+      }
+
+      let browserPath: string | null = null;
+      let visionNote: string | null = null;
+      if (args.includeVision === true) {
+        try {
+          browserPath = discoverBrowser();
+          if (!browserPath) {
+            visionNote = "No local Chromium/Chrome/Edge browser found; ran static improvement without live browser telemetry.";
+          }
+        } catch (error) {
+          visionNote = `${shownPlainly(error instanceof Error ? error.message : String(error))}; ran static improvement without live browser telemetry.`;
+        }
+      }
+      const visionUsed = args.includeVision === true && browserPath !== null;
+      const maxIterations = typeof args.maxIterations === "number" ? args.maxIterations : 3;
+      const startRevision = session.revision;
+
+      let result;
+      try {
+        result = await improveDesignInMemory(session.document as any, {
+          maxIterations,
+          evaluate: async (candidateDoc: any) => {
+            const taste = evaluateTaste(candidateDoc, { rootId });
+            const systemAudit = auditDesignSystem(candidateDoc);
+            let visionCaptures: any[] = [];
+            if (visionUsed && browserPath) {
+              const targetId = rootId ?? (candidateDoc.rootIds ?? []).find((id: string) => candidateDoc.nodes[id]?.type !== "design-system") ?? null;
+              if (targetId) {
+                const { html } = exportHtml(candidateDoc, targetId, { includeNodeIds: true });
+                const rendered = await renderAndInspect({
+                  html,
+                  viewports,
+                  captureScreenshot: false,
+                  browserPath,
+                });
+                visionCaptures = rendered.captures;
+              }
+            }
+            return buildCritiqueReport({
+              document: candidateDoc,
+              rootId,
+              tasteFindings: taste.findings,
+              systemFindings: systemAudit.hasDesignSystem ? systemAudit.findings : [],
+              visionCaptures,
+            });
+          },
+        });
+      } catch (error) {
+        throw new ToolError(shownPlainly(error instanceof Error ? error.message : String(error)));
+      }
+
+      // Guard against concurrent edits landing while async improvement ran.
+      if (session.revision !== startRevision) {
+        throw new ToolError(`the document changed while improve_design was running (revision ${startRevision} -> ${session.revision}); run improve_design again`);
+      }
+
+      if (result.operations.length === 0) {
+        return {
+          nodeId: rootId,
+          improved: false,
+          visionUsed,
+          ...(visionNote ? { visionNote } : {}),
+          iterationsRun: result.iterationsRun,
+          baseline: result.baseline,
+          final: result.final,
+          history: result.history,
+          ...(dryRun ? { dryRun: true, wouldChange: [], operations: 0 } : {}),
+          revision: session.revision,
+        } as unknown as Json;
+      }
+
+      return {
+        nodeId: rootId,
+        improved: result.improved,
+        visionUsed,
+        ...(visionNote ? { visionNote } : {}),
+        iterationsRun: result.iterationsRun,
+        baseline: result.baseline,
+        final: result.final,
+        history: result.history,
+        ...(edit(result.operations, `Improve design (${result.baseline.defectScore} -> ${result.final.defectScore})`) as object),
+      } as unknown as Json;
+    },
+  },
 ];
 
 const TOOL_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
@@ -2141,7 +2591,7 @@ export interface McpContext {
 }
 
 // Read tools that show the open project; reading one is what lets an agent change it.
-const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history", "design_intelligence", "audit_design_system"]);
+const PROJECT_READS = new Set(["project_info", "layer_tree", "layer_details", "layer_children", "find_layers", "selection", "layer_code", "design_tokens", "list_components", "instance_layers", "project_history", "design_intelligence", "audit_design_system", "critique_design"]);
 
 const rpcError = (id: Json, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 const toolResult = (value: Json, isError = false) => ({

@@ -41,16 +41,16 @@ The server identifies itself as `ninerr` and tells the agent to call `guide` fir
 
 ## Tools
 
-`MCP_TOOL_NAMES` is the catalog: the 49 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
+`MCP_TOOL_NAMES` is the catalog: the 52 tools the server offers, and no others. The server checks its own definitions against it with `assertMCPToolSurface` when it loads. `classifyTool(name)` gives each tool its class:
 
 | Class | Tools | Capability required |
 | --- | --- | --- |
-| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task`, `design_tokens`, `list_components`, `instance_layers`, `search_components`, `get_component`, `project_history`, `design_intelligence`, `audit_design_system` | `read` |
-| write | `create_frame`, `create_layers`, `set_text`, `rename_layers`, `set_styles`, `set_attributes`, `set_layout`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance`, `undo_change`, `redo_change`, `import_source`, `export_design`, `set_design_brief`, `apply_motion`, `instantiate_component`, `migrate_theme` | `document-write` |
+| read | `project_info`, `layer_tree`, `layer_details`, `layer_children`, `find_layers`, `selection`, `layer_code`, `search_design_references`, `get_design_reference`, `guide`, `finish_task`, `design_tokens`, `list_components`, `instance_layers`, `search_components`, `get_component`, `project_history`, `design_intelligence`, `audit_design_system`, `critique_design` | `read` |
+| write | `create_frame`, `create_layers`, `set_text`, `rename_layers`, `set_styles`, `set_attributes`, `set_layout`, `move_layers`, `duplicate_layers`, `set_token`, `add_token_mode`, `rename_token`, `set_layer_modes`, `create_component`, `add_component_property`, `insert_instance`, `set_instance_values`, `set_instance_override`, `reset_instance`, `detach_instance`, `undo_change`, `redo_change`, `import_source`, `export_design`, `set_design_brief`, `apply_motion`, `instantiate_component`, `migrate_theme`, `render_preview`, `improve_design` | `document-write` |
 | consequential | `delete_layers`, `delete_token` | `document-write` plus a confirmation |
 | unknown | any other name | denied without consulting a policy |
 
-So the 19 read-only tools need only `read`.
+So the 20 read-only tools need only `read`.
 
 - **Reading.**
   - `guide`: how Ninerr documents, layers and edits work; the server asks the agent to call it first.
@@ -64,6 +64,7 @@ So the 19 read-only tools need only `read`.
   - `search_components` and `get_component`: search Ninerr's 41 native editable components (`source: "ninerr"`, Apache-2.0) or pinned component source records (Meta Astryx; `packages/component-sources/src/records.mjs`) by name or purpose. `get_component` returns exact props, variants, accessibility criteria, limitations, and provenance. Nothing is fetched from the network.
   - `instantiate_component`: instantiate any native Ninerr component (`ninerr:<id>`) into the open project in one atomic undoable change, either as editable layers or as a reusable `component-definition` (plus optional live `component-instance`).
   - `audit_design_system` and `migrate_theme`: `audit_design_system` inspects unused tokens, duplicate literal values, missing mode values, hardcoded layer matches, and cross-mode WCAG contrast; `migrate_theme` atomically migrates dual-mode semantic tokens (with `dryRun` preview), generates a WCAG AAA high-contrast mode, or configures responsive breakpoints and scoped `@media`/`@container` rules.
+  - `render_preview`, `critique_design`, and `improve_design`: `render_preview` renders a layer inside a local 3-layer zero-egress Chromium/Edge browser across responsive viewports, writes PNG screenshots to `exports/previews/`, computes layout/contrast/overflow/target telemetry, and optionally computes pure-JS PNG pixel diffs; `critique_design` produces a unified report across static WCAG accessibility, Taste/Motion, Design System audit, and optional real-browser Vision telemetry; `improve_design` runs bounded in-memory non-regressing repairs and commits at most one collapsed undoable change.
   - `search_design_references` and `get_design_reference`: the local reference pack the person has read into the open project. They return public references with their rights, never file bytes. They take no directory, URL or token, and with no pack read the answer says so; nothing is fetched instead.
 - **Dry runs and revisions** (ADR-0006, in part). Every write and consequential tool also takes:
   - `dryRun: true`, which checks the change as it would be made (the caller's access, the document rules, the stylesheet budget) and answers `{ dryRun: true, wouldChange, operations, revision }`. It makes nothing, and a dry-run delete asks the person nothing, so it does not check what only the person's approval would. A layer it would create has an id there that a real call does not reuse.

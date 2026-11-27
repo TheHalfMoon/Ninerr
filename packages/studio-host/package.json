@@ -23,6 +23,7 @@
     "@ninerr/network-policy": "0.0.0",
     "@ninerr/persistence": "0.0.0",
     "@ninerr/renderer": "0.0.0",
+    "@ninerr/vision": "0.0.0",
     "koffi": "3.3.2"
   }
 }

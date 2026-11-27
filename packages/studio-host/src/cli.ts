@@ -1,8 +1,9 @@
 // Extended Ninerr CLI subcommands dispatched from bin/ninerr.mjs (`ninerr design ...`,
 // `ninerr motion ...`, `ninerr components ...`, `ninerr tokens ...`, and subsequent product commands).
 // Pure local execution, zero network.
-import { closeSync, constants, fstatSync, openSync, readSync } from "node:fs";
-import { resolve } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   NINERR_COMPONENT_CATEGORIES,
   getNinerrComponent,
@@ -17,6 +18,7 @@ import {
   compileMotionReact,
   compileMotionStylesheet,
   evaluateMotionFrequency,
+  evaluateTaste,
   getDomainArchetype,
   getSkill,
   lintMotionCss,
@@ -25,7 +27,16 @@ import {
   renderSkillMarkdown,
 } from "@ninerr/design-intelligence";
 import { openProject } from "@ninerr/persistence";
+import {
+  STANDARD_VIEWPORTS,
+  buildCritiqueReport,
+  discoverBrowser,
+  improveDesignInMemory,
+  renderAndInspect,
+} from "@ninerr/vision";
+import { exportHtml } from "./code.ts";
 import { auditDesignSystem, planRegistryItemUpdate } from "./design-system-ops.ts";
+import { writeTrustedBytes } from "./trusted-file.ts";
 
 export interface CliRunOptions {
   version: string;
@@ -33,8 +44,8 @@ export interface CliRunOptions {
   stderr?: (text: string) => void;
 }
 
-export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens"]);
-const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient"]);
+export const EXTENDED_CLI_COMMANDS = Object.freeze(["design", "motion", "components", "tokens", "preview", "critique", "audit", "improve"]);
+const BOOLEAN_FLAGS = new Set(["json", "help", "allow-ambient", "vision", "dry-run", "reduced-motion"]);
 const MAX_CLI_FILE_BYTES = 2 * 1024 * 1024;
 
 function readBoundedTextFile(filePath: string, commandLabel: string): string {
@@ -140,6 +151,17 @@ function tokensHelp(): string {
     "Ninerr Design Systems CLI:",
     "  ninerr tokens audit <project-folder> [--json]",
     "  ninerr tokens merge --base <file> --local <file> --upstream <file> [--json]",
+    "",
+  ].join("\n");
+}
+
+function visionHelp(): string {
+  return [
+    "Ninerr Vision & Critic CLI:",
+    "  ninerr preview <project-folder> [--node <id>] [--viewports mobile,desktop] [--out <dir>] [--scheme light|dark] [--reduced-motion] [--json]",
+    "  ninerr critique <project-folder> [--node <id>] [--vision] [--viewports mobile,desktop] [--json]",
+    "  ninerr audit <project-folder> [--node <id>] [--vision] [--json]",
+    "  ninerr improve <project-folder> [--node <id>] [--max-iterations 3] [--vision] [--dry-run] [--json]",
     "",
   ].join("\n");
 }
@@ -419,6 +441,222 @@ export async function runCliCommand(command: string, args: string[], options: Cl
       }
       err(`ninerr tokens: unknown subcommand ${JSON.stringify(sub)}\n${tokensHelp()}`);
       return 2;
+    }
+
+    if (command === "preview" || command === "critique" || command === "audit" || command === "improve") {
+      const lstatOrNull = (targetPath: string) => {
+        try {
+          return lstatSync(targetPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+          throw error;
+        }
+      };
+      const projectDir = positionals[0];
+      if (!projectDir || projectDir === "help" || flags.help === true) {
+        out(visionHelp());
+        return 0;
+      }
+      if (flags.node === true) { err(`ninerr ${command}: --node requires a node id\n`); return 2; }
+      if (flags.viewports === true) { err(`ninerr ${command}: --viewports requires a comma-separated viewport list\n`); return 2; }
+      if (flags.out === true) { err(`ninerr ${command}: --out requires a directory path\n`); return 2; }
+      if (flags.scheme === true) { err(`ninerr ${command}: --scheme requires light or dark\n`); return 2; }
+      if (flags["max-iterations"] === true) { err(`ninerr ${command}: --max-iterations requires an integer from 1 to 5\n`); return 2; }
+
+      const validVps = Object.keys(STANDARD_VIEWPORTS);
+      const rawVps = [...new Set(
+        typeof flags.viewports === "string"
+          ? flags.viewports.split(",").map((s) => s.trim()).filter(Boolean)
+          : ["mobile", "desktop"],
+      )];
+      if (rawVps.length === 0 || rawVps.some((v) => !validVps.includes(v))) {
+        err(`ninerr ${command}: invalid viewports; valid ids: ${validVps.join(", ")}\n`);
+        return 2;
+      }
+      const scheme = typeof flags.scheme === "string" ? flags.scheme : "light";
+      if (scheme !== "light" && scheme !== "dark") {
+        err(`ninerr ${command}: --scheme must be light or dark\n`);
+        return 2;
+      }
+      const maxIterations = typeof flags["max-iterations"] === "string" ? Number(flags["max-iterations"]) : 3;
+      if (command === "improve" && (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 5)) {
+        err("ninerr improve: --max-iterations must be an integer from 1 to 5\n");
+        return 2;
+      }
+
+      const resolvedProject = resolve(projectDir);
+      const opened = openProject(resolvedProject, { owner: `ninerr-cli-${command}`, at: new Date().toISOString() });
+      try {
+        const doc = opened.document as any;
+        const explicitNode = typeof flags.node === "string" ? flags.node : null;
+        if (explicitNode !== null && !Object.hasOwn(doc.nodes, explicitNode)) {
+          err(`ninerr ${command}: node ${JSON.stringify(explicitNode)} not found\n`);
+          return 2;
+        }
+        const targetNode = explicitNode ?? (doc.rootIds ?? []).find((id: string) => doc.nodes[id]?.type !== "design-system") ?? null;
+
+        if (command === "preview") {
+          if (!targetNode) {
+            err("ninerr preview: project has no renderable frame or element\n");
+            return 2;
+          }
+          // Validate output directory BEFORE launching Chromium.
+          const isDefaultOut = typeof flags.out !== "string";
+          const exportsDir = join(resolvedProject, "exports");
+          const outDir = resolve(isDefaultOut ? join(exportsDir, "previews") : (flags.out as string));
+          if (isDefaultOut) {
+            for (const dir of [exportsDir, outDir]) {
+              const st = lstatOrNull(dir);
+              if (st !== null && (st.isSymbolicLink() || !st.isDirectory())) {
+                err(`ninerr preview: ${dir} is a link or not a directory\n`);
+                return 2;
+              }
+            }
+          } else {
+            const st = lstatOrNull(outDir);
+            if (st !== null && (st.isSymbolicLink() || !st.isDirectory())) {
+              err(`ninerr preview: ${outDir} is not a real directory\n`);
+              return 2;
+            }
+          }
+
+          let browserPath: string | null = null;
+          try {
+            browserPath = discoverBrowser();
+          } catch (error) {
+            err(`ninerr preview: ${error instanceof Error ? error.message : String(error)}\n`);
+            return 1;
+          }
+          if (!browserPath) {
+            err("ninerr preview: no local Chromium, Chrome, or Edge browser found (set NINERR_BROWSER)\n");
+            return 1;
+          }
+          const { html } = exportHtml(doc, targetNode, { includeNodeIds: true });
+          const rendered = await renderAndInspect({
+            html,
+            viewports: rawVps,
+            colorScheme: scheme,
+            reducedMotion: flags["reduced-motion"] === true ? "reduce" : "no-preference",
+            captureScreenshot: true,
+            fullPage: true,
+            browserPath,
+          });
+
+          if (isDefaultOut) mkdirSync(exportsDir, { recursive: true, mode: 0o700 });
+          mkdirSync(outDir, { recursive: true, mode: 0o700 });
+          if (isDefaultOut) {
+            for (const dir of [exportsDir, outDir]) {
+              const st = lstatOrNull(dir);
+              if (!st || st.isSymbolicLink() || !st.isDirectory()) {
+                err(`ninerr preview: ${dir} is a link or not a directory\n`);
+                return 2;
+              }
+            }
+            if (realpathSync(outDir) !== join(realpathSync(resolvedProject), "exports", "previews")) {
+              err("ninerr preview: default exports/previews resolves outside the project\n");
+              return 2;
+            }
+          } else {
+            const st = lstatOrNull(outDir);
+            if (!st || st.isSymbolicLink() || !st.isDirectory()) {
+              err(`ninerr preview: ${outDir} is not a real directory\n`);
+              return 2;
+            }
+          }
+          const realOutDir = realpathSync(outDir);
+          const files = [];
+          for (const cap of rendered.captures) {
+            const p = join(realOutDir, `preview-${cap.viewport.id}.png`);
+            const st = lstatOrNull(p);
+            if (st !== null && (st.isSymbolicLink() || !st.isFile())) {
+              err(`ninerr preview: refusing to overwrite symbolic link or non-regular file ${p}\n`);
+              return 2;
+            }
+            writeTrustedBytes(p, cap.pngBuffer);
+            files.push({ viewport: cap.viewport.id, path: p, bytes: cap.bytes, horizontalOverflow: cap.telemetry?.horizontalOverflow ?? false });
+          }
+          if (asJson) {
+            out(`${JSON.stringify({ nodeId: targetNode, egressBlocked: rendered.egress.totalBlocked, files }, null, 2)}\n`);
+          } else {
+            for (const f of files) out(`ok  ${f.viewport.padEnd(16)} ${f.path} (${f.bytes} bytes)\n`);
+          }
+          return 0;
+        }
+
+        let visionBrowser: string | null = null;
+        let visionNote: string | null = null;
+        if (flags.vision === true) {
+          try {
+            visionBrowser = discoverBrowser();
+            if (!visionBrowser) {
+              visionNote = "No local Chromium/Chrome/Edge browser found; continuing with static analysis only.";
+              err(`ninerr ${command}: warning: ${visionNote}\n`);
+            }
+          } catch (error) {
+            visionNote = `${error instanceof Error ? error.message : String(error)}; continuing with static analysis only.`;
+            err(`ninerr ${command}: warning: ${visionNote}\n`);
+          }
+        }
+        const visionUsed = flags.vision === true && visionBrowser !== null;
+
+        const evaluateDoc = async (candidate: any) => {
+          const taste = evaluateTaste(candidate, { rootId: explicitNode });
+          const sys = auditDesignSystem(candidate);
+          let captures: any[] = [];
+          if (visionUsed && visionBrowser) {
+            const renderTarget = explicitNode ?? (candidate.rootIds ?? []).find((id: string) => candidate.nodes[id]?.type !== "design-system") ?? null;
+            if (renderTarget) {
+              const { html } = exportHtml(candidate, renderTarget, { includeNodeIds: true });
+              const res = await renderAndInspect({ html, viewports: rawVps, colorScheme: scheme, captureScreenshot: false, browserPath: visionBrowser });
+              captures = res.captures;
+            }
+          }
+          return buildCritiqueReport({
+            document: candidate,
+            rootId: explicitNode,
+            tasteFindings: taste.findings,
+            systemFindings: sys.hasDesignSystem ? sys.findings : [],
+            visionCaptures: captures,
+          });
+        };
+
+        if (command === "critique" || command === "audit") {
+          const report = await evaluateDoc(doc);
+          if (asJson) {
+            out(`${JSON.stringify({ visionUsed, ...(visionNote ? { visionNote } : {}), ...report }, null, 2)}\n`);
+          } else {
+            out(`Findings: ${report.summary.total} (errors: ${report.summary.errors}, warnings: ${report.summary.warnings}, info: ${report.summary.info}, score: ${report.summary.defectScore})\n`);
+            for (const f of report.findings) out(`${f.severity.toUpperCase().padEnd(8)} [${f.kind}] ${f.ruleId}: ${f.message}\n`);
+          }
+          return report.summary.errors > 0 ? 1 : 0;
+        }
+
+        const improved = await improveDesignInMemory(doc, {
+          maxIterations,
+          evaluate: (candidate) => evaluateDoc(candidate),
+        });
+        let committedRevision: number | null = null;
+        if (flags["dry-run"] !== true && improved.operations.length > 0) {
+          const result = opened.commit({
+            id: `tx-cli-improve-${randomUUID().slice(0, 12)}`,
+            baseRevision: doc.revision,
+            actor: "ninerr-cli",
+            actorKind: "user",
+            intent: `Improve design (${improved.baseline.defectScore} -> ${improved.final.defectScore})`,
+            timestamp: new Date().toISOString(),
+            operations: improved.operations,
+          });
+          committedRevision = result.revision;
+        }
+        if (asJson) {
+          out(`${JSON.stringify({ ...improved, visionUsed, ...(visionNote ? { visionNote } : {}), dryRun: flags["dry-run"] === true, committedRevision }, null, 2)}\n`);
+        } else {
+          out(`Score: ${improved.baseline.defectScore} -> ${improved.final.defectScore} (${improved.iterationsRun} pass(es), ${improved.operations.length} node update(s)${flags["dry-run"] === true ? ", dry-run" : ""})\n`);
+        }
+        return 0;
+      } finally {
+        opened.close();
+      }
     }
 
     err(`ninerr: unknown command ${JSON.stringify(command)}\n`);
